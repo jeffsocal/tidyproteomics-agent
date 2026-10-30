@@ -1,0 +1,29 @@
+services:
+  tidyproteomics-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tidyproteomics-agent
+    ports:
+      - "3000:3000"
+    volumes:
+      # Mount your local host projects directory so all prompts, code, data, plots, and logs
+      # are written directly to your host disk just like the VSCode extension:
+      - ./workspaces:/workspaces
+      # Persist studio settings across container restarts:
+      - tidyproteomics-config:/root/.tidyproteomics-agent
+    environment:
+      - PORT=3000
+      - TIDY_WORKSPACE=/workspaces/project_01
+      - TIDY_MCP_MODE=local
+      - TIDY_MCP_SERVER_PATH=/app/mcp/server.py
+      # Optional: Pass LLM & Search API keys via environment or configure in the Left Project Settings UI
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - NCBI_API_KEY=${NCBI_API_KEY:-}
+    restart: unless-stopped
+
+volumes:
+  tidyproteomics-config:
+
