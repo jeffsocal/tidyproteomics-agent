@@ -1,9 +1,12 @@
-:root {
+:root,
+:root[data-theme="dark"] {
   color-scheme: dark;
   --bg: #121215;
   --panel-bg: #18181b;
+  --tabbar-bg: #16161a;
   --card-bg: #202024;
   --card-hover: #27272a;
+  --input-bg: #121215;
   --border: rgba(255, 255, 255, 0.09);
   --border-strong: rgba(255, 255, 255, 0.16);
   --fg: #e4e4e7;
@@ -19,8 +22,86 @@
   --pending: #52525b;
   --terminal-bg: #09090b;
   --terminal-fg: #22c55e;
+  --bubble-user-bg: #181a22;
+  --bubble-user-border: #2a3346;
+  --bubble-agent-bg: #15151a;
+  --code-bg: rgba(255, 255, 255, 0.07);
+  --pre-bg: #0d0d10;
+  --track-bg: rgba(255, 255, 255, 0.04);
   --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
   --font-mono: "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+}
+
+:root[data-theme="dim"] {
+  color-scheme: dark;
+  --bg: #1c2128;
+  --panel-bg: #22272e;
+  --tabbar-bg: #1e2228;
+  --card-bg: #2d333b;
+  --card-hover: #373e47;
+  --input-bg: #1c2128;
+  --border: rgba(205, 217, 229, 0.14);
+  --border-strong: rgba(205, 217, 229, 0.22);
+  --fg: #adbac7;
+  --fg-bright: #f0f6fc;
+  --muted: #768390;
+  --primary: #539bf5;
+  --primary-hover: #4184e4;
+  --success: #57ab5a;
+  --warning: #c69026;
+  --error: #e5534b;
+  --cached: #a371f7;
+  --queued: #79c0ff;
+  --pending: #636e7b;
+  --terminal-bg: #161b22;
+  --terminal-fg: #57ab5a;
+  --bubble-user-bg: #262c36;
+  --bubble-user-border: #3d4450;
+  --bubble-agent-bg: #22272e;
+  --code-bg: rgba(205, 217, 229, 0.1);
+  --pre-bg: #1c2128;
+  --track-bg: rgba(205, 217, 229, 0.06);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f8fa;
+  --panel-bg: #ffffff;
+  --tabbar-bg: #eaeef2;
+  --card-bg: #f6f8fa;
+  --card-hover: #eaeef2;
+  --input-bg: #ffffff;
+  --border: rgba(31, 35, 40, 0.12);
+  --border-strong: rgba(31, 35, 40, 0.22);
+  --fg: #24292f;
+  --fg-bright: #1f2328;
+  --muted: #57606a;
+  --primary: #0969da;
+  --primary-hover: #0860ca;
+  --success: #1a7f37;
+  --warning: #9a6700;
+  --error: #cf222e;
+  --cached: #8250df;
+  --queued: #0969da;
+  --pending: #6e7781;
+  --terminal-bg: #1f2328;
+  --terminal-fg: #3fb950;
+  --bubble-user-bg: #ddf4ff;
+  --bubble-user-border: #54aeff;
+  --bubble-agent-bg: #f6f8fa;
+  --code-bg: rgba(175, 184, 193, 0.2);
+  --pre-bg: #f6f8fa;
+  --track-bg: rgba(31, 35, 40, 0.08);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+}
+
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
 
 *,
@@ -168,6 +249,7 @@ body,
   0% {
     background-position: 200% 0;
   }
+
   100% {
     background-position: -200% 0;
   }
@@ -209,54 +291,66 @@ body,
   background: #52525b;
   color: #ffffff;
 }
+
 .badge-queued {
   background: #a855f7;
   color: #ffffff;
 }
+
 .badge-running {
   background: var(--primary);
   color: #ffffff;
   animation: pulse 1.5s infinite;
 }
+
 .badge-completed {
   background: var(--success);
   color: #ffffff;
 }
+
 .badge-failed {
   background: var(--error);
   color: #ffffff;
 }
+
 .badge-warning {
   background: var(--warning);
   color: #ffffff;
 }
+
 .badge-cached {
   background: var(--cached);
   color: #ffffff;
 }
+
 .badge-idle {
   background: #3f3f46;
   color: #a1a1aa;
 }
+
 .badge-parsing_pdf {
   background: #3b82f6;
   color: #ffffff;
   animation: pulse 1.5s infinite;
 }
+
 .badge-llm_extraction {
   background: #8b5cf6;
   color: #ffffff;
   animation: pulse 1.5s infinite;
 }
+
 .badge-normalization {
   background: #f59e0b;
   color: #ffffff;
   animation: pulse 1.5s infinite;
 }
+
 .badge-indexed {
   background: var(--success);
   color: #ffffff;
 }
+
 .badge-skipped {
   background: #71717a;
   color: #ffffff;
@@ -270,22 +364,26 @@ body,
   margin-top: 8px;
   margin-bottom: 12px;
 }
+
 @media (max-width: 900px) {
   .metric-grid {
     grid-template-columns: repeat(3, 1fr);
   }
 }
+
 .metric-card {
-  background: #141418;
+  background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 10px 8px;
   text-align: center;
   transition: border-color 0.15s ease;
 }
+
 .metric-card:hover {
   border-color: var(--primary);
 }
+
 .metric-num {
   font-size: 18px;
   font-weight: 700;
@@ -293,6 +391,7 @@ body,
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
 }
+
 .metric-label {
   font-size: 9px;
   text-transform: uppercase;
@@ -307,19 +406,22 @@ body,
   justify-content: space-between;
   gap: 10px;
   padding: 8px 12px;
-  background: #15151a;
+  background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: 6px;
   margin-bottom: 6px;
   font-size: 11px;
 }
+
 .queue-item:hover {
-  background: #191921;
+  background: var(--card-hover);
 }
+
 .queue-item-left {
   min-width: 0;
   flex: 1 1 auto;
 }
+
 .queue-item-title {
   font-weight: 600;
   white-space: nowrap;
@@ -327,11 +429,13 @@ body,
   text-overflow: ellipsis;
   color: var(--fg-bright);
 }
+
 .queue-item-sub {
   font-size: 10px;
   color: var(--muted);
   margin-top: 2px;
 }
+
 .dropzone-container {
   border: 2px dashed var(--border);
   border-radius: 8px;
@@ -341,16 +445,19 @@ body,
   transition: all 0.2s ease;
   cursor: pointer;
 }
+
 .dropzone-container.active {
   border-color: var(--primary);
   background: rgba(99, 102, 241, 0.08);
 }
 
 @keyframes pulse {
+
   0%,
   100% {
     opacity: 1;
   }
+
   50% {
     opacity: 0.55;
   }
@@ -398,7 +505,7 @@ body,
   position: sticky;
   inset-block-start: 0;
   z-index: 2;
-  background: #1a1a1f;
+  background: var(--tabbar-bg);
 }
 
 .pipeline-table thead th {
@@ -410,7 +517,7 @@ body,
   color: var(--muted);
   font-weight: 700;
   border-bottom: 1px solid var(--border-strong);
-  background: #1a1a1f;
+  background: var(--tabbar-bg);
   white-space: nowrap;
 }
 
@@ -460,6 +567,7 @@ body,
 
 /* Responsive Stacked Layout when container width < 600px */
 @container (width < 600px) {
+
   .pipeline-table,
   .pipeline-table thead,
   .pipeline-table tbody,
@@ -501,26 +609,31 @@ body,
     color: var(--muted);
     font-weight: 600;
   }
+
   .pipeline-table td:nth-child(3)::before {
     content: var(--label-3) ": ";
     color: var(--muted);
     font-weight: 600;
   }
+
   .pipeline-table td:nth-child(4)::before {
     content: var(--label-4) ": ";
     color: var(--muted);
     font-weight: 600;
   }
+
   .pipeline-table td:nth-child(5)::before {
     content: var(--label-5) ": ";
     color: var(--muted);
     font-weight: 600;
   }
+
   .pipeline-table td:nth-child(6)::before {
     content: var(--label-6) ": ";
     color: var(--muted);
     font-weight: 600;
   }
+
   .pipeline-table td:nth-child(7)::before {
     content: var(--label-7) ": ";
     color: var(--muted);
@@ -556,7 +669,7 @@ dialog.app-dialog::backdrop {
   justify-content: space-between;
   padding: 9px 12px;
   border-bottom: 1px solid var(--border);
-  background: #16161a;
+  background: var(--tabbar-bg);
   min-height: 42px;
   flex-shrink: 0;
   gap: 8px;
@@ -602,13 +715,13 @@ dialog.app-dialog::backdrop {
 }
 
 .btn-secondary {
-  background: #27272a;
+  background: var(--card-hover);
   border-color: var(--border-strong);
   color: var(--fg);
 }
 
 .btn-secondary:hover:not(:disabled) {
-  background: #3f3f46;
+  background: var(--card-bg);
 }
 
 .btn-success {
@@ -641,9 +754,9 @@ dialog.app-dialog::backdrop {
 .select,
 .textarea {
   width: 100%;
-  background: #121215;
+  background: var(--input-bg);
   border: 1px solid var(--border-strong);
-  color: var(--fg-bright);
+  color: var(--fg);
   border-radius: 5px;
   padding: 6px 9px;
   font-size: 12px;
@@ -724,13 +837,13 @@ dialog.app-dialog::backdrop {
 .markdown-body code {
   font-family: var(--font-mono);
   font-size: 0.88em;
-  background: rgba(255, 255, 255, 0.07);
+  background: var(--code-bg);
   padding: 2px 5px;
   border-radius: 4px;
 }
 
 .markdown-body pre {
-  background: #0d0d10;
+  background: var(--pre-bg);
   border: 1px solid var(--border-strong);
   border-radius: 6px;
   padding: 12px 14px;
@@ -890,11 +1003,12 @@ dialog.app-dialog::backdrop {
 }
 
 .stream-phase-pill {
-  font-size: 9.5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.5px;
-  padding: 2px 7px;
+  padding: 2px 8px;
   border-radius: 4px;
   background: rgba(59, 130, 246, 0.15);
   color: #60a5fa;
@@ -913,7 +1027,7 @@ dialog.app-dialog::backdrop {
 }
 
 .stream-execution-cluster {
-  background: #121216;
+  background: var(--card-bg);
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
@@ -956,6 +1070,7 @@ dialog.app-dialog::backdrop {
   padding: 1px 0;
   border-bottom: 1px dashed rgba(255, 255, 255, 0.04);
 }
+
 .stream-cluster-line:last-child {
   border-bottom: none;
 }
@@ -1069,8 +1184,8 @@ dialog.app-dialog::backdrop {
 .stream-user-bubble {
   align-self: flex-end;
   max-width: 88%;
-  background: #181a22;
-  border: 1px solid #2a3346;
+  background: var(--bubble-user-bg);
+  border: 1px solid var(--bubble-user-border);
   border-radius: 10px 10px 2px 10px;
   padding: 6px 9px;
   font-size: 11.5px;
@@ -1082,7 +1197,7 @@ dialog.app-dialog::backdrop {
 .stream-agent-bubble {
   align-self: flex-start;
   width: 100%;
-  background: #15151a;
+  background: var(--bubble-agent-bg);
   border-radius: 10px;
   padding: 7px 10px;
   font-size: 11.5px;
@@ -1129,12 +1244,13 @@ dialog.app-dialog::backdrop {
 .stream-bubble-content p:first-child {
   margin-top: 0;
 }
+
 .stream-bubble-content p:last-child {
   margin-bottom: 0;
 }
 
 .stream-hitl-card {
-  background: #15151a;
+  background: var(--card-bg);
   border-radius: 12px;
   padding: 11px 14px;
   font-size: 12px;
@@ -1169,9 +1285,11 @@ dialog.app-dialog::backdrop {
   0% {
     box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.25), 0 0 10px rgba(249, 115, 22, 0.25);
   }
+
   50% {
     box-shadow: 0 0 0 5px rgba(249, 115, 22, 0.4), 0 0 18px rgba(249, 115, 22, 0.5);
   }
+
   100% {
     box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.25), 0 0 10px rgba(249, 115, 22, 0.25);
   }
@@ -1193,7 +1311,7 @@ dialog.app-dialog::backdrop {
 }
 
 .stream-observation-card {
-  background: #15141b;
+  background: var(--card-bg);
   border: 1px solid rgba(139, 92, 246, 0.35);
   border-radius: 6px;
   padding: 10px 12px;
@@ -1213,7 +1331,7 @@ dialog.app-dialog::backdrop {
 }
 
 .stream-user-card {
-  background: #17171c;
+  background: var(--card-bg);
   border: 1px solid var(--border-strong);
   border-radius: 6px;
   padding: 9px 12px;
@@ -1233,7 +1351,7 @@ dialog.app-dialog::backdrop {
 }
 
 .stream-agent-card {
-  background: #15151a;
+  background: var(--bubble-agent-bg);
   border-radius: 12px;
   padding: 11px 14px;
   font-size: 12px;
@@ -1257,7 +1375,7 @@ dialog.app-dialog::backdrop {
   top: 36px;
   left: 8px;
   right: 8px;
-  background: #18181d;
+  background: var(--panel-bg);
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
@@ -1286,4 +1404,3 @@ dialog.app-dialog::backdrop {
   background: rgba(59, 130, 246, 0.12);
   border-left: 2px solid var(--primary);
 }
-

@@ -110,6 +110,7 @@ export interface BenchmarkSuite {
 export interface BenchmarkStartRequest {
   provider: string;
   models: string[];
+  modelMaxTokens?: Record<string, number>;
   iterations: number;
   experimentPath?: string;
   predefinedExperimentId?: string;
@@ -134,6 +135,7 @@ export interface ModelCatalogEntry {
   provider: string;
   tier: "T1" | "T2" | "T3";
   contextWindow: number;
+  maxTokens?: number;
   costPerMillionPromptUsd?: number;
   costPerMillionCompletionUsd?: number;
   description: string;

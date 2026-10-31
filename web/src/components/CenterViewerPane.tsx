@@ -6,6 +6,7 @@ import { PipelineProgressTab } from "./PipelineProgressTab";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { SettingsTab } from "./SettingsTab";
 import { AIEvaluationTab } from "./AIEvaluationTab";
+import { ThemeToggle } from "./ThemeToggle";
 
 interface CenterViewerPaneProps {
   tabs: ViewerTab[];
@@ -78,7 +79,7 @@ export const CenterViewerPane: React.FC<CenterViewerPaneProps> = ({
         style={{
           display: "flex",
           alignItems: "center",
-          background: "#141418",
+          background: "var(--tabbar-bg)",
           borderBottom: "1px solid var(--border)",
           minHeight: "42px",
           padding: "0 8px",
@@ -148,6 +149,9 @@ export const CenterViewerPane: React.FC<CenterViewerPaneProps> = ({
             </div>
           );
         })}
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", paddingLeft: "12px", flexShrink: 0 }}>
+          <ThemeToggle />
+        </div>
       </div>
 
       {/* Tab Content Panes (Core workspace tabs preserved in DOM across switching) */}

@@ -17,6 +17,7 @@ export class PipelineOrchestrator {
   private isRunning = false;
   private isFullPipelineRunning = false;
   private shouldStop = false;
+  private suppressNotifications = false;
   private chatLogger: ChatLogger;
 
   constructor(
@@ -27,7 +28,10 @@ export class PipelineOrchestrator {
     private onLog: (text: string, updateLast?: boolean) => void,
     private extensionVersion: string = "0.1.0",
     private onAgentActivity?: (phase: PhaseInfo, text: string) => void,
-    private onAgentObservation?: (phase: PhaseInfo, text: string, metadata?: { badge?: string; metric?: string }) => void
+    private onAgentObservation?: (phase: PhaseInfo, text: string, metadata?: { badge?: string; metric?: string }) => void,
+    private onPhaseStarted?: (phase: PhaseInfo) => void,
+    private onPhaseCompleted?: (phase: PhaseInfo) => void,
+    private onPipelineFinished?: (state: PipelineState) => void
   ) {
     this.workspaceRoot = workspaceRoot || "";
     this.chatLogger = new ChatLogger(this.workspaceRoot);
@@ -40,6 +44,14 @@ export class PipelineOrchestrator {
 
   public setExtensionVersion(version: string) {
     this.extensionVersion = version || "0.1.0";
+  }
+
+  public setSuppressNotifications(suppress: boolean) {
+    this.suppressNotifications = suppress;
+  }
+
+  public getSuppressNotifications(): boolean {
+    return this.suppressNotifications;
   }
 
   public async syncModelSummary(): Promise<string> {
@@ -383,15 +395,16 @@ export class PipelineOrchestrator {
       return;
     }
     this.workspaceRoot = newRoot || "";
+    this.auxiliaryTokens = {};
     this.tools.setWorkspaceRoot(this.workspaceRoot);
     this.chatLogger.setWorkspaceRoot(this.workspaceRoot);
     try {
       if (this.tools.hasTool("tpa_set_workspace")) {
         await this.tools.execute("tpa_set_workspace", { workspace: this.workspaceRoot, reset: true });
       }
-    } catch (_) {}
+    } catch (_) { }
     try {
-      await this.rescanPhases();
+      await this.rescanPhases(true);
     } catch (err) {
       console.error("[PipelineOrchestrator] Error rescanning phases on directory change:", err);
     }
@@ -412,7 +425,7 @@ export class PipelineOrchestrator {
           this.auxiliaryTokens = parsed;
         }
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   private async saveAuxiliaryTokens(): Promise<void> {
@@ -424,7 +437,7 @@ export class PipelineOrchestrator {
       }
       const auxPath = path.join(logsDir, "auxiliary_tokens.json");
       await fs.writeFile(auxPath, JSON.stringify(this.auxiliaryTokens, null, 2), "utf-8");
-    } catch (_) {}
+    } catch (_) { }
   }
 
   public recordAuxiliaryUsage(role: LLMRole, model: string, provider: string, usage?: TokenUsage): void {
@@ -444,8 +457,8 @@ export class PipelineOrchestrator {
     target.totalTokens += usage.totalTokens || 0;
     target.cachedPromptTokens = (target.cachedPromptTokens || 0) + (usage.cachedPromptTokens || 0);
 
-    this.saveAuxiliaryTokens().catch(() => {});
-    this.notifyState().catch(() => {});
+    this.saveAuxiliaryTokens().catch(() => { });
+    this.notifyState().catch(() => { });
   }
 
   /**
@@ -533,7 +546,7 @@ export class PipelineOrchestrator {
                   turnCount = parseInt(turnHeaderMatches[turnHeaderMatches.length - 1][1], 10);
                 }
               }
-            } catch (_) {}
+            } catch (_) { }
           }
         }
 
@@ -600,6 +613,15 @@ export class PipelineOrchestrator {
     if (this.isRunning) {
       this.logPipeline("Cannot reset state while an active run is in flight.");
       return;
+    }
+    this.auxiliaryTokens = {};
+    if (this.workspaceRoot) {
+      try {
+        const auxPath = path.join(this.workspaceRoot, "logs", "auxiliary_tokens.json");
+        if (fsSync.existsSync(auxPath)) {
+          await fs.unlink(auxPath);
+        }
+      } catch (_) { }
     }
     const notesPath = path.join(this.workspaceRoot, "docs", "notes.md");
     try {
@@ -775,25 +797,25 @@ export class PipelineOrchestrator {
           list.push({ name: `${phaseDir} Console Log`, relPath: consoleRel });
         }
       }
-    } catch {}
+    } catch { }
 
     // Backward-compatibility: if legacy logs/llm_chat.md exists
     try {
       await fs.stat(path.join(this.workspaceRoot, "logs/llm_chat.md"));
       list.push({ name: "Legacy LLM Chat Log", relPath: "logs/llm_chat.md" });
-    } catch {}
+    } catch { }
 
     // If optional BIOLOGY.md exists, include it
     try {
       await fs.stat(path.join(this.workspaceRoot, `${agentDir}/BIOLOGY.md`));
       list.splice(1, 0, { name: "Curated Biological Context", relPath: `${agentDir}/BIOLOGY.md` });
-    } catch {}
+    } catch { }
 
     // If legacy VARIABLES.md exists, include it
     try {
       await fs.stat(path.join(this.workspaceRoot, `${agentDir}/VARIABLES.md`));
       list.splice(1, 0, { name: "Legacy Dataset Variables", relPath: `${agentDir}/VARIABLES.md` });
-    } catch {}
+    } catch { }
 
     const result: PromptFileInfo[] = [];
     for (const item of list) {
@@ -1014,7 +1036,8 @@ Construct and execute code for this phase, capturing output to logs.
     };
   }
 
-  private async notifyState() {
+  public async notifyState() {
+    if (this.suppressNotifications) return;
     try {
       const state = await this.getState();
       this.onStateChange(state);
@@ -1237,6 +1260,12 @@ Construct and execute code for this phase, capturing output to logs.
           break;
         }
       }
+      if (!this.shouldStop && this.phases.length > 0 && this.phases.every((p) => !p.enabled || p.status === "completed")) {
+        this.logPipeline("All phases completed successfully.");
+        if (!this.suppressNotifications) {
+          this.onPipelineFinished?.(await this.getState());
+        }
+      }
     } catch (err: any) {
       this.logPipeline(`Full pipeline error: ${err.message}`);
     } finally {
@@ -1321,6 +1350,12 @@ Construct and execute code for this phase, capturing output to logs.
           break;
         }
       }
+      if (!this.shouldStop && this.phases.length > 0 && this.phases.every((p) => !p.enabled || p.status === "completed")) {
+        this.logPipeline("All phases completed successfully.");
+        if (!this.suppressNotifications) {
+          this.onPipelineFinished?.(await this.getState());
+        }
+      }
     } catch (err: any) {
       this.logPipeline(`Full pipeline error: ${err.message}`);
     } finally {
@@ -1344,7 +1379,8 @@ Construct and execute code for this phase, capturing output to logs.
     const phase = getActivePhase();
     if (!phase) return false;
 
-    const phaseTag = path.basename(phase.fileName).replace(/\.md$/i, "");
+    const phaseTagUpper = path.basename(phase.fileName).replace(/\.md$/i, "").toUpperCase();
+    const phaseTag = phaseTagUpper;
     const cleanTitle = (phase.title || "").replace(/^Phase\s+\d+:\s*/i, "").trim();
     this.chatLogger.setPhase(phase.fileName);
 
@@ -1358,7 +1394,11 @@ Construct and execute code for this phase, capturing output to logs.
     const startTimeMs = Date.now();
     await this.notifyState();
 
-    this.logPhase(phaseTag, `[Starting] ${cleanTitle} (${phase.fileName})`);
+    this.onLog(`Phase: ${phaseTagUpper}`);
+    this.logPhase(phaseTagUpper, `[Starting] ${cleanTitle} (${phase.fileName})`);
+    if (!this.suppressNotifications) {
+      this.onPhaseStarted?.(phase);
+    }
 
     let loop: AgentLoop | undefined;
     try {
@@ -1384,8 +1424,8 @@ Construct and execute code for this phase, capturing output to logs.
         phaseRole === "reasoner"
           ? "Tier 3 (Scientific Reasoner)"
           : phaseRole === "utility"
-          ? "Tier 1 (Fast Utility & Ingestion)"
-          : "Tier 2 (Tool Runner)";
+            ? "Tier 1 (Fast Utility & Ingestion)"
+            : "Tier 2 (Tool Runner)";
       this.logPhase(
         phaseTag,
         `Allocated ${roleLabel}: ${phaseModelCfg.model} (${phaseModelCfg.provider})`
@@ -1434,7 +1474,9 @@ Construct and execute code for this phase, capturing output to logs.
 
             // Stream continuous live activity paraphrase to the Agent panel
             const naturalAction = this.formatNaturalActivity(event.data.name, event.data.args, cleanTitle);
-            this.onAgentActivity?.(phase, naturalAction);
+            if (!this.suppressNotifications) {
+              this.onAgentActivity?.(phase, naturalAction);
+            }
           } else if (event.type === "tool_end") {
             const base = lastToolPendingText
               ? lastToolPendingText.replace(/\s*\.{3}$/, "")
@@ -1454,16 +1496,18 @@ Construct and execute code for this phase, capturing output to logs.
               this.onLog(`${base} ...  ✓ [completed]`, true);
 
               // Extract stage observations and stream to the Agent panel
-              if (event.data.name === "complete_phase") {
-                const summary = event.data.args?.summary || "Phase objectives and quality gates successfully passed.";
-                this.onAgentObservation?.(phase, summary, { badge: `Phase ${phase.id} Complete` });
-              } else if (event.data.name === "fail_phase") {
-                const reason = event.data.args?.reason || "Pipeline checkpoint pause.";
-                this.onAgentObservation?.(phase, `⚠️ Halted: ${reason}`, { badge: "Action Required" });
-              } else {
-                const obs = this.extractToolObservation(event.data.name, event.data.args, event.data.result);
-                if (obs) {
-                  this.onAgentObservation?.(phase, obs.text, { badge: obs.badge });
+              if (!this.suppressNotifications) {
+                if (event.data.name === "complete_phase") {
+                  const summary = event.data.args?.summary || "Phase objectives and quality gates successfully passed.";
+                  this.onAgentObservation?.(phase, summary, { badge: `Phase ${phase.id} Complete` });
+                } else if (event.data.name === "fail_phase") {
+                  const reason = event.data.args?.reason || "Pipeline checkpoint pause.";
+                  this.onAgentObservation?.(phase, `⚠️ Halted: ${reason}`, { badge: "Action Required" });
+                } else {
+                  const obs = this.extractToolObservation(event.data.name, event.data.args, event.data.result);
+                  if (obs) {
+                    this.onAgentObservation?.(phase, obs.text, { badge: obs.badge });
+                  }
                 }
               }
             }
@@ -1500,6 +1544,9 @@ Construct and execute code for this phase, capturing output to logs.
         // Update docs/notes.md with phase record
         await this.appendPhaseRecordToNotes(currentPhase);
         await this.notifyState();
+        if (!this.suppressNotifications) {
+          this.onPhaseCompleted?.(currentPhase);
+        }
         return true;
       } else {
         currentPhase.status = "failed";
@@ -1542,7 +1589,7 @@ Construct and execute code for this phase, capturing output to logs.
         if (fsSync.existsSync(abs) && fsSync.statSync(abs).isFile()) {
           files.add(clean);
         }
-      } catch (_) {}
+      } catch (_) { }
     };
 
     const baseSlug = path.basename(fileName).replace(/\.md$/i, "").toLowerCase();

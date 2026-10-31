@@ -938,7 +938,9 @@ export class ProviderClient {
     let cleanMessage = rawText.trim();
     try {
       const parsed = JSON.parse(rawText);
-      cleanMessage = parsed.error?.message || parsed.message || parsed.error || rawText;
+      const meta = parsed.error?.metadata;
+      const metaDetail = meta?.raw || meta?.remedy_hint;
+      cleanMessage = metaDetail || parsed.error?.message || parsed.message || parsed.error || rawText;
       if (typeof cleanMessage === "object") cleanMessage = JSON.stringify(cleanMessage);
     } catch (_) { }
 

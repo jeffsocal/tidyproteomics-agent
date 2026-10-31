@@ -15,10 +15,12 @@ import {
   BookOpen,
   Award,
   FileText,
+  Palette,
 } from "lucide-react";
 import { AppConfig, LLMProviderType, LLMTierConfig, LiteratureViewState, McpStatus } from "../types";
 import { LibrarySettingsSection } from "./LibrarySettingsSection";
 import { MultiModelSettingsSection } from "./MultiModelSettingsSection";
+import { ThemeToggle } from "./ThemeToggle";
 
 interface SettingsTabProps {
   config?: AppConfig;
@@ -318,7 +320,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
         style={{
           padding: "10px 24px",
           borderBottom: "1px solid var(--border)",
-          background: "#16161b",
+          background: "var(--tabbar-bg)",
           display: "flex",
           gap: "8px",
           flexShrink: 0,
@@ -406,6 +408,19 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
         {/* SECTION 1: Workspace & Pipeline Template */}
         {activeSection === "workspace" && (
           <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+            {/* Theme & Appearance Box */}
+            <div className="card" style={{ padding: "16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "var(--fg-bright)", display: "flex", alignItems: "center", gap: "6px" }}>
+                  <Palette size={15} color="var(--primary)" /> Theme &amp; Color Scheme
+                </h3>
+                <div style={{ fontSize: "12px", color: "var(--muted)", marginTop: "2px" }}>
+                  Select your preferred interface appearance: Deep Dark, Dim Slate, or Light mode.
+                </div>
+              </div>
+              <ThemeToggle />
+            </div>
+
             {/* Active Workspace Box */}
             <div className="card" style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "10px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>

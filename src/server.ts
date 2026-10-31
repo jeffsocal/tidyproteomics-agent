@@ -57,6 +57,7 @@ async function startServer() {
 
   let logBuffer: string[] = [];
   const appendLog = (text: string, updateLast = false) => {
+    console.log(text);
     if (updateLast && logBuffer.length > 0) {
       logBuffer[logBuffer.length - 1] = text;
     } else {
@@ -109,7 +110,10 @@ async function startServer() {
     (log, updateLast) => appendLog(log, updateLast),
     VERSION,
     (phase, text) => agentService?.handleStageActivity(phase, text),
-    (phase, text, meta) => agentService?.handleStageObservation(phase, text, meta)
+    (phase, text, meta) => agentService?.handleStageObservation(phase, text, meta),
+    (phase) => agentService?.handlePhaseStarted(phase),
+    (phase) => agentService?.handlePhaseCompleted(phase),
+    (state) => agentService?.handlePipelineFinished(state)
   );
 
   const ingestionRunner = new IngestionRunner(
@@ -693,7 +697,7 @@ async function startServer() {
           try {
             const parsed = JSON.parse(content);
             return res.json({ ok: true, plotly: parsed, cached: true });
-          } catch (_) {}
+          } catch (_) { }
         }
       }
 
@@ -1090,7 +1094,7 @@ async function startServer() {
 
   app.post("/api/evaluation/start", async (req, res) => {
     try {
-      const { provider, models, iterations, experimentPath, predefinedExperimentId } = req.body || {};
+      const { provider, models, modelMaxTokens, iterations, experimentPath, predefinedExperimentId } = req.body || {};
       if (!provider || !models || !Array.isArray(models) || models.length === 0) {
         return res.status(400).json({ ok: false, error: "Provider and at least one model are required." });
       }
@@ -1101,6 +1105,7 @@ async function startServer() {
         {
           provider,
           models,
+          modelMaxTokens,
           iterations: Number(iterations) || 1,
           experimentPath,
           predefinedExperimentId,
@@ -1118,7 +1123,8 @@ async function startServer() {
 
   app.post("/api/evaluation/cancel", (_req, res) => {
     try {
-      evaluationService.cancelBenchmark();
+      evaluationService.cancelBenchmark(orchestrator);
+      orchestrator.stop();
       appendLog(`[AI Evaluation] Benchmark suite cancellation requested.`);
       res.json({ ok: true });
     } catch (err: any) {
@@ -1453,7 +1459,7 @@ async function startServer() {
       ingestionRunner
         .runIngestion(activeDb)
         .then(async () => {
-          await literatureService.getStats(activeDb).catch(() => {});
+          await literatureService.getStats(activeDb).catch(() => { });
           broadcastLiteratureState();
           broadcastFileTree().catch(() => { });
         })

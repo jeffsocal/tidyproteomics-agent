@@ -127,6 +127,7 @@ export interface AgentMessage {
   badge?: string;
   phaseId?: string;
   phaseTitle?: string;
+  phaseTag?: string;
 }
 
 export interface FileTreeNode {
@@ -430,6 +431,7 @@ export interface ModelCatalogEntry {
   provider: string;
   tier: "T1" | "T2" | "T3";
   contextWindow: number;
+  maxTokens?: number;
   costPerMillionPromptUsd?: number;
   costPerMillionCompletionUsd?: number;
   description: string;

@@ -13,6 +13,8 @@ export interface EvaluationBarChartProps {
   subtitle?: string;
   categories: string[];
   series: EvaluationSeries[];
+  xAxisTitle?: string;
+  xAxisRange?: [number, number];
   yAxisTitle?: string;
   yAxisRange?: [number, number];
   height?: number;
@@ -36,6 +38,8 @@ export const EvaluationBarChart: React.FC<EvaluationBarChartProps> = ({
   subtitle,
   categories,
   series,
+  xAxisTitle,
+  xAxisRange,
   yAxisTitle,
   yAxisRange,
   height = 360,
@@ -47,6 +51,9 @@ export const EvaluationBarChart: React.FC<EvaluationBarChartProps> = ({
     const el = containerRef.current;
     if (!el || series.length === 0) return;
 
+    const effectiveValueTitle = xAxisTitle || yAxisTitle;
+    const effectiveValueRange = xAxisRange || yAxisRange;
+
     const data: any[] = series.map((s, idx) => {
       const color = s.color || MODEL_PALETTE[idx % MODEL_PALETTE.length];
       const textLabels = s.text
@@ -54,10 +61,11 @@ export const EvaluationBarChart: React.FC<EvaluationBarChartProps> = ({
         : s.values.map((v) => (valueFormatter ? valueFormatter(v) : String(v)));
 
       return {
-        x: categories,
-        y: s.values,
+        x: s.values,
+        y: categories,
         name: s.name,
         type: "bar",
+        orientation: "h",
         marker: {
           color,
           line: {
@@ -68,7 +76,7 @@ export const EvaluationBarChart: React.FC<EvaluationBarChartProps> = ({
         text: textLabels,
         textposition: "auto",
         hoverinfo: "x+y+name",
-        hovertemplate: `<b>%{data.name}</b><br>%{x}: <b>%{text}</b><extra></extra>`,
+        hovertemplate: `<b>%{data.name}</b><br>%{y}: <b>%{text}</b><extra></extra>`,
       };
     });
 
@@ -86,10 +94,10 @@ export const EvaluationBarChart: React.FC<EvaluationBarChartProps> = ({
         size: 11,
       },
       margin: {
-        l: 55,
+        l: 140,
         r: 25,
         t: 45,
-        b: 70,
+        b: 50,
       },
       legend: {
         orientation: "h",
@@ -102,17 +110,18 @@ export const EvaluationBarChart: React.FC<EvaluationBarChartProps> = ({
         borderwidth: 1,
       },
       xaxis: {
-        tickfont: { color: "#e4e4e7", size: 11, weight: 600 },
-        gridcolor: "rgba(255, 255, 255, 0.05)",
+        title: effectiveValueTitle ? { text: effectiveValueTitle, font: { color: "#a1a1aa", size: 11 } } : undefined,
+        range: effectiveValueRange,
+        tickfont: { color: "#a1a1aa", size: 10.5 },
+        gridcolor: "rgba(255, 255, 255, 0.07)",
+        zerolinecolor: "rgba(255, 255, 255, 0.15)",
         linecolor: "rgba(255, 255, 255, 0.18)",
         automargin: true,
       },
       yaxis: {
-        title: yAxisTitle ? { text: yAxisTitle, font: { color: "#a1a1aa", size: 11 } } : undefined,
-        range: yAxisRange,
-        tickfont: { color: "#a1a1aa", size: 10.5 },
-        gridcolor: "rgba(255, 255, 255, 0.07)",
-        zerolinecolor: "rgba(255, 255, 255, 0.15)",
+        autorange: "reversed",
+        tickfont: { color: "#e4e4e7", size: 11, weight: 600 },
+        gridcolor: "rgba(255, 255, 255, 0.05)",
         linecolor: "rgba(255, 255, 255, 0.18)",
         automargin: true,
       },
@@ -150,7 +159,7 @@ export const EvaluationBarChart: React.FC<EvaluationBarChartProps> = ({
       ro.disconnect();
       if (el) Plotly.purge(el);
     };
-  }, [categories, series, yAxisTitle, yAxisRange, height, title, valueFormatter]);
+  }, [categories, series, xAxisTitle, xAxisRange, yAxisTitle, yAxisRange, height, title, valueFormatter]);
 
   return (
     <div

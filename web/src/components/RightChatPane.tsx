@@ -210,8 +210,8 @@ export const RightChatPane: React.FC<RightChatPaneProps> = ({
       const isError =
         clean.includes("❌") || clean.includes("failed") || clean.includes("[Error]");
 
-      const phaseMatch = clean.match(/(?:Phase\s+(\d+|[a-zA-Z0-9_-]+)|([0-9]{2}_[a-zA-Z0-9_-]+))/i);
-      const phaseId = phaseMatch ? phaseMatch[1] || phaseMatch[2] : undefined;
+      const phaseMatch = clean.match(/(?:Phase\s+(\d+|[a-zA-Z0-9_-]+)|([0-9]{2}_[a-zA-Z0-9_-]+)|\*{3,}\s*([a-zA-Z0-9_-]+)\s*\*{3,})/i);
+      const phaseId = phaseMatch ? phaseMatch[1] || phaseMatch[2] || phaseMatch[3] : undefined;
 
       const step: ExecutionStep = {
         id: `step_${idx}`,
@@ -224,8 +224,21 @@ export const RightChatPane: React.FC<RightChatPaneProps> = ({
       };
 
       if (phaseId) {
-        if (!pLogs[phaseId]) pLogs[phaseId] = [];
-        pLogs[phaseId].push(step);
+        const cleanTag = phaseId.toUpperCase();
+        const numMatch = cleanTag.match(/^([0-9]{2})/);
+        const shortNum = numMatch ? numMatch[1] : undefined;
+
+        if (!pLogs[cleanTag]) pLogs[cleanTag] = [];
+        pLogs[cleanTag].push(step);
+
+        if (shortNum && shortNum !== cleanTag) {
+          if (!pLogs[shortNum]) pLogs[shortNum] = [];
+          pLogs[shortNum].push(step);
+        }
+        if (phaseId !== cleanTag) {
+          if (!pLogs[phaseId]) pLogs[phaseId] = [];
+          pLogs[phaseId].push(step);
+        }
       } else {
         genLogs.push(step);
       }
@@ -338,7 +351,7 @@ export const RightChatPane: React.FC<RightChatPaneProps> = ({
         style={{
           padding: "6px 10px 8px 10px",
           borderBottom: "1px solid var(--border)",
-          background: "#141418",
+          background: "var(--tabbar-bg)",
           flexShrink: 0,
         }}
       >
@@ -359,7 +372,7 @@ export const RightChatPane: React.FC<RightChatPaneProps> = ({
               display: "flex",
               justifyContent: "space-between",
               alignItems: "center",
-              background: "#141418",
+              background: "var(--card-bg)",
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", fontWeight: 700 }}>
@@ -510,7 +523,7 @@ export const RightChatPane: React.FC<RightChatPaneProps> = ({
             style={{
               padding: "6px 8px",
               borderTop: "1px solid var(--border)",
-              background: "#141418",
+              background: "var(--card-bg)",
               display: "flex",
               justifyContent: "space-between",
               alignItems: "center",
@@ -602,18 +615,24 @@ export const RightChatPane: React.FC<RightChatPaneProps> = ({
         {messages.map((m, idx) => {
           const isUser = m.role === "user";
 
-          // 1. Phase Demarcation + Clustered Execution Steps
-          if (m.type === "milestone" && (m.content.includes("▶") || m.id.startsWith("msg_start_"))) {
+          // 1. Phase Demarcation
+          if (m.type === "milestone" && (m.content.includes("▶") || m.content.includes("****") || m.content.includes("Phase:") || m.id.startsWith("msg_start_"))) {
             const phaseId = m.phaseId || "00";
             const phaseTitle = m.phaseTitle || "Pipeline Phase";
             renderedPhaseDemarcations.add(phaseId);
-            const clusterKey = `cluster_phase_${phaseId}`;
-            const execSteps = phaseExecutionLogs[phaseId] || [];
-            const isPhaseRunning = runningPhase?.id === phaseId;
-            const isClusterExpanded =
-              expandedClusters[clusterKey] !== undefined
-                ? expandedClusters[clusterKey]
-                : isPhaseRunning;
+            const targetPhase = phases.find((p) => p.id === phaseId || p.fileName?.includes(phaseId));
+            const rawTag =
+              m.phaseTag ||
+              (targetPhase ? targetPhase.fileName.replace(/\.md$/i, "") : "") ||
+              (m.content.match(/\*{3,}\s*([^\s*]+)\s*\*{3,}/)?.[1]) ||
+              (m.content.match(/Phase:\s*([^\s\n]+)/)?.[1]) ||
+              `PHASE_${phaseId}`;
+            const phaseTagUpper = rawTag.toUpperCase();
+            renderedPhaseDemarcations.add(phaseTagUpper);
+
+            const isPhaseRunning =
+              runningPhase?.id === phaseId ||
+              (runningPhase && runningPhase.fileName.toUpperCase().includes(phaseTagUpper));
 
             return (
               <React.Fragment key={m.id}>
@@ -621,7 +640,7 @@ export const RightChatPane: React.FC<RightChatPaneProps> = ({
                 <hr className="stream-phase-divider" />
                 {/* Beginning of Phase Demarcation */}
                 <div className="stream-phase-demarcation">
-                  <span className="stream-phase-pill">PHASE {phaseId}</span>
+                  <span className="stream-phase-pill">{phaseTagUpper}</span>
                   <span className="stream-phase-title">{phaseTitle}</span>
                   {isPhaseRunning ? (
                     <span className="badge badge-running" style={{ fontSize: "8.5px", marginLeft: "auto" }}>
@@ -633,88 +652,16 @@ export const RightChatPane: React.FC<RightChatPaneProps> = ({
                     </span>
                   )}
                 </div>
-
-                {/* Clustered Execution Steps for this Phase */}
-                {execSteps.length > 0 && (
-                  <div className="stream-execution-cluster">
-                    <div
-                      className="stream-cluster-header"
-                      onClick={() => toggleCluster(clusterKey)}
-                    >
-                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                        {isClusterExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                        <Terminal size={11} color="var(--terminal-fg)" />
-                        <span style={{ fontWeight: 600 }}>
-                          Execution Steps ({execSteps.length} {execSteps.length === 1 ? "action" : "actions"})
-                        </span>
-                      </div>
-                      {isPhaseRunning ? (
-                        <span className="badge badge-running" style={{ fontSize: "8.5px" }}>
-                          Running...
-                        </span>
-                      ) : (
-                        <span className="badge badge-completed" style={{ fontSize: "8.5px" }}>
-                          ✓ Complete
-                        </span>
-                      )}
-                    </div>
-                    {isClusterExpanded && (
-                      <div className="stream-cluster-body">
-                        {execSteps.map((st) => (
-                          <div key={st.id} className="stream-cluster-line">
-                            {st.clean}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
               </React.Fragment>
             );
           }
 
           // 2. Phase Completed Milestone (Clean, unboxed)
           if (m.type === "milestone") {
-            const phaseId = m.phaseId;
-            const execSteps = phaseId ? phaseExecutionLogs[phaseId] || [] : [];
-            const clusterKey = `cluster_phase_${phaseId}`;
-            const shouldRenderClusterHere =
-              phaseId && !renderedPhaseDemarcations.has(phaseId) && execSteps.length > 0;
-
             return (
-              <React.Fragment key={m.id}>
-                {shouldRenderClusterHere && (
-                  <div className="stream-execution-cluster">
-                    <div
-                      className="stream-cluster-header"
-                      onClick={() => toggleCluster(clusterKey)}
-                    >
-                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                        {expandedClusters[clusterKey] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                        <Terminal size={11} color="var(--terminal-fg)" />
-                        <span style={{ fontWeight: 600 }}>
-                          Execution Steps ({execSteps.length} {execSteps.length === 1 ? "action" : "actions"})
-                        </span>
-                      </div>
-                      <span className="badge badge-completed" style={{ fontSize: "8.5px" }}>
-                        ✓ Complete
-                      </span>
-                    </div>
-                    {expandedClusters[clusterKey] && (
-                      <div className="stream-cluster-body">
-                        {execSteps.map((st) => (
-                          <div key={st.id} className="stream-cluster-line">
-                            {st.clean}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div key={m.id} className="stream-milestone-line">
-                  <CheckCircle2 size={13} color="var(--success)" style={{ flexShrink: 0 }} />
-                  <span style={{ fontWeight: 600, color: "var(--fg-bright)" }}>
+              <div key={m.id} className="stream-milestone-line">
+                <CheckCircle2 size={13} color="var(--success)" style={{ flexShrink: 0 }} />
+                <span style={{ fontWeight: 600, color: "var(--fg-bright)" }}>
                     {m.content.replace(/^✓\s*\*\*/, "").replace(/\*\*$/, "")}
                   </span>
                   {m.quickChips && m.quickChips.length > 0 && (
@@ -733,7 +680,6 @@ export const RightChatPane: React.FC<RightChatPaneProps> = ({
                     </div>
                   )}
                 </div>
-              </React.Fragment>
             );
           }
 
@@ -901,7 +847,7 @@ export const RightChatPane: React.FC<RightChatPaneProps> = ({
         style={{
           padding: "8px 10px 10px 10px",
           borderTop: "1px solid var(--border)",
-          background: "#16161a",
+          background: "var(--tabbar-bg)",
           display: "flex",
           flexDirection: "column",
           gap: "8px",

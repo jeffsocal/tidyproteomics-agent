@@ -15,6 +15,7 @@ export interface AgentMessage {
   badge?: string;
   phaseId?: string;
   phaseTitle?: string;
+  phaseTag?: string;
 }
 
 export type AdvisorMessage = AgentMessage;
@@ -44,7 +45,7 @@ export class AgentService {
     this.workspaceRoot = workspaceRoot || "";
     this.experimentManager = new ExperimentManager(this.workspaceRoot, extensionUriPath);
     if (this.workspaceRoot) {
-      this.loadLatestSessionOrCreate().catch(() => {});
+      this.loadLatestSessionOrCreate().catch(() => { });
     }
   }
 
@@ -167,7 +168,7 @@ export class AgentService {
             if (this.onAgentUpdated) this.onAgentUpdated();
             return true;
           }
-        } catch (_) {}
+        } catch (_) { }
       }
 
       // Fallback: parse turns from markdown
@@ -326,7 +327,7 @@ export class AgentService {
               title = userMatch[1].trim().slice(0, 60);
             }
           }
-        } catch (_) {}
+        } catch (_) { }
 
         summaries.push({
           id,
@@ -421,7 +422,7 @@ export class AgentService {
         const chat00Path = path.join(logDir, "chat_00.md");
         try {
           await fs.copyFile(legacyPath, chat00Path);
-        } catch (_) {}
+        } catch (_) { }
         await this.loadSession("chat_00");
         if (this.messages.length === 0) {
           await this.checkAndTriggerOnboarding();
@@ -462,7 +463,7 @@ export class AgentService {
   public setWorkspaceRoot(newRoot: string) {
     this.workspaceRoot = newRoot || "";
     this.experimentManager.setWorkspaceRoot(this.workspaceRoot);
-    this.loadLatestSessionOrCreate().catch(() => {});
+    this.loadLatestSessionOrCreate().catch(() => { });
   }
 
   public getExperimentManager(): ExperimentManager {
@@ -840,15 +841,17 @@ export class AgentService {
     if (this.phaseEventsPosted.has(key)) return;
     this.phaseEventsPosted.add(key);
 
+    const phaseTagUpper = path.basename(phase.fileName).replace(/\.md$/i, "").toUpperCase();
     const title = phase.title || phase.fileName;
     const msg: AgentMessage = {
       id: "msg_start_" + phase.id + "_" + Date.now(),
       role: "assistant",
-      content: `▶ **Starting Phase ${phase.id}:** ${title}`,
+      content: `${phaseTagUpper}`,
       timestamp: new Date().toLocaleTimeString(),
       type: "milestone",
       phaseId: phase.id,
       phaseTitle: title,
+      phaseTag: phaseTagUpper,
       badge: "Phase Started",
     };
     this.messages.push(msg);
@@ -926,7 +929,7 @@ export class AgentService {
           const incomplete = state.phases.find((p) => p.enabled !== false && p.status !== "completed");
           if (incomplete) return incomplete.id;
         }
-      } catch {}
+      } catch { }
     }
     return fallback;
   }
@@ -1255,8 +1258,8 @@ ${llm || "Not specified."}
         const chosenMethod = /^use column min/i.test(trimmed)
           ? "min_column"
           : /^use random forest/i.test(trimmed)
-          ? "randomforest_grouped"
-          : undefined;
+            ? "randomforest_grouped"
+            : undefined;
         const finalMethod = await this.experimentManager.setImputationStrategy(chosenMethod, true);
         if (this.lastHaltedPhaseId === "02") {
           await this.experimentManager.confirmContrastAndAuthorizeConfounding();
@@ -1339,7 +1342,7 @@ ${llm || "Not specified."}
         if (this.getPipelineState) {
           try {
             state = await this.getPipelineState();
-          } catch {}
+          } catch { }
         }
 
         if (state && Array.isArray(state.phases) && state.phases.length > 0) {
@@ -1479,8 +1482,8 @@ ${llm || "Not specified."}
       const activeRole: LLMRole = isThinkingQuery
         ? "reasoner"
         : isToolActionQuery
-        ? "toolRunner"
-        : "utility";
+          ? "toolRunner"
+          : "utility";
       const chatClient = this.client.forRole(activeRole);
 
       const activeChatCfg = chatClient.getConfig();
@@ -1488,8 +1491,8 @@ ${llm || "Not specified."}
         activeRole === "reasoner"
           ? "Tier 3 Reasoner"
           : activeRole === "toolRunner"
-          ? "Tier 2 ToolRunner"
-          : "Tier 1 Utility";
+            ? "Tier 2 ToolRunner"
+            : "Tier 1 Utility";
       console.log(`[AgentService] Sending query to ${activeChatCfg.provider} (${activeChatCfg.model}) [${roleLabel}]...`);
       const response = await chatClient.chat({
         system: systemPrompt,
@@ -1664,7 +1667,7 @@ ${llm || "Not specified."}
                 }
               }
             }
-          } catch {}
+          } catch { }
         }
         this.lastHaltedPhaseId = undefined;
         this.lastSuggestedContrast = undefined;
@@ -1692,7 +1695,7 @@ ${llm || "Not specified."}
       const legacyLogDir = path.join(this.workspaceRoot, "logs", "advisor");
       const logDir = path.join(this.workspaceRoot, "logs", "agent");
       if (fsSync.existsSync(legacyLogDir) && !fsSync.existsSync(logDir)) {
-        await fs.rename(legacyLogDir, logDir).catch(() => {});
+        await fs.rename(legacyLogDir, logDir).catch(() => { });
       }
       if (!fsSync.existsSync(logDir)) {
         await fs.mkdir(logDir, { recursive: true });

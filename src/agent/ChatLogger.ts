@@ -119,6 +119,8 @@ export class ChatLogger {
     this.setPhase(params.phaseFileName);
     await this.ensurePipelineSummaryHeader();
 
+    const phaseTagUpper = path.basename(params.phaseFileName).replace(/\.md$/i, "").toUpperCase();
+
     // Touch console.log so it exists immediately on disk
     if (this.consoleLogPath) {
       await this.writeQueue.then(async () => {
@@ -126,10 +128,10 @@ export class ChatLogger {
           await fs.mkdir(path.dirname(this.consoleLogPath), { recursive: true });
           await fs.appendFile(
             this.consoleLogPath,
-            `=== Phase Started: ${params.phaseTitle} [${new Date().toISOString()}] ===\n`,
+            `Phase: ${phaseTagUpper}\n=== Phase Started: ${params.phaseTitle} [${new Date().toISOString()}] ===\n`,
             "utf-8"
           );
-        } catch {}
+        } catch { }
       });
     }
 
@@ -148,6 +150,7 @@ export class ChatLogger {
       "",
       "---",
       "",
+      `# Phase: ${phaseTagUpper}`,
       `# [${timestamp}] Phase Start: ${params.phaseTitle}`,
       `- **Phase Directive**: \`${params.phaseFileName}\``,
       `- **Model**: \`${params.model}\` | **Provider**: \`${params.provider}\``,

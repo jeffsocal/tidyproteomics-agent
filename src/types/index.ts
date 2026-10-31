@@ -234,6 +234,12 @@ export interface AgentMessage {
   role: "user" | "assistant";
   content: string;
   timestamp: string;
+  quickChips?: string[];
+  type?: "message" | "activity" | "observation" | "milestone";
+  badge?: string;
+  phaseId?: string;
+  phaseTitle?: string;
+  phaseTag?: string;
 }
 
 export type AdvisorMessage = AgentMessage;

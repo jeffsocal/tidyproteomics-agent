@@ -154,6 +154,7 @@ export class EvaluationService {
         provider: "openrouter",
         tier: "T2",
         contextWindow: 128000,
+        maxTokens: 16384,
         costPerMillionPromptUsd: 0.12,
         costPerMillionCompletionUsd: 0.3,
         description: "High efficiency open-weight instruction leader.",
@@ -859,9 +860,9 @@ ${manuscriptContent.slice(0, 12000)}`;
   }
 
   /**
-   * Retrieves the unified benchmark evaluation suite across all runs in evaluations/.
-   * Consolidates all runs into a single directory and index (evaluations/suite.json and evaluations/runs/),
-   * while seamlessly importing any legacy bench_* runs.
+   * Retrieves the unified benchmark evaluation suite across all runs directly in evaluations/.
+   * Consolidates all runs into a single directory and index (evaluations/suite.json and evaluations/XX_...),
+   * while seamlessly importing any legacy bench_* or evaluations/runs/ entries.
    */
   public async getBenchmarkSuites(workspaceRoot: string): Promise<BenchmarkSuite[]> {
     const evalDir = path.join(workspaceRoot, "evaluations");
@@ -883,7 +884,25 @@ ${manuscriptContent.slice(0, 12000)}`;
       } catch {}
     }
 
-    // 2. Discover runs in evaluations/runs/
+    // 2. Discover runs directly under evaluations/ (e.g. 00_benchmark, 01_model...)
+    try {
+      const entries = await fs.readdir(evalDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory() && entry.name !== "designs" && entry.name !== "runs" && !entry.name.startsWith(".")) {
+          const summaryPath = path.join(evalDir, entry.name, "summary.json");
+          if (fsSync.existsSync(summaryPath)) {
+            try {
+              const raw = await fs.readFile(summaryPath, "utf-8");
+              const r = JSON.parse(raw) as EvaluationRunSummary;
+              r.outputPath = path.join("evaluations", entry.name);
+              runsMap.set(r.id || entry.name, r);
+            } catch {}
+          }
+        }
+      }
+    } catch {}
+
+    // Legacy fallback: discover any legacy runs in evaluations/runs/
     const unifiedRunsDir = path.join(evalDir, "runs");
     if (fsSync.existsSync(unifiedRunsDir)) {
       try {
@@ -898,7 +917,9 @@ ${manuscriptContent.slice(0, 12000)}`;
                 if (!r.outputPath) {
                   r.outputPath = path.join("evaluations", "runs", entry.name);
                 }
-                runsMap.set(r.id || entry.name, r);
+                if (!runsMap.has(r.id || entry.name)) {
+                  runsMap.set(r.id || entry.name, r);
+                }
               } catch {}
             }
           }
@@ -933,11 +954,19 @@ ${manuscriptContent.slice(0, 12000)}`;
       return [];
     }
 
-    // Sort runs: baseline first, then newest to oldest
+    // Sort runs: baseline / 00_benchmark first, then ordered by numeric prefix (01_, 02_, ...) or timestamp
     allRuns.sort((a, b) => {
-      if (a.isBaseline && !b.isBaseline) return -1;
-      if (!a.isBaseline && b.isBaseline) return 1;
-      return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+      const isBaseA = a.isBaseline || a.id === "00_benchmark" || a.id.startsWith("00_");
+      const isBaseB = b.isBaseline || b.id === "00_benchmark" || b.id.startsWith("00_");
+      if (isBaseA && !isBaseB) return -1;
+      if (!isBaseA && isBaseB) return 1;
+
+      const numA = a.id.match(/^(\d+)_/);
+      const numB = b.id.match(/^(\d+)_/);
+      if (numA && numB) {
+        return parseInt(numA[1], 10) - parseInt(numB[1], 10);
+      }
+      return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
     });
 
     const unifiedSuite: BenchmarkSuite = {
@@ -991,11 +1020,17 @@ ${manuscriptContent.slice(0, 12000)}`;
       }
     }
 
-    // Also check evaluations/runs/<runId> in case outputPath differed
-    const defaultRunDir = path.join(evalDir, "runs", runId);
-    if (fsSync.existsSync(defaultRunDir)) {
+    // Also check evaluations/<runId> and evaluations/runs/<runId> in case outputPath differed
+    const directRunDir = path.join(evalDir, runId);
+    if (fsSync.existsSync(directRunDir)) {
       try {
-        await fs.rm(defaultRunDir, { recursive: true, force: true });
+        await fs.rm(directRunDir, { recursive: true, force: true });
+      } catch {}
+    }
+    const legacyRunDir = path.join(evalDir, "runs", runId);
+    if (fsSync.existsSync(legacyRunDir)) {
+      try {
+        await fs.rm(legacyRunDir, { recursive: true, force: true });
       } catch {}
     }
 
@@ -1302,8 +1337,7 @@ ${manuscriptContent.slice(0, 12000)}`;
 
     this.isCancelled = false;
     const evalDir = path.join(workspaceRoot, "evaluations");
-    const runsDir = path.join(evalDir, "runs");
-    await fs.mkdir(runsDir, { recursive: true });
+    await fs.mkdir(evalDir, { recursive: true });
     const unifiedMetaPath = path.join(evalDir, "suite.json");
 
     // Read experiment design title
@@ -1325,17 +1359,21 @@ ${manuscriptContent.slice(0, 12000)}`;
     // Store user's active baseline model configuration so it can be restored on completion
     const baselineModel = this.configStore.get("model") || "current-model";
     const baselineProvider = this.configStore.get("provider") || req.provider;
+    const baselineMaxTokens = this.configStore.get("maxTokens") || 32768;
     const baselineMultiModel = this.configStore.get("multiModelEnabled") ?? false;
 
-    // Check if baseline run already exists; if not, score and record baseline
-    const hasBaseline = existingRuns.some((r) => r.isBaseline);
+    // Check if baseline run already exists; if not, score and record baseline into 00_benchmark
+    const hasBaseline = existingRuns.some((r) => r.isBaseline || r.id === "00_benchmark" || r.id.startsWith("00_"));
     if (!hasBaseline) {
       try {
         const baselineRun = await this.scoreCurrentWorkspaceRun(workspaceRoot, orchestrator, "unified_evaluations");
-        const baselineDir = path.join(runsDir, "baseline");
-        await fs.mkdir(baselineDir, { recursive: true });
+        const benchmarkDir = path.join(evalDir, "00_benchmark");
+        await fs.mkdir(benchmarkDir, { recursive: true });
+        baselineRun.id = "00_benchmark";
+        baselineRun.isBaseline = true;
+        baselineRun.outputPath = path.join("evaluations", "00_benchmark");
         await fs.writeFile(
-          path.join(baselineDir, "summary.json"),
+          path.join(benchmarkDir, "summary.json"),
           JSON.stringify(baselineRun, null, 2),
           "utf-8"
         );
@@ -1344,24 +1382,23 @@ ${manuscriptContent.slice(0, 12000)}`;
         if (fsSync.existsSync(manuscriptSource)) {
           try {
             const msContent = await fs.readFile(manuscriptSource, "utf-8");
-            await fs.writeFile(path.join(baselineDir, "manuscript.md"), msContent, "utf-8");
+            await fs.writeFile(path.join(benchmarkDir, "manuscript.md"), msContent, "utf-8");
           } catch (_) {}
         }
         // Snapshot baseline plots and tables for safe reference
         const dataDir = path.join(workspaceRoot, "data");
-        const baselineDataDir = path.join(baselineDir, "data");
+        const benchmarkDataDir = path.join(benchmarkDir, "data");
         if (fsSync.existsSync(dataDir)) {
           try {
-            await fs.mkdir(baselineDataDir, { recursive: true });
+            await fs.mkdir(benchmarkDataDir, { recursive: true });
             const dataEntries = await fs.readdir(dataDir);
             for (const de of dataEntries) {
               if (de.endsWith(".png") || de.endsWith(".tsv") || de.endsWith(".csv") || de.endsWith(".json")) {
-                await fs.copyFile(path.join(dataDir, de), path.join(baselineDataDir, de));
+                await fs.copyFile(path.join(dataDir, de), path.join(benchmarkDataDir, de));
               }
             }
           } catch (_) {}
         }
-        baselineRun.outputPath = path.relative(workspaceRoot, baselineDir);
         existingRuns.unshift(baselineRun);
       } catch (baseErr) {
         console.warn("[EvaluationService] Could not score baseline run from current workspace:", baseErr);
@@ -1385,10 +1422,34 @@ ${manuscriptContent.slice(0, 12000)}`;
     this.activeSuite = suite;
     this.notifyProgress();
 
+    // Helper to calculate next available prefix index directly under evaluations/
+    const getNextIndex = async (): Promise<number> => {
+      let maxIdx = 0;
+      try {
+        const entries = await fs.readdir(evalDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory()) {
+            const m = entry.name.match(/^(\d+)_/);
+            if (m) {
+              const num = parseInt(m[1], 10);
+              if (num > maxIdx) maxIdx = num;
+            }
+          }
+        }
+      } catch {}
+      return maxIdx + 1;
+    };
+
+    let nextEvalIndex = await getNextIndex();
+
     // Run execution loop in background
     (async () => {
       const originalWorkspaceRoot = workspaceRoot;
       try {
+        // Abandon syncing with pipeline progress: suppress pipeline state broadcasts and agent activity
+        // so the main workspace's Pipeline Progress tab is untouched and decoupled from the benchmark suite
+        orchestrator.setSuppressNotifications(true);
+
         for (const model of req.models) {
           for (let iter = 1; iter <= req.iterations; iter++) {
             if (this.isCancelled) {
@@ -1396,14 +1457,16 @@ ${manuscriptContent.slice(0, 12000)}`;
               break;
             }
 
-            const runId = `run_${model.replace(/[^a-zA-Z0-9_-]/g, "_")}_iter${iter}`;
+            const prefix = String(nextEvalIndex).padStart(2, "0");
+            const cleanModel = model.replace(/[^a-zA-Z0-9_-]/g, "_");
+            const runId = `${prefix}_${cleanModel}_iter${iter}`;
+            nextEvalIndex++;
             const runStartTime = Date.now();
-            const runDir = path.join(runsDir, runId);
+            const runDir = path.join(evalDir, runId);
 
             suite.activeRun = {
               model,
               iteration: iter,
-              phaseTitle: "Spinning up isolated run sandbox...",
               elapsedSeconds: 0,
             };
             this.notifyProgress();
@@ -1414,15 +1477,25 @@ ${manuscriptContent.slice(0, 12000)}`;
             // 2. Switch orchestrator and MCP environment to run exclusively inside sandbox
             await orchestrator.setWorkingDirectory(runDir);
 
-            // 3. Set model configuration for this benchmark run
+            // 3. Set model configuration for this benchmark run (supporting per-model maxTokens)
+            const customMaxTokens = req.modelMaxTokens?.[model];
+            const catalogEntry = this.getAvailableModels(req.provider).find((m) => m.id === model);
+            let effectiveMaxTokens = customMaxTokens || catalogEntry?.maxTokens || this.configStore.get("maxTokens") || 32768;
+            // Guardrail: if max output tokens exceeds or saturates the model's total context window, clamp it
+            if (catalogEntry?.contextWindow && effectiveMaxTokens >= catalogEntry.contextWindow) {
+              effectiveMaxTokens = Math.min(32768, Math.floor(catalogEntry.contextWindow / 2));
+            }
+
             this.configStore.update({
               model,
               provider: req.provider as any,
+              maxTokens: effectiveMaxTokens,
               multiModelEnabled: false,
             });
             this.client.updateConfig({
               model,
               provider: req.provider as any,
+              maxTokens: effectiveMaxTokens,
               multiModelEnabled: false,
             });
             await orchestrator.syncModelSummary();
@@ -1454,6 +1527,9 @@ ${manuscriptContent.slice(0, 12000)}`;
               } catch {}
             }
 
+            const hasFailedPhase = telemetry.phaseMetrics.some((p) => p.status === "failed");
+            const runStatus: "completed" | "failed" = hasFailedPhase ? "failed" : "completed";
+
             const runSummary: EvaluationRunSummary = {
               id: runId,
               suiteId: "unified_evaluations",
@@ -1461,7 +1537,7 @@ ${manuscriptContent.slice(0, 12000)}`;
               provider: req.provider,
               iteration: iter,
               timestamp: new Date().toISOString(),
-              status: "completed",
+              status: runStatus,
               totalDurationSeconds: Math.round((Date.now() - runStartTime) / 1000),
               totalTurns: telemetry.totalTurns,
               tokenUsage: telemetry.tokenUsage,
@@ -1510,19 +1586,23 @@ ${manuscriptContent.slice(0, 12000)}`;
       } finally {
         // ALWAYS restore the original workspace root and config when suite completes, errors, or cancels!
         try {
+          orchestrator.setSuppressNotifications(false);
           await orchestrator.setWorkingDirectory(originalWorkspaceRoot);
           this.configStore.update({
             model: baselineModel,
             provider: baselineProvider as any,
+            maxTokens: baselineMaxTokens,
             multiModelEnabled: baselineMultiModel,
           });
           this.client.updateConfig({
             model: baselineModel,
             provider: baselineProvider as any,
+            maxTokens: baselineMaxTokens,
             multiModelEnabled: baselineMultiModel,
           });
           await orchestrator.syncModelSummary();
           await orchestrator.rescanPhases(true);
+          await orchestrator.notifyState();
         } catch (restoreErr) {
           console.error("[EvaluationService] Error restoring original workspace root:", restoreErr);
         }
@@ -1539,8 +1619,12 @@ ${manuscriptContent.slice(0, 12000)}`;
     return suite;
   }
 
-  public cancelBenchmark() {
+  public cancelBenchmark(orchestrator?: PipelineOrchestrator) {
     this.isCancelled = true;
+    if (orchestrator) {
+      orchestrator.stop();
+      orchestrator.setSuppressNotifications(false);
+    }
     if (this.activeSuite) {
       this.activeSuite.status = "cancelled";
       this.notifyProgress();

@@ -901,7 +901,7 @@ export const LibrarySettingsSection: React.FC<LibrarySettingsSectionProps> = ({
             border: "1px solid var(--border)",
             borderRadius: "6px",
             padding: "8px 12px",
-            background: "#141418",
+            background: "var(--card-bg)",
             fontSize: "11px",
           }}
         >

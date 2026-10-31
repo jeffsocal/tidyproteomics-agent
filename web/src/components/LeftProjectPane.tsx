@@ -205,7 +205,7 @@ export const LeftProjectPane: React.FC<LeftProjectPaneProps> = ({
           alignItems: "center",
           padding: "7px 10px",
           borderBottom: "1px solid var(--border)",
-          background: "#16161a",
+          background: "var(--tabbar-bg)",
           flexShrink: 0,
         }}
       >

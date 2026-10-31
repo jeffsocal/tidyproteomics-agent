@@ -13,6 +13,7 @@ import {
   StopCircle,
   TrendingUp,
   Wrench,
+  Terminal,
   AlertCircle,
   Layers,
   ChevronDown,
@@ -59,6 +60,33 @@ const STORAGE_SELECTED_PROVIDER = "tpa_eval_provider_v2";
 const STORAGE_SELECTED_MODELS_PREFIX = "tpa_eval_selected_models_v2_";
 const STORAGE_ITERATIONS = "tpa_eval_iterations_v2";
 
+export type AIEvaluationSubTab = "analytics" | "runs" | "benchmark" | "workspace";
+
+const STORAGE_ACTIVE_SUBTAB = "tpa_eval_active_subtab_v1";
+
+const BENCHMARK_TOKEN_LIMITS = [
+  { value: "4096", label: "4k" },
+  { value: "8192", label: "8k" },
+  { value: "16384", label: "16k" },
+  { value: "32768", label: "32k" },
+  { value: "65536", label: "64k" },
+  { value: "131072", label: "128k" },
+  { value: "262144", label: "256k" },
+  { value: "524288", label: "512k" },
+];
+
+function loadStoredActiveSubTab(): AIEvaluationSubTab {
+  try {
+    const raw = localStorage.getItem(STORAGE_ACTIVE_SUBTAB);
+    if (raw === "analytics" || raw === "runs" || raw === "benchmark" || raw === "workspace") {
+      return raw;
+    }
+    return "analytics";
+  } catch {
+    return "analytics";
+  }
+}
+
 function loadStoredCustomModels(): ModelCatalogEntry[] {
   try {
     const raw = localStorage.getItem(STORAGE_CUSTOM_MODELS);
@@ -99,6 +127,16 @@ interface AIEvaluationTabProps {
 }
 
 export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) => {
+
+  // Active sub-tab state backed by localStorage
+  const [activeSubTab, setActiveSubTab] = useState<AIEvaluationSubTab>(loadStoredActiveSubTab);
+
+  const handleSelectSubTab = (tab: AIEvaluationSubTab) => {
+    setActiveSubTab(tab);
+    try {
+      localStorage.setItem(STORAGE_ACTIVE_SUBTAB, tab);
+    } catch (_) {}
+  };
   // Config state backed by localStorage
   const [selectedProvider, setSelectedProvider] = useState<string>(loadStoredProvider);
   const [availableModels, setAvailableModels] = useState<ModelCatalogEntry[]>([]);
@@ -143,6 +181,9 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
 
   // Expanded runs in details view
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
+
+  // Per-model max output tokens overrides for evaluation runs
+  const [modelMaxTokens, setModelMaxTokens] = useState<Record<string, number>>({});
   const [telemetryViewMode, setTelemetryViewMode] = useState<
     "time" | "turns" | "inputTokens" | "outputTokens" | "all"
   >("time");
@@ -395,6 +436,9 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
         body: JSON.stringify({
           provider: selectedProvider,
           models: selectedModelIds,
+          modelMaxTokens: Object.fromEntries(
+            Object.entries(modelMaxTokens).filter(([id, val]) => selectedModelIds.includes(id) && Boolean(val))
+          ),
           iterations,
           experimentPath: selectedExpPath,
         }),
@@ -768,105 +812,69 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
     return { timeSeries: time, turnsSeries: turns, inputTokensSeries: inTok, outputTokensSeries: outTok };
   }, [activeAggregated, activeRuns, phaseList]);
 
-  return (
-    <div
-      style={{
-        padding: "16px 20px",
-        display: "flex",
-        flexDirection: "column",
-        gap: "16px",
-        height: "100%",
-        overflowY: "auto",
-        background: "var(--bg)",
-      }}
-    >
+
+
+  const renderWorkspaceSubTab = () => (
+    <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
       {/* Header Banner */}
       <div
         style={{
           background: "var(--panel)",
           border: "1px solid var(--border)",
           borderRadius: "8px",
-          padding: "14px 18px",
+          padding: "16px 20px",
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
           flexWrap: "wrap",
           gap: "12px",
-          flexShrink: 0,
         }}
       >
         <div>
-          <h2
-            style={{
-              margin: 0,
-              fontSize: "16px",
-              fontWeight: 700,
-              color: "var(--fg-bright)",
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-            }}
-          >
-            <BarChart3 size={18} color="var(--primary)" />
-            AI Evaluation &amp; Multi-Model Benchmark Studio
-          </h2>
-          <div style={{ fontSize: "12px", color: "var(--muted)", marginTop: "3px" }}>
-            Autonomous headless benchmarking across N iterations: manuscript scoring (5 dimensions), TidyProteomics-MCP tool use telemetry, and publication-ready comparative plots.
+          <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--fg-bright)", display: "flex", alignItems: "center", gap: "8px" }}>
+            <Award size={16} color="var(--primary)" />
+            Active Workspace Live Evaluation &amp; Rubric
+          </div>
+          <div style={{ fontSize: "11.5px", color: "var(--muted)", marginTop: "2px" }}>
+            Score the current workspace's manuscript (<code>docs/manuscript.md</code>) and TidyProteomics MCP tool telemetry on-demand using the 5-dimension publication rubric.
           </div>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          {onOpenFile && (
+            <>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => onOpenFile("docs/manuscript.md")}
+                style={{ gap: "5px" }}
+                title="Open docs/manuscript.md"
+              >
+                <FileText size={12} /> View Manuscript
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => onOpenFile("logs/pipeline.md")}
+                style={{ gap: "5px" }}
+                title="Open logs/pipeline.md"
+              >
+                <Terminal size={12} /> View Logs
+              </button>
+            </>
+          )}
           <button
             type="button"
-            className="btn btn-secondary btn-sm"
+            className="btn btn-primary btn-sm"
             onClick={handleScoreCurrentWorkspace}
             disabled={isScoringCurrent}
-            title="Score current workspace outputs (manuscript + MCP tool usage) on-demand"
             style={{ gap: "6px" }}
           >
-            <Award size={13} color="var(--primary)" />
-            {isScoringCurrent ? "Scoring Workspace..." : "Score Current Workspace"}
+            <Award size={13} />
+            {isScoringCurrent ? "Evaluating Workspace..." : "Score Current Workspace"}
           </button>
         </div>
       </div>
-
-      {importSuccessMsg && (
-        <div
-          style={{
-            background: "rgba(34, 197, 94, 0.12)",
-            border: "1px solid rgba(34, 197, 94, 0.35)",
-            borderRadius: "6px",
-            padding: "10px 14px",
-            fontSize: "12px",
-            color: "#4ade80",
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-          }}
-        >
-          <CheckCircle2 size={15} />
-          <span>{importSuccessMsg}</span>
-        </div>
-      )}
-
-      {errorMsg && (
-        <div
-          style={{
-            background: "rgba(239, 68, 68, 0.12)",
-            border: "1px solid rgba(239, 68, 68, 0.35)",
-            borderRadius: "6px",
-            padding: "10px 14px",
-            fontSize: "12px",
-            color: "#f87171",
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-          }}
-        >
-          <AlertCircle size={15} />
-          <span>{errorMsg}</span>
-        </div>
-      )}
 
       {/* On-Demand Workspace Score Card */}
       {currentScoreResult && (
@@ -946,59 +954,80 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
         </div>
       )}
 
-      {/* Active Benchmark Live Running Progress Bar */}
-      {activeSuite && activeSuite.status === "running" && (
+      {!currentScoreResult && (
         <div
           style={{
-            background: "linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(15, 23, 42, 0.5))",
-            border: "1px solid rgba(245, 158, 11, 0.4)",
+            background: "var(--panel)",
+            border: "1px dashed var(--border)",
             borderRadius: "8px",
-            padding: "14px 18px",
+            padding: "24px 28px",
             display: "flex",
             flexDirection: "column",
-            gap: "10px",
+            gap: "16px",
           }}
         >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <span className="spinner" style={{ width: "14px", height: "14px", border: "2px solid #f59e0b", borderTopColor: "transparent", borderRadius: "50%" }} />
-              <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--fg-bright)" }}>
-                Benchmark Suite Active: {activeSuite.title}
-              </span>
+          <div style={{ fontSize: "13px", color: "var(--fg)", lineHeight: "1.6" }}>
+            Evaluate the active workspace outputs on-demand without launching a full multi-model benchmark suite. The scoring engine evaluates the following dimensions:
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "12px" }}>
+            <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "12px 14px" }}>
+              <div style={{ fontSize: "12px", fontWeight: 700, color: "#60a5fa", marginBottom: "4px" }}>
+                1. 5-Dimension Manuscript Rubric
+              </div>
+              <div style={{ fontSize: "11px", color: "var(--muted)" }}>
+                Evaluates Insights, Clarity, Scientific Rigor, Bioinformatics Rigor, and Actionable Roadmap in <code>docs/manuscript.md</code>.
+              </div>
             </div>
+
+            <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "12px 14px" }}>
+              <div style={{ fontSize: "12px", fontWeight: 700, color: "#34d399", marginBottom: "4px" }}>
+                2. TidyProteomics-MCP Tool Telemetry
+              </div>
+              <div style={{ fontSize: "11px", color: "var(--muted)" }}>
+                Measures tool invocation accuracy, parameter compliance, and execution success across analysis phases.
+              </div>
+            </div>
+
+            <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "12px 14px" }}>
+              <div style={{ fontSize: "12px", fontWeight: 700, color: "#f59e0b", marginBottom: "4px" }}>
+                3. Bioinformatics Intelligence
+              </div>
+              <div style={{ fontSize: "11px", color: "var(--muted)" }}>
+                Assesses biological interpretation, statistical thresholds, volcano/heatmap choices, and pathway context.
+              </div>
+            </div>
+
+            <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "12px 14px" }}>
+              <div style={{ fontSize: "12px", fontWeight: 700, color: "#c084fc", marginBottom: "4px" }}>
+                4. Reference Baseline Calibration
+              </div>
+              <div style={{ fontSize: "11px", color: "var(--muted)" }}>
+                Establishes the active project run as the reference baseline against which automated benchmarks compare.
+              </div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: "4px" }}>
             <button
               type="button"
-              className="btn btn-danger btn-xs"
-              onClick={handleCancelBenchmark}
-              style={{ gap: "4px" }}
+              className="btn btn-primary btn-sm"
+              onClick={handleScoreCurrentWorkspace}
+              disabled={isScoringCurrent}
+              style={{ gap: "6px", padding: "8px 16px", fontSize: "13px" }}
             >
-              <StopCircle size={12} /> Cancel Suite
+              <Award size={15} />
+              {isScoringCurrent ? "Evaluating Workspace Artifacts..." : "Score Current Workspace Now"}
             </button>
-          </div>
-
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: "var(--muted)" }}>
-            <span>
-              Current Target: <b style={{ color: "var(--fg-bright)" }}>{activeSuite.activeRun?.model}</b> (Iteration {activeSuite.activeRun?.iteration} of {activeSuite.iterations})
-            </span>
-            <span>
-              Completed Runs: <b style={{ color: "#34d399" }}>{activeSuite.runs.length}</b> / {activeSuite.models.length * activeSuite.iterations}
-            </span>
-          </div>
-
-          {/* Progress fill */}
-          <div style={{ width: "100%", height: "6px", background: "rgba(255,255,255,0.1)", borderRadius: "3px", overflow: "hidden" }}>
-            <div
-              style={{
-                width: `${Math.round((activeSuite.runs.length / Math.max(1, activeSuite.models.length * activeSuite.iterations)) * 100)}%`,
-                height: "100%",
-                background: "linear-gradient(90deg, #f59e0b, #10b981)",
-                transition: "width 0.3s ease",
-              }}
-            />
           </div>
         </div>
       )}
+    </div>
+  );
 
+
+  const renderBenchmarkSubTab = () => (
+    <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
       {/* Benchmark Suite Configuration Panel */}
       <div
         style={{
@@ -1246,6 +1275,39 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
                 </div>
               </div>
 
+              {/* Custom Model input (at top of Section 4) */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <input
+                    type="text"
+                    className="input"
+                    style={{ flex: 1, padding: "6px 10px", fontSize: "11.5px" }}
+                    placeholder="Enter custom model ID (e.g. meta-llama/llama-3.3-70b-instruct or openai/gpt-4.5-preview)"
+                    value={customModelInput}
+                    onChange={(e) => setCustomModelInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleAddCustomModel();
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={handleAddCustomModel}
+                    disabled={!customModelInput.trim()}
+                    style={{ gap: "4px" }}
+                  >
+                    <Plus size={12} /> Add Model
+                  </button>
+                </div>
+
+                {modelActionFeedback && (
+                  <div style={{ fontSize: "11px", color: "#4ade80", fontWeight: 600, display: "flex", alignItems: "center", gap: "4px" }}>
+                    <Check size={12} />
+                    <span>{modelActionFeedback}</span>
+                  </div>
+                )}
+              </div>
+
               {/* Selected Models Tray / Confirmation Bar */}
               {selectedModelIds.length > 0 && (
                 <div
@@ -1297,6 +1359,35 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
                           <span title={id}>
                             {displayName.includes("/") ? displayName.split("/")[1] : displayName}
                           </span>
+                          <select
+                            value={modelMaxTokens[id] || ""}
+                            onChange={(e) => {
+                              const val = e.target.value ? parseInt(e.target.value, 10) : undefined;
+                              setModelMaxTokens((prev) => {
+                                const next = { ...prev };
+                                if (val) next[id] = val;
+                                else delete next[id];
+                                return next;
+                              });
+                            }}
+                            title="Max output tokens for this model"
+                            style={{
+                              background: "rgba(0,0,0,0.6)",
+                              border: "1px solid var(--border)",
+                              borderRadius: "3px",
+                              color: "var(--fg-bright)",
+                              fontSize: "10px",
+                              padding: "1px 4px",
+                              cursor: "pointer",
+                            }}
+                          >
+                            <option value="">Default ({entry?.maxTokens ? `${(entry.maxTokens / 1024).toFixed(0)}k` : "Global"})</option>
+                            {BENCHMARK_TOKEN_LIMITS.map((t) => (
+                              <option key={t.value} value={t.value}>
+                                {t.label}
+                              </option>
+                            ))}
+                          </select>
                           <button
                             type="button"
                             onClick={() => handleRemoveSelectedModel(id)}
@@ -1322,49 +1413,47 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
                 </div>
               )}
 
-              {/* Models Grid */}
+              {/* Models List: Row-based with Selectable Token Limits */}
               <div
                 style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-                  gap: "8px",
-                  maxHeight: "220px",
-                  overflowY: "auto",
-                  paddingRight: "4px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "6px",
                 }}
               >
                 {displayedModels.map((m) => {
                   const isSelected = selectedModelIds.includes(m.id);
+                  const currentTokens = modelMaxTokens[m.id];
                   return (
                     <div
                       key={m.id}
                       onClick={() => handleToggleModel(m.id)}
                       style={{
-                        background: isSelected ? "rgba(59, 130, 246, 0.12)" : "var(--bg)",
+                        background: isSelected ? "rgba(59, 130, 246, 0.10)" : "var(--bg)",
                         border: `1px solid ${isSelected ? "var(--primary)" : "var(--border)"}`,
                         borderRadius: "6px",
                         padding: "8px 12px",
                         cursor: "pointer",
                         display: "flex",
-                        flexDirection: "column",
-                        gap: "4px",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: "12px",
                         transition: "all 0.15s ease",
                       }}
                     >
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                          {isSelected ? (
-                            <CheckCircle2 size={15} color="var(--primary)" style={{ flexShrink: 0 }} />
-                          ) : (
-                            <Circle size={15} color="var(--muted)" style={{ flexShrink: 0 }} />
-                          )}
-                          <span style={{ fontSize: "12px", fontWeight: 600, color: isSelected ? "var(--fg-bright)" : "var(--fg)" }}>
-                            {m.name}
-                          </span>
-                        </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                          {m.isCustom ? (
-                            <>
+                      {/* Left: Checkbox + Name + Tier Badge + Description */}
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px", flex: 1, minWidth: 0 }}>
+                        {isSelected ? (
+                          <CheckCircle2 size={16} color="var(--primary)" style={{ flexShrink: 0 }} />
+                        ) : (
+                          <Circle size={16} color="var(--muted)" style={{ flexShrink: 0 }} />
+                        )}
+                        <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0, flex: 1 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                            <span style={{ fontSize: "12.5px", fontWeight: 600, color: isSelected ? "var(--fg-bright)" : "var(--fg)" }}>
+                              {m.name}
+                            </span>
+                            {m.isCustom ? (
                               <span
                                 style={{
                                   fontSize: "9px",
@@ -1377,83 +1466,111 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
                               >
                                 CUSTOM
                               </span>
-                              <button
-                                type="button"
-                                title="Delete custom model from list"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleRemoveCustomModel(m.id);
-                                }}
+                            ) : (
+                              <span
                                 style={{
-                                  background: "transparent",
-                                  border: "none",
-                                  color: "var(--muted)",
-                                  cursor: "pointer",
-                                  padding: "2px",
-                                  display: "flex",
-                                  alignItems: "center",
+                                  fontSize: "9.5px",
+                                  fontWeight: 700,
+                                  padding: "1px 5px",
+                                  borderRadius: "3px",
+                                  background: m.tier === "T3" ? "rgba(168, 85, 247, 0.2)" : m.tier === "T2" ? "rgba(59, 130, 246, 0.2)" : "rgba(34, 197, 94, 0.2)",
+                                  color: m.tier === "T3" ? "#c084fc" : m.tier === "T2" ? "#60a5fa" : "#4ade80",
                                 }}
-                                onMouseEnter={(e) => (e.currentTarget.style.color = "#f87171")}
-                                onMouseLeave={(e) => (e.currentTarget.style.color = "var(--muted)")}
                               >
-                                <Trash2 size={12} />
-                              </button>
-                            </>
-                          ) : (
-                            <span
-                              style={{
-                                fontSize: "9.5px",
-                                fontWeight: 700,
-                                padding: "2px 5px",
-                                borderRadius: "3px",
-                                background: m.tier === "T3" ? "rgba(168, 85, 247, 0.2)" : m.tier === "T2" ? "rgba(59, 130, 246, 0.2)" : "rgba(34, 197, 94, 0.2)",
-                                color: m.tier === "T3" ? "#c084fc" : m.tier === "T2" ? "#60a5fa" : "#4ade80",
-                              }}
-                            >
-                              {m.tier}
+                                {m.tier}
+                              </span>
+                            )}
+                            <span style={{ fontSize: "10.5px", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+                              {m.id}
                             </span>
+                          </div>
+                          {m.description && (
+                            <div
+                              style={{
+                                fontSize: "11px",
+                                color: "var(--muted)",
+                                whiteSpace: "nowrap",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                              }}
+                              title={m.description}
+                            >
+                              {m.description}
+                            </div>
                           )}
                         </div>
                       </div>
-                      <div style={{ fontSize: "10.5px", color: "var(--muted)", lineHeight: "1.3", paddingLeft: "21px" }}>
-                        {m.description}
+
+                      {/* Right: Selectable Token Limit + Actions */}
+                      <div
+                        style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                          <span style={{ fontSize: "10.5px", color: "var(--muted)", textTransform: "uppercase", fontWeight: 600 }}>
+                            Tokens:
+                          </span>
+                          <select
+                            value={currentTokens || ""}
+                            onChange={(e) => {
+                              const val = e.target.value ? parseInt(e.target.value, 10) : undefined;
+                              setModelMaxTokens((prev) => {
+                                const next = { ...prev };
+                                if (val) next[m.id] = val;
+                                else delete next[m.id];
+                                return next;
+                              });
+                              if (!isSelected) {
+                                handleToggleModel(m.id);
+                              }
+                            }}
+                            title={`Max output token limit for ${m.name}`}
+                            style={{
+                              background: "rgba(0,0,0,0.5)",
+                              border: `1px solid ${currentTokens ? "var(--primary)" : "var(--border)"}`,
+                              borderRadius: "4px",
+                              color: currentTokens ? "var(--fg-bright)" : "var(--fg)",
+                              fontSize: "11px",
+                              padding: "3px 6px",
+                              cursor: "pointer",
+                            }}
+                          >
+                            <option value="">Default ({m.maxTokens ? `${(m.maxTokens / 1024).toFixed(0)}k` : "Global"})</option>
+                            {BENCHMARK_TOKEN_LIMITS.map((t) => (
+                              <option key={t.value} value={t.value}>
+                                {t.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {m.isCustom && (
+                          <button
+                            type="button"
+                            title="Delete custom model"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRemoveCustomModel(m.id);
+                            }}
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              color: "var(--muted)",
+                              cursor: "pointer",
+                              padding: "3px",
+                              display: "flex",
+                              alignItems: "center",
+                            }}
+                            onMouseEnter={(e) => (e.currentTarget.style.color = "#f87171")}
+                            onMouseLeave={(e) => (e.currentTarget.style.color = "var(--muted)")}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
                 })}
-              </div>
-
-              {/* Custom Model input */}
-              <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
-                <div style={{ display: "flex", gap: "8px" }}>
-                  <input
-                    type="text"
-                    className="input"
-                    style={{ flex: 1, padding: "6px 10px", fontSize: "11.5px" }}
-                    placeholder="Enter custom model ID (e.g. meta-llama/llama-3.3-70b-instruct or openai/gpt-4.5-preview)"
-                    value={customModelInput}
-                    onChange={(e) => setCustomModelInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleAddCustomModel();
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={handleAddCustomModel}
-                    disabled={!customModelInput.trim()}
-                    style={{ gap: "4px" }}
-                  >
-                    <Plus size={12} /> Add Model
-                  </button>
-                </div>
-
-                {modelActionFeedback && (
-                  <div style={{ fontSize: "11px", color: "#4ade80", fontWeight: 600, display: "flex", alignItems: "center", gap: "4px" }}>
-                    <Check size={12} />
-                    <span>{modelActionFeedback}</span>
-                  </div>
-                )}
               </div>
             </div>
           );
@@ -1475,8 +1592,45 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
           </button>
         </div>
       </div>
+    </div>
+  );
 
-      {/* Evaluations Directory & Comparison Selection Panel */}
+
+  const renderRunsSubTab = () => (
+    <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+      {(!currentDisplaySuite || currentDisplaySuite.runs.length === 0) ? (
+        <div
+          style={{
+            background: "var(--panel)",
+            border: "1px dashed var(--border)",
+            borderRadius: "8px",
+            padding: "36px 24px",
+            textAlign: "center",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "12px",
+          }}
+        >
+          <Layers size={36} color="var(--primary)" style={{ opacity: 0.8 }} />
+          <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--fg-bright)" }}>
+            Evaluations Directory is Empty
+          </div>
+          <div style={{ fontSize: "12px", color: "var(--muted)", maxWidth: "500px", lineHeight: "1.5" }}>
+            No benchmark evaluation runs have been recorded in this workspace yet. You can launch multi-model benchmarks in the Benchmark Studio or score your current workspace outputs.
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => handleSelectSubTab("benchmark")}
+            style={{ gap: "6px", marginTop: "8px" }}
+          >
+            <Cpu size={14} /> Configure Benchmark Run
+          </button>
+        </div>
+      ) : (
+        <>
+          {/* Evaluations Directory & Comparison Selection Panel */}
       {currentDisplaySuite && currentDisplaySuite.runs.length > 0 && (
         <div
           style={{
@@ -1520,135 +1674,377 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
             </div>
           </div>
 
-          {/* List of Evaluation Runs */}
-          <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxHeight: "300px", overflowY: "auto" }}>
+          {/* Consolidated List of Evaluation Runs */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
             {currentDisplaySuite.runs.map((r) => {
               const isSelected = selectedRunIds.includes(r.id);
               const isDeleting = isDeletingRunId === r.id;
+              const isExpanded = expandedRunId === r.id;
 
               return (
                 <div
                   key={r.id}
                   style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "8px 12px",
-                    background: isSelected ? "rgba(59, 130, 246, 0.08)" : "var(--bg)",
-                    border: `1px solid ${isSelected ? "rgba(59, 130, 246, 0.4)" : "var(--border)"}`,
+                    background: r.isBaseline ? "rgba(59, 130, 246, 0.05)" : isSelected ? "rgba(59, 130, 246, 0.08)" : "var(--bg)",
+                    border: `1px solid ${r.isBaseline ? "rgba(59, 130, 246, 0.4)" : isSelected ? "rgba(59, 130, 246, 0.4)" : "var(--border)"}`,
                     borderRadius: "6px",
-                    gap: "10px",
-                    flexWrap: "wrap",
+                    overflow: "hidden",
                     transition: "all 0.15s ease",
                   }}
                 >
-                  {/* Left: Checkbox & Model */}
-                  <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: "220px", flex: 1 }}>
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={() =>
-                        setSelectedRunIds((prev) =>
-                          prev.includes(r.id) ? prev.filter((id) => id !== r.id) : [...prev, r.id]
-                        )
-                      }
-                      style={{ cursor: "pointer", width: "15px", height: "15px" }}
-                      title="Include / Exclude from comparative plots and table"
-                    />
-                    <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-                        <span style={{ fontSize: "12px", fontWeight: 700, color: isSelected ? "var(--fg-bright)" : "var(--muted)" }}>
-                          {r.model}
-                        </span>
-                        {r.isBaseline && (
-                          <span style={{ fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px", background: "rgba(59, 130, 246, 0.25)", color: "#60a5fa" }}>
-                            BASELINE
+                  {/* Single Row: Expand Chevron + Checkbox + Model Info & Telemetry + Score Values + Action Buttons */}
+                  <div
+                    onClick={() => setExpandedRunId(isExpanded ? null : r.id)}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      padding: "8px 12px",
+                      cursor: "pointer",
+                      gap: "12px",
+                      background: isExpanded ? "rgba(59, 130, 246, 0.08)" : "transparent",
+                    }}
+                  >
+                    {/* Left: Expand Chevron, Checkbox & Model Telemetry */}
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flex: 1 }}>
+                      <span
+                        style={{ color: "var(--muted)", display: "flex", alignItems: "center", flexShrink: 0 }}
+                        title={isExpanded ? "Collapse phase telemetry" : "Expand phase telemetry"}
+                      >
+                        {isExpanded ? <ChevronDown size={15} color="var(--primary)" /> : <ChevronRight size={15} />}
+                      </span>
+
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={() =>
+                          setSelectedRunIds((prev) =>
+                            prev.includes(r.id) ? prev.filter((id) => id !== r.id) : [...prev, r.id]
+                          )
+                        }
+                        style={{ cursor: "pointer", width: "15px", height: "15px", flexShrink: 0 }}
+                        title="Include / Exclude from comparative plots and table"
+                      />
+
+                      <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                          <span style={{ fontSize: "12px", fontWeight: 700, color: isSelected ? "var(--fg-bright)" : "var(--fg)" }}>
+                            {r.isBaseline && "⭐ "}
+                            {r.model}
                           </span>
-                        )}
-                        <span style={{ fontSize: "10px", color: "var(--muted)" }}>
-                          ({r.iteration ? `Iter ${r.iteration}` : "Run"})
+                          {r.isBaseline && (
+                            <span style={{ fontSize: "9px", fontWeight: 700, padding: "1px 5px", borderRadius: "3px", background: "rgba(59, 130, 246, 0.25)", color: "#60a5fa" }}>
+                              BASELINE
+                            </span>
+                          )}
+                          <span style={{ fontSize: "10px", color: "var(--muted)" }}>
+                            ({r.iteration ? `Iter ${r.iteration}` : "Run"})
+                          </span>
+                        </div>
+                        <div style={{ fontSize: "10.5px", color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {new Date(r.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })} &middot; {r.totalDurationSeconds}s &middot; {r.totalTurns} turns &middot; {r.tokenUsage?.totalTokens ? r.tokenUsage.totalTokens.toLocaleString() : 0} tokens
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Middle: Key Scores Preview */}
+                    <div
+                      style={{ display: "flex", alignItems: "center", gap: "12px", flexShrink: 0 }}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                        <span style={{ fontSize: "9px", color: "var(--muted)", textTransform: "uppercase" }}>Overall</span>
+                        <span style={{ fontSize: "12px", fontWeight: 800, color: (r.scores?.overallBenchmarkScore ?? 0) >= 80 ? "#60a5fa" : "#c084fc" }}>
+                          {r.scores?.overallBenchmarkScore ?? "-"}<span style={{ fontSize: "9.5px", color: "var(--muted)" }}>/100</span>
                         </span>
                       </div>
-                      <div style={{ fontSize: "10.5px", color: "var(--muted)" }}>
-                        {new Date(r.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })} &middot; {r.totalDurationSeconds}s &middot; {r.totalTurns} turns &middot; {r.tokenUsage?.totalTokens ? r.tokenUsage.totalTokens.toLocaleString() : 0} tokens
+
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                        <span style={{ fontSize: "9px", color: "var(--muted)", textTransform: "uppercase" }}>Manuscript</span>
+                        <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--fg-bright)" }}>
+                          {r.scores?.overallManuscriptScore ?? "-"}<span style={{ fontSize: "9.5px", color: "var(--muted)" }}>/10</span>
+                        </span>
                       </div>
-                    </div>
-                  </div>
 
-                  {/* Middle: Key Scores Preview */}
-                  <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-                      <span style={{ fontSize: "9px", color: "var(--muted)", textTransform: "uppercase" }}>Overall</span>
-                      <span style={{ fontSize: "12px", fontWeight: 800, color: (r.scores?.overallBenchmarkScore ?? 0) >= 80 ? "#60a5fa" : "#c084fc" }}>
-                        {r.scores?.overallBenchmarkScore ?? "-"}<span style={{ fontSize: "9.5px", color: "var(--muted)" }}>/100</span>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                        <span style={{ fontSize: "9px", color: "var(--muted)", textTransform: "uppercase" }}>MCP Tool</span>
+                        <span style={{ fontSize: "12px", fontWeight: 700, color: (r.scores?.mcpToolUseScore ?? 0) >= 80 ? "#4ade80" : "#fbbf24" }}>
+                          {r.scores?.mcpToolUseScore ?? "-"}%
+                        </span>
+                      </div>
+
+                      {r.scores?.bioinformaticsIntelligenceScore !== undefined && (
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                          <span style={{ fontSize: "9px", color: "var(--muted)", textTransform: "uppercase" }}>Bioinfo</span>
+                          <span style={{ fontSize: "12px", fontWeight: 700, color: (r.scores.bioinformaticsIntelligenceScore ?? 0) >= 80 ? "#4ade80" : "#fbbf24" }}>
+                            {r.scores.bioinformaticsIntelligenceScore}%
+                          </span>
+                        </div>
+                      )}
+
+                      <span
+                        style={{
+                          fontSize: "9.5px",
+                          fontWeight: 700,
+                          padding: "2px 6px",
+                          borderRadius: "3px",
+                          background: r.status === "completed" ? "rgba(34, 197, 94, 0.15)" : "rgba(239, 68, 68, 0.15)",
+                          color: r.status === "completed" ? "#4ade80" : "#f87171",
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        {r.status}
                       </span>
                     </div>
 
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-                      <span style={{ fontSize: "9px", color: "var(--muted)", textTransform: "uppercase" }}>Manuscript</span>
-                      <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--fg-bright)" }}>
-                        {r.scores?.overallManuscriptScore ?? "-"}<span style={{ fontSize: "9.5px", color: "var(--muted)" }}>/10</span>
-                      </span>
-                    </div>
-
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-                      <span style={{ fontSize: "9px", color: "var(--muted)", textTransform: "uppercase" }}>MCP Tool</span>
-                      <span style={{ fontSize: "12px", fontWeight: 700, color: (r.scores?.mcpToolUseScore ?? 0) >= 80 ? "#4ade80" : "#fbbf24" }}>
-                        {r.scores?.mcpToolUseScore ?? "-"}%
-                      </span>
-                    </div>
-
-                    <span
-                      style={{
-                        fontSize: "9.5px",
-                        fontWeight: 700,
-                        padding: "2px 6px",
-                        borderRadius: "3px",
-                        background: r.status === "completed" ? "rgba(34, 197, 94, 0.15)" : "rgba(239, 68, 68, 0.15)",
-                        color: r.status === "completed" ? "#4ade80" : "#f87171",
-                        textTransform: "uppercase",
-                      }}
+                    {/* Right: Actions (Manuscript, Logs, Delete) */}
+                    <div
+                      style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}
+                      onClick={(e) => e.stopPropagation()}
                     >
-                      {r.status}
-                    </span>
-                  </div>
+                      {onOpenFile && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-xs"
+                          onClick={() => {
+                            const p = r.outputPath ? `${r.outputPath}/manuscript.md` : (r.isBaseline ? "docs/manuscript.md" : "");
+                            if (p) onOpenFile(p);
+                          }}
+                          style={{ gap: "4px" }}
+                          title="Open generated manuscript draft"
+                        >
+                          <FileText size={11} /> Manuscript
+                        </button>
+                      )}
 
-                  {/* Right: Actions (Manuscript + Delete) */}
-                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                    {onOpenFile && (
+                      {onOpenFile && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-xs"
+                          onClick={() => {
+                            const path = r.outputPath ? `${r.outputPath}/logs/pipeline.md` : (r.isBaseline ? "logs/pipeline.md" : "");
+                            if (path) onOpenFile(path);
+                          }}
+                          style={{ gap: "4px" }}
+                          title="Open run execution logs summary"
+                        >
+                          <Terminal size={11} /> Logs
+                        </button>
+                      )}
+
                       <button
                         type="button"
                         className="btn btn-secondary btn-xs"
-                        onClick={() => {
-                          const p = r.isBaseline ? "docs/manuscript.md" : `${r.outputPath}/manuscript.md`;
-                          onOpenFile(p);
+                        onClick={() => handleDeleteRun(r.id)}
+                        disabled={isDeleting}
+                        style={{
+                          gap: "4px",
+                          color: "#f87171",
+                          borderColor: "rgba(239, 68, 68, 0.3)",
                         }}
-                        style={{ gap: "4px" }}
-                        title="Open generated manuscript draft"
+                        title="Permanently delete this evaluation run and remove files from disk"
                       >
-                        <FileText size={11} /> Manuscript
+                        <Trash2 size={11} /> {isDeleting ? "..." : "Delete"}
                       </button>
-                    )}
-
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-xs"
-                      onClick={() => handleDeleteRun(r.id)}
-                      disabled={isDeleting}
-                      style={{
-                        gap: "4px",
-                        color: "#f87171",
-                        borderColor: "rgba(239, 68, 68, 0.3)",
-                      }}
-                      title="Permanently delete this evaluation run and remove files from disk"
-                    >
-                      <Trash2 size={11} /> {isDeleting ? "..." : "Delete"}
-                    </button>
+                    </div>
                   </div>
+
+                  {/* Expanded Telemetry Details (Phase breakdown & notes) */}
+                  {isExpanded && (
+                    <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: "12px", background: "rgba(0, 0, 0, 0.15)" }}>
+                      {/* Phase Telemetry Table */}
+                      <table className="pipeline-table" style={{ fontSize: "11px" }}>
+                        <thead>
+                          <tr>
+                            <th>Phase</th>
+                            <th style={{ textAlign: "right" }}>Time</th>
+                            <th style={{ textAlign: "right" }}>Turns</th>
+                            <th style={{ textAlign: "right" }}>Input Tokens</th>
+                            <th style={{ textAlign: "right" }}>Output Tokens</th>
+                            <th style={{ textAlign: "center" }}>MCP Tools</th>
+                            <th style={{ textAlign: "center" }}>Status</th>
+                            {onOpenFile && <th style={{ textAlign: "center" }}>LLM Logs</th>}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {r.phaseMetrics.map((pm) => {
+                            const phaseSlug = pm.fileName ? pm.fileName.replace(/\.md$/i, "").toLowerCase() : `phase_${pm.phaseId}`;
+                            const chatPath = r.outputPath ? `${r.outputPath}/logs/${phaseSlug}/chat.md` : (r.isBaseline ? `logs/${phaseSlug}/chat.md` : "");
+                            const consolePath = r.outputPath ? `${r.outputPath}/logs/${phaseSlug}/console.log` : (r.isBaseline ? `logs/${phaseSlug}/console.log` : "");
+
+                            return (
+                              <tr key={pm.phaseId}>
+                                <td>{pm.phaseTitle}</td>
+                                <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{pm.durationSeconds}s</td>
+                                <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{pm.turns}</td>
+                                <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: "#60a5fa" }}>{pm.tokenUsage.promptTokens.toLocaleString()}</td>
+                                <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: "#34d399" }}>{pm.tokenUsage.completionTokens.toLocaleString()}</td>
+                                <td style={{ textAlign: "center" }}>{pm.mcpToolCalls}</td>
+                                <td style={{ textAlign: "center" }}>
+                                  <span style={{ color: pm.status === "completed" ? "#34d399" : "#f87171", textTransform: "uppercase", fontSize: "10px", fontWeight: 700 }}>
+                                    {pm.status}
+                                  </span>
+                                </td>
+                                {onOpenFile && (
+                                  <td style={{ textAlign: "center" }}>
+                                    <div style={{ display: "inline-flex", gap: "4px" }}>
+                                      <button
+                                        type="button"
+                                        className="btn btn-secondary btn-xs"
+                                        onClick={() => onOpenFile(chatPath)}
+                                        style={{ padding: "1px 5px", fontSize: "9.5px", gap: "3px" }}
+                                        title={`Open LLM Reasoning Trace (${chatPath})`}
+                                      >
+                                        <FileText size={10} /> Chat
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="btn btn-secondary btn-xs"
+                                        onClick={() => onOpenFile(consolePath)}
+                                        style={{ padding: "1px 5px", fontSize: "9.5px", gap: "3px" }}
+                                        title={`Open Console Log (${consolePath})`}
+                                      >
+                                        <Terminal size={10} /> Console
+                                      </button>
+                                    </div>
+                                  </td>
+                                )}
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+
+                      {/* Evaluator Notes */}
+                      {r.scores?.rubricNotes && (
+                        <div style={{ fontSize: "11.5px", color: "var(--muted)", background: "rgba(0,0,0,0.3)", padding: "8px 12px", borderRadius: "4px" }}>
+                          <b>Evaluator Assessment:</b> {r.scores.rubricNotes}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}
           </div>
+        </div>
+      )}
+        </>
+      )}
+    </div>
+  );
+
+
+  const renderAnalyticsSubTab = () => (
+    <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+      {/* Quick Run Filter / Selector Bar */}
+      {currentDisplaySuite && currentDisplaySuite.runs.length > 0 && (
+        <div
+          style={{
+            background: "var(--panel)",
+            border: "1px solid var(--border)",
+            borderRadius: "8px",
+            padding: "12px 16px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "10px",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--fg-bright)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+              Comparing ({selectedRunIds.length} of {currentDisplaySuite.runs.length} runs):
+            </span>
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+              {currentDisplaySuite.runs.map((r) => {
+                const isSelected = selectedRunIds.includes(r.id);
+                return (
+                  <button
+                    key={r.id}
+                    type="button"
+                    onClick={() =>
+                      setSelectedRunIds((prev) =>
+                        prev.includes(r.id) ? prev.filter((id) => id !== r.id) : [...prev, r.id]
+                      )
+                    }
+                    style={{
+                      background: isSelected ? "rgba(59, 130, 246, 0.2)" : "rgba(0,0,0,0.2)",
+                      border: `1px solid ${isSelected ? "var(--primary)" : "var(--border)"}`,
+                      borderRadius: "4px",
+                      padding: "3px 8px",
+                      fontSize: "11px",
+                      color: isSelected ? "var(--fg-bright)" : "var(--muted)",
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "5px",
+                      fontWeight: isSelected ? 600 : 400,
+                    }}
+                    title={`Toggle ${r.model} (Iteration ${r.iteration}) in comparative charts`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      readOnly
+                      style={{ cursor: "pointer", width: "12px", height: "12px", pointerEvents: "none" }}
+                    />
+                    <span>{r.model.includes("/") ? r.model.split("/")[1] : r.model}</span>
+                    {r.isBaseline && <span style={{ color: "#60a5fa", fontSize: "10px" }}>⭐</span>}
+                    <span style={{ fontSize: "9.5px", opacity: 0.7 }}>
+                      {r.iteration ? `i${r.iteration}` : ""}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-xs"
+              onClick={() => setSelectedRunIds(currentDisplaySuite.runs.map((r) => r.id))}
+              disabled={selectedRunIds.length === currentDisplaySuite.runs.length}
+            >
+              Select All
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-xs"
+              onClick={() => setSelectedRunIds([])}
+              disabled={selectedRunIds.length === 0}
+            >
+              Deselect All
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-xs"
+              onClick={() => handleSelectSubTab("runs")}
+              style={{ gap: "4px", color: "var(--primary)" }}
+              title="Open full evaluations directory with file management and logs"
+            >
+              <Layers size={11} /> Manage Directory &rarr;
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Empty Selection Banner */}
+      {currentDisplaySuite && currentDisplaySuite.runs.length > 0 && activeAggregated.length === 0 && (
+        <div
+          style={{
+            background: "var(--panel)",
+            border: "1px dashed var(--border)",
+            borderRadius: "8px",
+            padding: "24px",
+            textAlign: "center",
+            color: "var(--muted)",
+            fontSize: "12px",
+          }}
+        >
+          No evaluations currently selected for comparison. Check one or more runs in the Evaluations Directory above to render comparative plots and metrics.
         </div>
       )}
 
@@ -1807,23 +2203,6 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
         </div>
       )}
 
-      {/* Empty Selection Banner */}
-      {currentDisplaySuite && currentDisplaySuite.runs.length > 0 && activeAggregated.length === 0 && (
-        <div
-          style={{
-            background: "var(--panel)",
-            border: "1px dashed var(--border)",
-            borderRadius: "8px",
-            padding: "24px",
-            textAlign: "center",
-            color: "var(--muted)",
-            fontSize: "12px",
-          }}
-        >
-          No evaluations currently selected for comparison. Check one or more runs in the Evaluations Directory above to render comparative plots and metrics.
-        </div>
-      )}
-
       {/* Visual Comparative Grouped Bar Charts */}
       {activeAggregated.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
@@ -1871,8 +2250,8 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
               subtitle="Composite metrics across LLMs (Manuscript scaled to % for uniform comparison)"
               categories={overallCategories}
               series={overallSeries}
-              yAxisTitle="Score (0 - 100)"
-              yAxisRange={[0, 105]}
+              xAxisTitle="Score (0 - 100)"
+              xAxisRange={[0, 105]}
               height={380}
             />
 
@@ -1882,8 +2261,8 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
               subtitle="5 core manuscript dimensions evaluated via domain rubric (Scale: 1-10)"
               categories={scientificCategories}
               series={scientificSeries}
-              yAxisTitle="Score (1 - 10)"
-              yAxisRange={[0, 10.5]}
+              xAxisTitle="Score (1 - 10)"
+              xAxisRange={[0, 10.5]}
               height={380}
             />
           </div>
@@ -1982,7 +2361,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
                   subtitle="Wall-clock duration per pipeline phase across models (color bar = LLM)"
                   categories={phaseCategories}
                   series={timeSeries}
-                  yAxisTitle="Time (Seconds)"
+                  xAxisTitle="Time (Seconds)"
                   height={380}
                 />
               )}
@@ -1993,7 +2372,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
                   subtitle="Total LLM conversational iterations and tool reasoning loops per phase (color bar = LLM)"
                   categories={phaseCategories}
                   series={turnsSeries}
-                  yAxisTitle="Turn Count"
+                  xAxisTitle="Turn Count"
                   height={380}
                 />
               )}
@@ -2004,7 +2383,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
                   subtitle="Cumulative prompt, document, and tool context tokens ingested per phase (color bar = LLM)"
                   categories={phaseCategories}
                   series={inputTokensSeries}
-                  yAxisTitle="Input Tokens"
+                  xAxisTitle="Input Tokens"
                   height={380}
                 />
               )}
@@ -2015,7 +2394,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
                   subtitle="Tokens emitted by model for code generation, scientific discourse, and tool payloads (color bar = LLM)"
                   categories={phaseCategories}
                   series={outputTokensSeries}
-                  yAxisTitle="Output Tokens"
+                  xAxisTitle="Output Tokens"
                   height={380}
                 />
               )}
@@ -2033,7 +2412,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
                     subtitle="Duration per phase across models"
                     categories={phaseCategories}
                     series={timeSeries}
-                    yAxisTitle="Time (Seconds)"
+                    xAxisTitle="Time (Seconds)"
                     height={340}
                   />
                   <EvaluationBarChart
@@ -2041,7 +2420,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
                     subtitle="Turn count per phase across models"
                     categories={phaseCategories}
                     series={turnsSeries}
-                    yAxisTitle="Turn Count"
+                    xAxisTitle="Turn Count"
                     height={340}
                   />
                   <EvaluationBarChart
@@ -2049,7 +2428,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
                     subtitle="Cumulative prompt context tokens"
                     categories={phaseCategories}
                     series={inputTokensSeries}
-                    yAxisTitle="Input Tokens"
+                    xAxisTitle="Input Tokens"
                     height={340}
                   />
                   <EvaluationBarChart
@@ -2057,7 +2436,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
                     subtitle="Generated completion tokens"
                     categories={phaseCategories}
                     series={outputTokensSeries}
-                    yAxisTitle="Output Tokens"
+                    xAxisTitle="Output Tokens"
                     height={340}
                   />
                 </div>
@@ -2067,134 +2446,380 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
         </div>
       )}
 
-      {/* Detailed Run Telemetry Breakdown */}
-      {currentDisplaySuite && currentDisplaySuite.runs.length > 0 && (
+      {/* Empty Workspace State */}
+      {(!currentDisplaySuite || currentDisplaySuite.runs.length === 0) && (
         <div
           style={{
             background: "var(--panel)",
-            border: "1px solid var(--border)",
+            border: "1px dashed var(--border)",
             borderRadius: "8px",
-            padding: "14px 18px",
+            padding: "36px 24px",
+            textAlign: "center",
             display: "flex",
             flexDirection: "column",
+            alignItems: "center",
             gap: "12px",
           }}
         >
-          <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--fg-bright)", textTransform: "uppercase", letterSpacing: "0.5px", display: "flex", alignItems: "center", gap: "6px" }}>
-            <Layers size={14} color="var(--primary)" />
-            Individual Run Telemetry &amp; Phase-by-Phase Breakdown
+          <BarChart3 size={36} color="var(--primary)" style={{ opacity: 0.8 }} />
+          <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--fg-bright)" }}>
+            No Comparative Evaluations Available Yet
           </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {currentDisplaySuite.runs.map((r) => {
-              const isExpanded = expandedRunId === r.id;
-              return (
-                <div
-                  key={r.id}
-                  style={{
-                    background: r.isBaseline ? "rgba(59, 130, 246, 0.05)" : "var(--bg)",
-                    border: `1px solid ${r.isBaseline ? "rgba(59, 130, 246, 0.4)" : isExpanded ? "var(--primary)" : "var(--border)"}`,
-                    borderRadius: "6px",
-                    overflow: "hidden",
-                  }}
-                >
-                  <div
-                    onClick={() => setExpandedRunId(isExpanded ? null : r.id)}
-                    style={{
-                      padding: "10px 14px",
-                      cursor: "pointer",
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      background: isExpanded ? "rgba(59, 130, 246, 0.08)" : "transparent",
-                    }}
-                  >
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                      {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                      <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--fg-bright)", display: "flex", alignItems: "center", gap: "6px" }}>
-                        {r.isBaseline && "⭐ "}
-                        {r.model} &middot; {r.isBaseline ? "Reference Baseline Run" : `Iteration ${r.iteration}`}
-                      </span>
-                      {r.isBaseline && (
-                        <span style={{ fontSize: "9.5px", fontWeight: 700, color: "#60a5fa", background: "rgba(59, 130, 246, 0.2)", padding: "1px 6px", borderRadius: "3px" }}>
-                          REFERENCE BASELINE
-                        </span>
-                      )}
-                      <span style={{ fontSize: "11px", color: "var(--muted)" }}>
-                        ({r.totalDurationSeconds}s &middot; {r.totalTurns} turns &middot; {r.tokenUsage.totalTokens.toLocaleString()} tokens)
-                      </span>
-                    </div>
-
-                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                      <span style={{ fontSize: "11px", color: "#60a5fa", fontWeight: 600 }}>
-                        Score: {r.scores.overallBenchmarkScore}/100
-                      </span>
-                      {onOpenFile && (
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-xs"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const path = r.isBaseline ? "docs/manuscript.md" : `${r.outputPath}/manuscript.md`;
-                            onOpenFile(path);
-                          }}
-                          style={{ gap: "4px" }}
-                        >
-                          <FileText size={11} /> Manuscript
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {isExpanded && (
-                    <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: "12px" }}>
-                      {/* Phase Telemetry Table */}
-                      <table className="pipeline-table" style={{ fontSize: "11px" }}>
-                        <thead>
-                          <tr>
-                            <th>Phase</th>
-                            <th style={{ textAlign: "right" }}>Time</th>
-                            <th style={{ textAlign: "right" }}>Turns</th>
-                            <th style={{ textAlign: "right" }}>Input Tokens</th>
-                            <th style={{ textAlign: "right" }}>Output Tokens</th>
-                            <th style={{ textAlign: "center" }}>MCP Tools</th>
-                            <th style={{ textAlign: "center" }}>Status</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {r.phaseMetrics.map((pm) => (
-                            <tr key={pm.phaseId}>
-                              <td>{pm.phaseTitle}</td>
-                              <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{pm.durationSeconds}s</td>
-                              <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{pm.turns}</td>
-                              <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: "#60a5fa" }}>{pm.tokenUsage.promptTokens.toLocaleString()}</td>
-                              <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: "#34d399" }}>{pm.tokenUsage.completionTokens.toLocaleString()}</td>
-                              <td style={{ textAlign: "center" }}>{pm.mcpToolCalls}</td>
-                              <td style={{ textAlign: "center" }}>
-                                <span style={{ color: pm.status === "completed" ? "#34d399" : "#f87171", textTransform: "uppercase", fontSize: "10px", fontWeight: 700 }}>
-                                  {pm.status}
-                                </span>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-
-                      {/* Evaluator Notes */}
-                      {r.scores.rubricNotes && (
-                        <div style={{ fontSize: "11.5px", color: "var(--muted)", background: "rgba(0,0,0,0.3)", padding: "8px 12px", borderRadius: "4px" }}>
-                          <b>Evaluator Assessment:</b> {r.scores.rubricNotes}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+          <div style={{ fontSize: "12px", color: "var(--muted)", maxWidth: "520px", lineHeight: "1.5" }}>
+            Comparative analytics require completed benchmark runs or an active workspace baseline evaluation. Configure and launch a multi-model benchmark suite, or evaluate the current workspace to generate comparative metrics.
+          </div>
+          <div style={{ display: "flex", gap: "10px", marginTop: "8px" }}>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => handleSelectSubTab("benchmark")}
+              style={{ gap: "6px" }}
+            >
+              <Cpu size={14} /> Open Benchmark Studio
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => {
+                handleSelectSubTab("workspace");
+                handleScoreCurrentWorkspace();
+              }}
+              disabled={isScoringCurrent}
+              style={{ gap: "6px" }}
+            >
+              <Award size={14} /> Score Active Workspace
+            </button>
           </div>
         </div>
       )}
     </div>
   );
-};
 
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100%",
+        overflow: "hidden",
+        background: "var(--bg)",
+      }}
+    >
+      {/* Header Banner */}
+      <div
+        style={{
+          background: "var(--panel)",
+          borderBottom: "1px solid var(--border)",
+          padding: "12px 20px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: "12px",
+          flexShrink: 0,
+        }}
+      >
+        <div>
+          <h2
+            style={{
+              margin: 0,
+              fontSize: "15px",
+              fontWeight: 700,
+              color: "var(--fg-bright)",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+            }}
+          >
+            <BarChart3 size={17} color="var(--primary)" />
+            AI Evaluation &amp; Multi-Model Benchmark Studio
+          </h2>
+          <div style={{ fontSize: "11.5px", color: "var(--muted)", marginTop: "2px" }}>
+            Autonomous benchmarking across iterations, manuscript scoring rubric, TidyProteomics-MCP telemetry, and comparative plots.
+          </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => {
+              handleSelectSubTab("workspace");
+              handleScoreCurrentWorkspace();
+            }}
+            disabled={isScoringCurrent}
+            title="Score current workspace outputs (manuscript + MCP tool usage) on-demand"
+            style={{ gap: "6px" }}
+          >
+            <Award size={13} color="var(--primary)" />
+            {isScoringCurrent ? "Scoring Workspace..." : "Score Current Workspace"}
+          </button>
+        </div>
+      </div>
+
+      {/* Navigation Sub-Tabs Bar */}
+      <div
+        style={{
+          padding: "8px 20px",
+          borderBottom: "1px solid var(--border)",
+          background: "var(--tabbar-bg)",
+          display: "flex",
+          gap: "8px",
+          flexShrink: 0,
+          alignItems: "center",
+          overflowX: "auto",
+        }}
+      >
+        <button
+          type="button"
+          className="btn btn-sm"
+          style={{
+            background: activeSubTab === "analytics" ? "var(--primary)" : "transparent",
+            color: activeSubTab === "analytics" ? "#fff" : "var(--muted)",
+            border: activeSubTab === "analytics" ? "1px solid var(--primary)" : "1px solid var(--border)",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "6px",
+            fontWeight: activeSubTab === "analytics" ? 600 : 500,
+          }}
+          onClick={() => handleSelectSubTab("analytics")}
+        >
+          <BarChart3 size={14} />
+          <span>Comparative Analytics</span>
+          {activeRuns.length > 0 && (
+            <span
+              style={{
+                fontSize: "10px",
+                padding: "1px 6px",
+                borderRadius: "10px",
+                background: activeSubTab === "analytics" ? "rgba(255,255,255,0.25)" : "var(--border)",
+                color: activeSubTab === "analytics" ? "#fff" : "var(--fg)",
+                fontWeight: 700,
+              }}
+            >
+              {activeRuns.length}
+            </span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          className="btn btn-sm"
+          style={{
+            background: activeSubTab === "runs" ? "var(--primary)" : "transparent",
+            color: activeSubTab === "runs" ? "#fff" : "var(--muted)",
+            border: activeSubTab === "runs" ? "1px solid var(--primary)" : "1px solid var(--border)",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "6px",
+            fontWeight: activeSubTab === "runs" ? 600 : 500,
+          }}
+          onClick={() => handleSelectSubTab("runs")}
+        >
+          <Layers size={14} />
+          <span>Evaluations Directory</span>
+          {(currentDisplaySuite?.runs?.length ?? 0) > 0 && (
+            <span
+              style={{
+                fontSize: "10px",
+                padding: "1px 6px",
+                borderRadius: "10px",
+                background: activeSubTab === "runs" ? "rgba(255,255,255,0.25)" : "var(--border)",
+                color: activeSubTab === "runs" ? "#fff" : "var(--fg)",
+                fontWeight: 700,
+              }}
+            >
+              {currentDisplaySuite?.runs?.length}
+            </span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          className="btn btn-sm"
+          style={{
+            background: activeSubTab === "benchmark" ? "var(--primary)" : "transparent",
+            color: activeSubTab === "benchmark" ? "#fff" : "var(--muted)",
+            border: activeSubTab === "benchmark" ? "1px solid var(--primary)" : "1px solid var(--border)",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "6px",
+            fontWeight: activeSubTab === "benchmark" ? 600 : 500,
+          }}
+          onClick={() => handleSelectSubTab("benchmark")}
+        >
+          <Cpu size={14} />
+          <span>Benchmark Studio</span>
+          {activeSuite && activeSuite.status === "running" && (
+            <span
+              style={{
+                fontSize: "10px",
+                padding: "1px 6px",
+                borderRadius: "10px",
+                background: "#f59e0b",
+                color: "#000",
+                fontWeight: 800,
+              }}
+            >
+              RUNNING
+            </span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          className="btn btn-sm"
+          style={{
+            background: activeSubTab === "workspace" ? "var(--primary)" : "transparent",
+            color: activeSubTab === "workspace" ? "#fff" : "var(--muted)",
+            border: activeSubTab === "workspace" ? "1px solid var(--primary)" : "1px solid var(--border)",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "6px",
+            fontWeight: activeSubTab === "workspace" ? 600 : 500,
+          }}
+          onClick={() => handleSelectSubTab("workspace")}
+        >
+          <Award size={14} />
+          <span>Workspace Evaluation</span>
+          {currentScoreResult && (
+            <span
+              style={{
+                fontSize: "10px",
+                padding: "1px 6px",
+                borderRadius: "10px",
+                background: activeSubTab === "workspace" ? "rgba(255,255,255,0.25)" : "var(--border)",
+                color: activeSubTab === "workspace" ? "#fff" : "#60a5fa",
+                fontWeight: 700,
+              }}
+            >
+              {currentScoreResult.scores.overallBenchmarkScore}/100
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* Active Benchmark Live Running Progress Bar (Persistent across all sub-tabs) */}
+      {/* Active Benchmark Live Running Progress Bar */}
+      {activeSuite && activeSuite.status === "running" && (
+        <div
+          style={{
+            background: "linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(15, 23, 42, 0.5))",
+            border: "1px solid rgba(245, 158, 11, 0.4)",
+            borderRadius: "8px",
+            padding: "14px 18px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "10px",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span className="spinner" style={{ width: "14px", height: "14px", border: "2px solid #f59e0b", borderTopColor: "transparent", borderRadius: "50%" }} />
+              <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--fg-bright)" }}>
+                Benchmark Suite Active: {activeSuite.title}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="btn btn-danger btn-xs"
+              onClick={handleCancelBenchmark}
+              style={{ gap: "4px" }}
+            >
+              <StopCircle size={12} /> Cancel Suite
+            </button>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: "var(--muted)" }}>
+            <span>
+              Current Target: <b style={{ color: "var(--fg-bright)" }}>{activeSuite.activeRun?.model}</b> (Iteration {activeSuite.activeRun?.iteration} of {activeSuite.iterations})
+            </span>
+            <span>
+              Completed Runs: <b style={{ color: "#34d399" }}>{activeSuite.runs.length}</b> / {activeSuite.models.length * activeSuite.iterations}
+            </span>
+          </div>
+
+          {/* Progress fill */}
+          <div style={{ width: "100%", height: "6px", background: "rgba(255,255,255,0.1)", borderRadius: "3px", overflow: "hidden" }}>
+            <div
+              style={{
+                width: `${Math.round((activeSuite.runs.length / Math.max(1, activeSuite.models.length * activeSuite.iterations)) * 100)}%`,
+                height: "100%",
+                background: "linear-gradient(90deg, #f59e0b, #10b981)",
+                transition: "width 0.3s ease",
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Feedback Alerts */}
+      {importSuccessMsg && (
+        <div
+          style={{
+            margin: "10px 20px 0 20px",
+            background: "rgba(34, 197, 94, 0.12)",
+            border: "1px solid rgba(34, 197, 94, 0.35)",
+            borderRadius: "6px",
+            padding: "10px 14px",
+            fontSize: "12px",
+            color: "#4ade80",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+          }}
+        >
+          <CheckCircle2 size={15} />
+          <span>{importSuccessMsg}</span>
+        </div>
+      )}
+
+      {errorMsg && (
+        <div
+          style={{
+            margin: "10px 20px 0 20px",
+            background: "rgba(239, 68, 68, 0.12)",
+            border: "1px solid rgba(239, 68, 68, 0.35)",
+            borderRadius: "6px",
+            padding: "10px 14px",
+            fontSize: "12px",
+            color: "#f87171",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <AlertCircle size={15} />
+            <span>{errorMsg}</span>
+          </div>
+          <button
+            type="button"
+            className="btn btn-secondary btn-xs"
+            onClick={() => setErrorMsg(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Scrollable Sub-Tab Content Area */}
+      <div
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          padding: "16px 20px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "16px",
+        }}
+      >
+        {activeSubTab === "analytics" && renderAnalyticsSubTab()}
+        {activeSubTab === "runs" && renderRunsSubTab()}
+        {activeSubTab === "benchmark" && renderBenchmarkSubTab()}
+        {activeSubTab === "workspace" && renderWorkspaceSubTab()}
+      </div>
+    </div>
+  );
+};

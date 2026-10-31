@@ -291,7 +291,7 @@ export const MarkdownViewer: React.FC<MarkdownViewerProps> = ({ relPath, onOpenF
           alignItems: "center",
           padding: "8px 18px",
           borderBottom: "1px solid var(--border)",
-          background: "#16161a",
+          background: "var(--tabbar-bg)",
           flexShrink: 0,
         }}
       >
