@@ -498,6 +498,13 @@ handle_request <- function(req) {
         } else if (what == "unique_variables") {
           var_name <- if (!is.null(params$variable)) params$variable else "sample"
           res_output <- get_unique_variables(data, var_name, format = "vector")
+          if (is.character(res_output) && length(res_output) > 50) {
+            total_n <- length(res_output)
+            res_output <- c(
+              head(res_output, 20),
+              glue::glue("... [truncated {total_n - 20} values; total: {total_n} unique values for '{var_name}']")
+            )
+          }
         } else if (what == "experiments") {
           res_output <- capture.output(print(data$experiments))
         } else if (what == "operations") {
@@ -1723,11 +1730,32 @@ handle_request <- function(req) {
           config_arg <- NULL
         }
 
-        audit_tbl <- tidyproteomics::input_audit(
-          file_name = raw_file,
-          platform = platform,
-          analyte = analyte,
-          config = config_arg
+        # If raw_file is an Excel workbook (.xlsx/.xls), tidyproteomics::input_audit uses readLines()
+        # which reads zipped binary data. Staging the first row to a temporary TSV preserves exact
+        # column headers so that platform configuration regexes match properly.
+        is_excel <- grepl("\\.xlsx?$", raw_file, ignore.case = TRUE)
+        audit_file <- raw_file
+        temp_tsv <- NULL
+        if (is_excel) {
+          rlang::check_installed("readxl", reason = "to audit Excel files.")
+          df_head <- readxl::read_excel(raw_file, n_max = 1, col_types = "text")
+          temp_tsv <- tempfile(fileext = ".tsv")
+          readr::write_tsv(df_head, temp_tsv)
+          audit_file <- temp_tsv
+        }
+
+        audit_tbl <- tryCatch(
+          tidyproteomics::input_audit(
+            file_name = audit_file,
+            platform = platform,
+            analyte = analyte,
+            config = config_arg
+          ),
+          finally = {
+            if (!is.null(temp_tsv) && file.exists(temp_tsv)) {
+              unlink(temp_tsv)
+            }
+          }
         )
 
         total_cols <- nrow(audit_tbl)
@@ -1787,22 +1815,41 @@ handle_request <- function(req) {
           out_file <- file.path(STATE$output_dir, out_file)
         }
 
-        updated_tbl <- tidyproteomics::ingest_config(
-          platform = platform,
-          analyte = analyte,
-          config_file = cfg_file,
-          action = action,
-          category = params$category,
-          column_defined = params$column_defined,
-          column_import = params$column_import,
-          pattern_extract = params$pattern_extract,
-          pattern_remove = params$pattern_remove,
-          pattern_split = params$pattern_split,
-          pivot = params$pivot,
-          file_name = raw_file,
-          use_lfq = params$use_lfq,
-          save = TRUE,
-          output_file = out_file
+        # If action is auto_fix and raw_file is Excel, stage first row to temp TSV for input_audit
+        is_excel <- !is.null(raw_file) && file.exists(raw_file) && grepl("\\.xlsx?$", raw_file, ignore.case = TRUE)
+        ingest_file <- raw_file
+        temp_tsv <- NULL
+        if (is_excel && action == "auto_fix") {
+          rlang::check_installed("readxl", reason = "to inspect Excel headers.")
+          df_head <- readxl::read_excel(raw_file, n_max = 1, col_types = "text")
+          temp_tsv <- tempfile(fileext = ".tsv")
+          readr::write_tsv(df_head, temp_tsv)
+          ingest_file <- temp_tsv
+        }
+
+        updated_tbl <- tryCatch(
+          tidyproteomics::ingest_config(
+            platform = platform,
+            analyte = analyte,
+            config_file = cfg_file,
+            action = action,
+            category = params$category,
+            column_defined = params$column_defined,
+            column_import = params$column_import,
+            pattern_extract = params$pattern_extract,
+            pattern_remove = params$pattern_remove,
+            pattern_split = params$pattern_split,
+            pivot = params$pivot,
+            file_name = ingest_file,
+            use_lfq = params$use_lfq,
+            save = TRUE,
+            output_file = out_file
+          ),
+          finally = {
+            if (!is.null(temp_tsv) && file.exists(temp_tsv)) {
+              unlink(temp_tsv)
+            }
+          }
         )
 
         cfg_md <- paste0(

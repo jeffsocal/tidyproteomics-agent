@@ -81,6 +81,7 @@ export class AgentLoop {
     let turn = 0;
     let completedSummary = "";
     let consecutiveNoToolTurns = 0;
+    let consecutiveTransitionAnnouncements = 0;
     let consecutiveCommandFailures = 0;
     let lastFailedCommand = "";
     let consecutiveToolFailures = 0;
@@ -263,6 +264,7 @@ export class AgentLoop {
       // Check if complete_phase or fail_phase tool was called or if finished
       if (response.tool_calls && response.tool_calls.length > 0) {
         consecutiveNoToolTurns = 0;
+        consecutiveTransitionAnnouncements = 0;
         for (const tc of response.tool_calls) {
           this.onProgress({
             type: "tool_start",
@@ -534,20 +536,23 @@ DO NOT repeat the identical failing command without structural fixes:
         const trimmedContent = (response.content || "").trim();
         const isEmptyResponse = !trimmedContent && (!response.tool_calls || response.tool_calls.length === 0);
 
-        // Detect conversational transition phrasing ("Turn 1 complete. Ready for Turn 2", etc.)
+        // Detect conversational transition phrasing ("Turn 1 complete. Ready for Turn 2", "Let me create the script", etc.)
         const isTransitionAnnouncement =
           /ready for (?:turn|section|step)\s+\d+/i.test(trimmedContent) ||
           /(?:turn|section|step)\s+\d+\s+complete/i.test(trimmedContent) ||
           /proceeding to (?:turn|section|step)/i.test(trimmedContent) ||
           /moving on to (?:turn|section|step)/i.test(trimmedContent) ||
-          /next,?\s+(?:i will|we will|i'll)\s+(?:write|author|replace|generate)/i.test(trimmedContent);
+          /(?:next,?\s+)?(?:i will|we will|i'll|we'll)\s+(?:now\s+)?(?:write|create|author|replace|generate|execute|run|implement)/i.test(trimmedContent) ||
+          /(?:let me|let's)\s+(?:now\s+)?(?:write|create|author|replace|generate|execute|run|implement|save)\b/i.test(trimmedContent) ||
+          /now (?:i have|i'll|i will|that we have).*(?:let me|i will|i'll)\s+(?:write|create|author|replace|generate|execute|run|implement)/i.test(trimmedContent);
 
-        if (isTransitionAnnouncement) {
+        if (isTransitionAnnouncement && consecutiveTransitionAnnouncements < 2) {
+          consecutiveTransitionAnnouncements++;
           // Do not increment consecutiveNoToolTurns for benign progress announcements; immediately nudge tool execution
           consecutiveNoToolTurns = 0;
           this.messages.push({
             role: "user",
-            content: "[System Directive]: Do not pause or emit conversational announcements between sections. Execute the required tool call (e.g. replace_file_content or write_file) immediately in this turn.",
+            content: "[System Directive]: Do not pause or emit conversational announcements or plans between steps. Execute the required tool call (e.g. write_file, replace_file_content, or execute_command) immediately in this turn.",
           });
         } else if (isEmptyResponse) {
           // Do not penalize transient blank API completions as intentional user halts
@@ -631,10 +636,10 @@ DO NOT repeat the identical failing command without structural fixes:
               content: `[System Notice]: Your response reached the maximum output token limit (finish_reason: "${response.finishReason || "length"}", completion tokens: ${response.usage.completionTokens}). Any attempted tool call was truncated before completion and could not be parsed. Please write the output in smaller sections or verify that Max Output Tokens in settings is set sufficiently high.`,
             });
           } else {
-            // If no tool was called and no completion or failure indicated, prompt the agent to proceed
+            // If no tool was called and no completion or failure indicated, prompt the agent to proceed immediately with tools
             this.messages.push({
               role: "user",
-              content: "Please execute the required tools to fulfill the objectives of this phase, or call complete_phase when finished, or call fail_phase if a prerequisite/gate failed.",
+              content: "[System Directive]: You provided conversational text without invoking any tool calls. Conversational commentary without tool execution is strictly prohibited in autonomous execution mode. Execute the required tool call (e.g. write_file, replace_file_content, execute_command, or complete_phase) immediately in this turn.",
             });
           }
         }

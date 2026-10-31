@@ -19,13 +19,14 @@ Finally, you will construct `docs/knowledge.md` documenting both the **new** obs
 #### 1. Pre-Flight Verification & Inputs Ingestion
 Before proceeding:
 1. Read `docs/observations.md` in a single turn to ingest verified quantitative data (dimensions, target metrics, top up/down tables, and enrichment summaries).
-2. Rely on the `[WORKSPACE MANIFEST]` and `docs/experiment.md` already injected in your prompt above—do NOT waste turns calling `list_directory` or re-reading `docs/experiment.md`.
+2. Rely on the `[WORKSPACE MANIFEST]` and `docs/experiment.md` already injected in your prompt above—do NOT waste turns calling `list_directory`, dumping raw tabular rows from `data/table_*_expression_*.tsv` into prompt context, or re-reading `docs/experiment.md`.
+3. ⚠️ **Immediate Tool Call Requirement**: Do NOT emit conversational preambles or announcements between reading observations and authoring code (e.g. "Let me create the R script..."). In your very next turn after reading `docs/observations.md`, immediately invoke `write_file("code/07_knowledge.R", ...)` to author the analysis script.
 
 ---
 
 #### 2. De Novo Functional Module Discovery & Hypothesis Queries via `code/07_knowledge.R`
 Whenever formal ontology enrichment in Phase 5 was bypassed (or to test specific protein complexes, operons, unthresholded co-factors, and pathway partners suggested by the top hits in `docs/observations.md`):
-- Write and execute a targeted R script `code/07_knowledge.R` (output is automatically captured to `logs/07_knowledge/console.log`):
+- Author and write `code/07_knowledge.R` via `write_file` and execute it via `execute_command` (output is automatically captured to `logs/07_knowledge/console.log`):
   ```bash
   if [ -f tools/lint_tidyproteomics.R ]; then Rscript tools/lint_tidyproteomics.R code/07_knowledge.R && Rscript code/07_knowledge.R; else Rscript code/07_knowledge.R; fi
   ```

@@ -186,7 +186,7 @@ TOOLS = [
                 },
                 "variable": {
                     "type": "string",
-                    "description": "Variable name when inspecting 'unique_variables' (e.g. 'sample', 'description')."
+                    "description": "Variable name when inspecting 'unique_variables' (e.g. 'sample', 'replicate'). Avoid querying high-cardinality entity variables like 'protein' or 'peptide' to prevent large output."
                 },
                 "id": {
                     "type": "string",
@@ -822,7 +822,7 @@ TOOLS = [
     },
     {
         "name": "tpa_input_audit",
-        "description": "Audits raw proteomics data headers (e.g. MaxQuant proteinGroups.txt, FragPipe, ProteomeDiscoverer) against active platform configuration regexes, returning match statuses and rules-based suggestions for unmapped or alternative columns (e.g. gene names, descriptions, MaxLFQ intensity).",
+        "description": "Audits raw proteomics data headers (e.g. MaxQuant proteinGroups.txt, FragPipe, ProteomeDiscoverer TSV/XLSX) against active platform configuration regexes, returning match statuses and rules-based suggestions for unmapped or alternative columns (e.g. gene names, descriptions, MaxLFQ intensity). Note: advisory diagnostic; successful tpa_load is the ultimate ground truth for ingestion.",
         "inputSchema": {
             "type": "object",
             "properties": {

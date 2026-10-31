@@ -14,6 +14,9 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/01_i
 > - Because the `overview` state card truncates sample names when `> 6` samples exist and omits the raw file-to-sample mapping table and ontology term list, run `tpa_inspect(what = "experiments")` (to inspect all raw files, sample names, replicates, and batch/donor structure) and `tpa_inspect(what = "annotation_terms")` (to list active functional ontology categories).
 
 #### Phase 1.1: Pre-Ingestion Raw Header Audit & Data Ingestion
+> [!NOTE]
+> **Advisory Nature of `tpa_input_audit`**: `tpa_input_audit` is an advisory diagnostic tool to help spot MaxLFQ vs raw intensity columns and unmapped annotations. If `tpa_input_audit` encounters format anomalies or reports zero matched columns, proceed directly to `tpa_load()`. A successful `tpa_load()` that imports quantified entities is the definitive proof of dataset ingestion integrity. Phase 1 must NEVER invoke `fail_phase` for header audit warnings or unmapped columns if `tpa_load()` succeeds.
+
 - [ ] **Pre-Ingestion Header & Annotation Audit**:
   - Run `tpa_input_audit(source = "{{PATH_TO_DATA_FILE}}", platform = "{{PLATFORM}}", analyte = "{{ANALYTE}}")` to inspect raw headers against the active platform configuration regexes (remote `http://` or `https://` URLs are automatically staged into `data/raw/`).
   - Review the audit table and actionable suggestions:
@@ -87,7 +90,7 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/01_i
   - **Enforce Clean Boolean/Enum Values & Badge Preservation**: Keep all configuration lines strictly as clean tokens (`TRUE`, `FALSE`, or the method identifier) without appending conversational notes. Place any rationale inside HTML comments `<!-- ... -->`.
 - [ ] **Checkpoint 1.4 (Design Alignment Gate)**:
   - Verify that discovered sample groups, alignment with `docs/experiment.md`, and Section 3 (`3.A`–`3.F`) scaffolding are complete.
-  - Phase 1 must NEVER invoke `fail_phase` for discovered groups, batch suffixes, or confounding.
+  - Phase 1 must NEVER invoke `fail_phase` for pre-ingestion audit warnings, unmapped columns, discovered groups, batch suffixes, or confounding if `tpa_load` loads the data with quantified entities.
 - [ ] **Complete Phase (Automated Blackboard Recording)**:
   - Do NOT manually edit `docs/notes.md` via file tools; the orchestrator automatically records your `complete_phase` summary into `docs/notes.md`.
   - Invoke `complete_phase` with a comprehensive summary including quantified entity count, sample inventory, proposed/confirmed contrast groups, baseline quality stats, and detected upstream operations:

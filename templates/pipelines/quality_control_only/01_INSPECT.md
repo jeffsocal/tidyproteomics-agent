@@ -15,6 +15,9 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/01_i
 > **DO NOT** make redundant exploratory calls for `operations`, `quant_names`, `sample_names`, or `annotation_terms` — `overview` already supplies all of them.
 
 #### Phase 1.1: Pre-Ingestion Raw Header Audit & Data Ingestion
+> [!NOTE]
+> **Advisory Nature of `tpa_input_audit`**: `tpa_input_audit` is an advisory diagnostic tool to help spot MaxLFQ vs raw intensity columns and unmapped annotations. If `tpa_input_audit` encounters format anomalies or reports zero matched columns, proceed directly to `tpa_load()`. A successful `tpa_load()` that imports quantified entities is the definitive proof of dataset ingestion integrity. Phase 1 must NEVER invoke `fail_phase` for header audit warnings or unmapped columns if `tpa_load()` succeeds.
+
 - [ ] **Pre-Ingestion Header & Annotation Audit**:
   - Run `tpa_input_audit(source = "{{PATH_TO_DATA_FILE}}", platform = "{{PLATFORM}}", analyte = "{{ANALYTE}}")` to inspect raw headers against the active platform configuration regexes (remote `http://` or `https://` URLs are automatically staged into `data/raw/`).
   - Review the audit table and actionable suggestions:
@@ -81,7 +84,7 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/01_i
   - **Enforce Clean Boolean Values & Badge Preservation**: Preserve visual badges (`ℹ️ [AUTO-GENERATED REFERENCE]`, `👉 [USER ACTION REQUIRED]`, `⚠️ [PRE-FLIGHT GATE DECISION]`) and keep all boolean configuration toggles (`- **Reassign Sample Names According to Pooling Map**: TRUE` and `- **Proceed With Potential Batch Confounding**: FALSE`) strictly as clean booleans without appending conversational notes or explanations. Any notes must be placed in markdown comments `<!-- ... -->`.
 - [ ] **Checkpoint 1.4 (Design Alignment Gate)**: 
   - Verify that `sample_names` are confirmed, alignment with `docs/experiment.md` is verified, and Section 3 is scaffolded with discovered sample groups.
-  - Setting `- **Proceed With Potential Batch Confounding**: FALSE` is the scaffolded default awaiting researcher review and does NOT fail or halt Phase 1. Phase 1 must NEVER invoke `fail_phase` for discovered groups, batch suffixes, or confounding.
+  - Setting `- **Proceed With Potential Batch Confounding**: FALSE` is the scaffolded default awaiting researcher review and does NOT fail or halt Phase 1. Phase 1 must NEVER invoke `fail_phase` for pre-ingestion audit warnings, unmapped columns, discovered groups, batch suffixes, or confounding if `tpa_load` loads the data with quantified entities.
 - [ ] **Complete Phase (Automated Blackboard Recording)**:
   - Do NOT manually edit `docs/notes.md` via file tools; the orchestrator automatically records your `complete_phase` summary into `docs/notes.md`.
   - Once `docs/experiment.md` Section 3 is scaffolded and QC plots are generated, invoke `complete_phase` with a comprehensive summary including quantified protein count, sample inventory, baseline quality stats, and detected upstream operations:
