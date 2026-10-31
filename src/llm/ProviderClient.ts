@@ -618,8 +618,12 @@ export class ProviderClient {
     }
 
     const maxTokens = this.config.maxTokens || 32768;
+    let model = this.config.model || "anthropic/claude-3.7-sonnet";
+    if (model === "anthropic/claude-3.5-sonnet") {
+      model = "anthropic/claude-3.5-sonnet-20241022";
+    }
     const body: Record<string, any> = {
-      model: this.config.model || "anthropic/claude-3.7-sonnet",
+      model,
       messages: formattedMessages,
       tools: openAiTools.length > 0 ? openAiTools : undefined,
       temperature: this.config.temperature ?? 0.2,

@@ -1,5 +1,5 @@
 ---
-tools: [tpa_health, tpa_load, tpa_inspect, tpa_enrichment, tpa_batch_analysis, tpa_plot, tpa_export_table, tpa_operations, tpa_export_state]
+tools: [tpa_health, tpa_load, tpa_inspect, tpa_enrichment, tpa_batch_analysis, tpa_query_enrichment, tpa_plot, tpa_export_table, tpa_operations, tpa_export_state]
 ---
 
 ### Phase 5: Functional Annotation Assessment & Pathway Enrichment

@@ -1,5 +1,5 @@
 ---
-tools: [tpa_health, tpa_load, tpa_inspect, tpa_summary, tpa_reassign, tpa_expression, tpa_batch_analysis, tpa_plot, tpa_export_table, tpa_operations, tpa_export_state]
+tools: [tpa_health, tpa_load, tpa_inspect, tpa_summary, tpa_reassign, tpa_expression, tpa_batch_analysis, tpa_query_expression, tpa_plot, tpa_export_table, tpa_operations, tpa_export_state]
 ---
 
 ### Phase 4: Differential Expression Analysis & Candidate Profiling
@@ -44,7 +44,9 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/04_e
 - [ ] **Checkpoint 4.2**: Confirm from the `tpa_batch_analysis` output that expression tables and volcano plots were generated across all evaluated contrasts.
 
 #### Phase 4.3: Optional Targeted Exploratory Profiling
-- [ ] Batch analysis automatically generates the primary volcano plots and expression tables. Only if additional custom table exports or targeted single-protein abundance plots are needed:
+- [ ] `tpa_batch_analysis` automatically returns the exact significant counts ($|\log_2\text{FC}| \ge 1.0, q \le 0.05$), upregulated/downregulated counts, and top candidates directly in stdout/return message.
+- [ ] Only if additional custom candidate queries, custom table exports, or single-protein abundance plots are needed:
+  - Query filtered candidates concisely via `tpa_query_expression(log2fc_min = 1.0, significance_max = 0.05, top_n = 20)`.
   - Export customized tables via `tpa_export_table(type = "analysis", analysis = "expression", comparison = "<treatment_group>/<control_group>", file_name = "data/table_proteins_expression_<contrast>.tsv")`.
   - Generate targeted single-protein profiles via `tpa_plot(type = "protein", protein = "<accession>")`.
   - *(Do NOT dump entire expression tables into LLM context via `tpa_extract` to count rows manually).*

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import {
   Award,
   BarChart3,
@@ -15,8 +15,11 @@ import {
   Wrench,
   Terminal,
   AlertCircle,
+  AlertTriangle,
+  Square,
   Layers,
   ChevronDown,
+  ChevronUp,
   ChevronRight,
   ExternalLink,
   Trash2,
@@ -24,14 +27,23 @@ import {
   Plus,
   RefreshCw,
   Check,
+  Copy,
+  Edit3,
+  Eye,
+  Save,
 } from "lucide-react";
+import { marked } from "marked";
 import {
   BenchmarkSuite,
   EvaluationRunSummary,
   EvaluationScoreBreakdown,
+  ExperimentSpec,
   ModelAggregatedPerformance,
   ModelCatalogEntry,
+  PerformanceReviewResult,
+  PerformanceReviewStatus,
   PhaseTelemetryMetric,
+  PipelineState,
   PredefinedExperimentEntry,
 } from "../types";
 import { EvaluationBarChart, EvaluationSeries, MODEL_PALETTE } from "./EvaluationBarChart";
@@ -60,9 +72,9 @@ const STORAGE_SELECTED_PROVIDER = "tpa_eval_provider_v2";
 const STORAGE_SELECTED_MODELS_PREFIX = "tpa_eval_selected_models_v2_";
 const STORAGE_ITERATIONS = "tpa_eval_iterations_v2";
 
-export type AIEvaluationSubTab = "analytics" | "runs" | "benchmark" | "workspace";
+export type AIEvaluationSubTab = "review" | "runs" | "analytics" | "benchmark";
 
-const STORAGE_ACTIVE_SUBTAB = "tpa_eval_active_subtab_v1";
+const STORAGE_ACTIVE_SUBTAB = "tpa_eval_active_subtab_v2";
 
 const BENCHMARK_TOKEN_LIMITS = [
   { value: "4096", label: "4k" },
@@ -78,12 +90,15 @@ const BENCHMARK_TOKEN_LIMITS = [
 function loadStoredActiveSubTab(): AIEvaluationSubTab {
   try {
     const raw = localStorage.getItem(STORAGE_ACTIVE_SUBTAB);
-    if (raw === "analytics" || raw === "runs" || raw === "benchmark" || raw === "workspace") {
+    if (raw === "review" || raw === "workspace") {
+      return "review";
+    }
+    if (raw === "runs" || raw === "analytics" || raw === "benchmark") {
       return raw;
     }
-    return "analytics";
+    return "review";
   } catch {
-    return "analytics";
+    return "review";
   }
 }
 
@@ -105,6 +120,25 @@ function loadStoredSelectedModels(provider: string): string[] {
   }
 }
 
+const STORAGE_BENCHMARK_QUEUE = "tpa_benchmark_queue_v2";
+
+function loadStoredQueue(): string[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_BENCHMARK_QUEUE);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch (_) {}
+  return [];
+}
+
+function saveStoredQueue(queue: string[]): void {
+  try {
+    localStorage.setItem(STORAGE_BENCHMARK_QUEUE, JSON.stringify(queue));
+  } catch (_) {}
+}
+
 function loadStoredProvider(): string {
   try {
     return localStorage.getItem(STORAGE_SELECTED_PROVIDER) || "openrouter";
@@ -124,9 +158,17 @@ function loadStoredIterations(): number {
 
 interface AIEvaluationTabProps {
   onOpenFile?: (relPath: string) => void;
+  onSelectTab?: (tabId: string) => void;
+  experimentSpec?: ExperimentSpec;
+  pipelineState?: PipelineState;
 }
 
-export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) => {
+export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
+  onOpenFile,
+  onSelectTab,
+  experimentSpec,
+  pipelineState,
+}) => {
 
   // Active sub-tab state backed by localStorage
   const [activeSubTab, setActiveSubTab] = useState<AIEvaluationSubTab>(loadStoredActiveSubTab);
@@ -139,8 +181,16 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
   };
   // Config state backed by localStorage
   const [selectedProvider, setSelectedProvider] = useState<string>(loadStoredProvider);
+  const [selectedProviderFilter, setSelectedProviderFilter] = useState<string>("all");
   const [availableModels, setAvailableModels] = useState<ModelCatalogEntry[]>([]);
   const [customModels, setCustomModels] = useState<ModelCatalogEntry[]>(loadStoredCustomModels);
+  const [queuedModelIds, setQueuedModelIds] = useState<string[]>(() => {
+    const stored = loadStoredQueue();
+    if (stored.length > 0) return stored;
+    const prev = loadStoredSelectedModels(loadStoredProvider());
+    if (prev.length > 0) return prev;
+    return [];
+  });
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>(() =>
     loadStoredSelectedModels(loadStoredProvider())
   );
@@ -161,23 +211,83 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
   const [selectedRunIds, setSelectedRunIds] = useState<string[]>([]);
   const [isDeletingRunId, setIsDeletingRunId] = useState<string | null>(null);
 
-  // Sync selected run IDs when suites load
+  // Construct baseline preview suite if no multi-model benchmark suite has run yet
+  const baselinePreviewSuite: BenchmarkSuite | null = baselineRun
+    ? {
+        id: "suite_workspace_baseline",
+        title: `Workspace Baseline Run: ${baselineRun.model}`,
+        createdAt: baselineRun.timestamp,
+        provider: baselineRun.provider,
+        models: [baselineRun.model],
+        iterations: 1,
+        experimentPath: "docs/experiment.md",
+        experimentTitle: baselineRun.manuscriptTitle || "Active Completed Project",
+        status: "completed",
+        runs: [baselineRun],
+        aggregated: [
+          {
+            model: baselineRun.model,
+            provider: baselineRun.provider,
+            isBaseline: true,
+            completedRuns: 1,
+            failedRuns: 0,
+            meanDurationSeconds: baselineRun.totalDurationSeconds,
+            meanTurns: baselineRun.totalTurns,
+            meanPromptTokens: baselineRun.tokenUsage.promptTokens,
+            meanCompletionTokens: baselineRun.tokenUsage.completionTokens,
+            meanTotalTokens: baselineRun.tokenUsage.totalTokens,
+            meanOverallScore: baselineRun.scores.overallBenchmarkScore,
+            meanManuscriptScore: baselineRun.scores.overallManuscriptScore,
+            meanMcpToolUseScore: baselineRun.scores.mcpToolUseScore,
+            meanBioinformaticsIntelligence: baselineRun.scores.bioinformaticsIntelligenceScore,
+            dimensionAverages: {
+              insights: baselineRun.scores.insights,
+              clarity: baselineRun.scores.clarity,
+              scientificEvaluation: baselineRun.scores.scientificEvaluation,
+              bioinformaticsIntelligence: baselineRun.scores.bioinformaticsIntelligence,
+              actionableInsights: baselineRun.scores.actionableInsights,
+            },
+            runs: [baselineRun],
+          },
+        ],
+      }
+    : null;
+
+  const currentDisplaySuite = activeSuite || suites[0] || baselinePreviewSuite;
+
+  const lastSuiteIdRef = useRef<string | null>(null);
+  const knownRunIdsRef = useRef<Set<string>>(new Set());
+
+  // Sync selected run IDs when suite loads or changes, or when runs are added/removed
   useEffect(() => {
-    if (suites.length > 0 && suites[0]?.runs) {
-      setSelectedRunIds((prev) => {
-        const allIds = suites[0].runs.map((r) => r.id);
-        if (prev.length === 0) return allIds;
-        const valid = new Set(allIds);
-        const retained = prev.filter((id) => valid.has(id));
-        allIds.forEach((id) => {
-          if (!prev.includes(id) && !retained.includes(id)) {
-            retained.push(id);
-          }
-        });
-        return retained.length > 0 ? retained : allIds;
-      });
+    if (!currentDisplaySuite || !currentDisplaySuite.runs || currentDisplaySuite.runs.length === 0) {
+      return;
     }
-  }, [suites]);
+
+    const currentRuns = currentDisplaySuite.runs;
+    const currentRunIds = currentRuns.map((r) => r.id);
+    const suiteId = currentDisplaySuite.id;
+
+    if (suiteId !== lastSuiteIdRef.current) {
+      // First load or user switched suites: select all runs in this suite
+      lastSuiteIdRef.current = suiteId;
+      knownRunIdsRef.current = new Set(currentRunIds);
+      setSelectedRunIds(currentRunIds);
+    } else {
+      // Same suite: check if runs were added or removed
+      const currentIdSet = new Set(currentRunIds);
+      const newlyDiscovered = currentRunIds.filter((id) => !knownRunIdsRef.current.has(id));
+      const hasDeleted = Array.from(knownRunIdsRef.current).some((id: string) => !currentIdSet.has(id));
+
+      if (newlyDiscovered.length > 0 || hasDeleted) {
+        knownRunIdsRef.current = currentIdSet;
+        setSelectedRunIds((prev) => {
+          const retained = prev.filter((id) => currentIdSet.has(id));
+          return [...retained, ...newlyDiscovered];
+        });
+      }
+    }
+  }, [currentDisplaySuite?.id, currentDisplaySuite?.runs]);
 
   // Expanded runs in details view
   const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
@@ -187,6 +297,117 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
   const [telemetryViewMode, setTelemetryViewMode] = useState<
     "time" | "turns" | "inputTokens" | "outputTokens" | "all"
   >("time");
+
+  // AI Audit (Autonomous Performance Review) state
+  const [auditStatus, setAuditStatus] = useState<PerformanceReviewStatus | null>(null);
+  const [auditContent, setAuditContent] = useState<string>("");
+  const [isGeneratingAudit, setIsGeneratingAudit] = useState<boolean>(false);
+  const [customAuditFocus, setCustomAuditFocus] = useState<string>("");
+  const [showAuditFocusInput, setShowAuditFocusInput] = useState<boolean>(false);
+  const [auditCopied, setAuditCopied] = useState<boolean>(false);
+  const [isEditingAudit, setIsEditingAudit] = useState<boolean>(false);
+  const [auditEditBuffer, setAuditEditBuffer] = useState<string>("");
+  const [auditSaveNotice, setAuditSaveNotice] = useState<boolean>(false);
+  const [auditGenStep, setAuditGenStep] = useState<number>(0);
+  const [isAuditExpanded, setIsAuditExpanded] = useState<boolean>(true);
+
+  const fetchAuditStatusAndContent = async () => {
+    try {
+      const res = await fetch("/api/performance-review/content");
+      const data = await res.json();
+      if (data.ok) {
+        setAuditStatus(data.status);
+        if (data.content) {
+          setAuditContent(data.content);
+          setAuditEditBuffer(data.content);
+        }
+      }
+    } catch (err: any) {
+      console.warn("Notice: AI Audit status fetch:", err.message);
+    }
+  };
+
+  useEffect(() => {
+    fetchAuditStatusAndContent();
+  }, []);
+
+  useEffect(() => {
+    if (!isGeneratingAudit) return;
+    const interval = setInterval(() => {
+      setAuditGenStep((s) => (s + 1) % 4);
+    }, 3200);
+    return () => clearInterval(interval);
+  }, [isGeneratingAudit]);
+
+  const handleGenerateAudit = async () => {
+    setIsGeneratingAudit(true);
+    setErrorMsg(null);
+    setAuditGenStep(0);
+    try {
+      const res = await fetch("/api/performance-review/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customFocus: customAuditFocus.trim() || undefined }),
+      });
+      const data: PerformanceReviewResult = await res.json();
+      if (data.ok && data.reviewMarkdown) {
+        setAuditContent(data.reviewMarkdown);
+        setAuditEditBuffer(data.reviewMarkdown);
+        setIsAuditExpanded(true);
+        await fetchAuditStatusAndContent();
+      } else {
+        setErrorMsg(data.error || "AI Audit generation failed.");
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || "Network error while generating AI Audit");
+    } finally {
+      setIsGeneratingAudit(false);
+    }
+  };
+
+  const handleSaveAuditEdit = async () => {
+    try {
+      const res = await fetch("/api/performance-review/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: auditEditBuffer }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setAuditContent(auditEditBuffer);
+        setIsEditingAudit(false);
+        setAuditSaveNotice(true);
+        setTimeout(() => setAuditSaveNotice(false), 2000);
+      } else {
+        setErrorMsg(data.error || "Failed to save AI Audit edits");
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || "Failed to save edits");
+    }
+  };
+
+  const handleCopyAudit = () => {
+    if (!auditContent) return;
+    navigator.clipboard.writeText(auditContent);
+    setAuditCopied(true);
+    setTimeout(() => setAuditCopied(false), 2000);
+  };
+
+  const renderedAuditHtml = React.useMemo(() => {
+    if (!auditContent) return "";
+    try {
+      return marked.parse(auditContent, { async: false }) as string;
+    } catch {
+      return auditContent;
+    }
+  }, [auditContent]);
+
+  const auditStepDescriptions = [
+    "Auditing workspace logs (logs/pipeline.md, logs/*/chat.md, logs/*/console.log)...",
+    "Extracting tool call histories, parameter schemas, and console warning/error traces...",
+    "Evaluating biological hypotheses and data grounding in docs/observations.md and docs/manuscript.md...",
+    "Tier-3 Reasoner model attributing bugs to [LLM], [Prompt], or [Tools] and drafting comprehensive audit...",
+  ];
 
   // Scoring current workspace state on-demand
   const [isScoringCurrent, setIsScoringCurrent] = useState<boolean>(false);
@@ -219,50 +440,29 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
     loadBaseline();
   }, []);
 
-  // Fetch models for provider without clobbering user selection or custom models
+  // Fetch models across providers
   useEffect(() => {
-    fetchApiJson(`/api/evaluation/models?provider=${selectedProvider}`)
+    fetchApiJson("/api/evaluation/models")
       .then((data) => {
         if (data.ok && Array.isArray(data.models)) {
           setAvailableModels(data.models);
-
-          // Check if user already has saved selections for this provider in localStorage
-          const stored = loadStoredSelectedModels(selectedProvider);
-          if (stored && stored.length > 0) {
-            setSelectedModelIds(stored);
-            return;
-          }
-
-          // Otherwise default to top recommended models
-          setSelectedModelIds((prev) => {
-            if (prev.length > 0) return prev;
-            const recommended = data.models
-              .filter((m: ModelCatalogEntry) => m.isRecommended)
-              .map((m: ModelCatalogEntry) => m.id);
-            const defaults =
-              recommended.length > 0
-                ? recommended.slice(0, 3)
-                : data.models.slice(0, 2).map((m: ModelCatalogEntry) => m.id);
-            try {
-              localStorage.setItem(
-                `${STORAGE_SELECTED_MODELS_PREFIX}${selectedProvider}`,
-                JSON.stringify(defaults)
-              );
-            } catch (_) {}
-            return defaults;
-          });
         }
       })
       .catch((err) => console.error("Error fetching models:", err));
-  }, [selectedProvider]);
+  }, []);
 
   // Fetch experiments and benchmark suites
+  const prevBenchmarksRef = useRef<string>("");
   const refreshBenchmarks = () => {
     fetchApiJson("/api/evaluation/benchmarks")
       .then((data) => {
         if (data.ok) {
-          setSuites(data.suites || []);
-          setActiveSuite(data.activeSuite || null);
+          const serialized = JSON.stringify({ suites: data.suites, activeSuite: data.activeSuite });
+          if (serialized !== prevBenchmarksRef.current) {
+            prevBenchmarksRef.current = serialized;
+            setSuites(data.suites || []);
+            setActiveSuite(data.activeSuite || null);
+          }
         }
       })
       .catch((err) => console.error("Error fetching benchmarks:", err));
@@ -284,51 +484,124 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
 
   useEffect(() => {
     refreshBenchmarks();
-    const interval = setInterval(refreshBenchmarks, 4000);
+    const interval = setInterval(refreshBenchmarks, 3000);
     return () => clearInterval(interval);
   }, []);
 
-  const handleSelectProvider = (providerId: string) => {
-    setSelectedProvider(providerId);
-    try {
-      localStorage.setItem(STORAGE_SELECTED_PROVIDER, providerId);
-    } catch (_) {}
-    const stored = loadStoredSelectedModels(providerId);
-    setSelectedModelIds(stored);
-  };
+  const runningQueue =
+    activeSuite && activeSuite.status === "running"
+      ? Array.from(
+          new Set([
+            ...(activeSuite.activeRun?.model ? [activeSuite.activeRun.model] : []),
+            ...(activeSuite.queue || []),
+          ])
+        )
+      : [];
 
-  const handleToggleModel = (modelId: string) => {
-    setSelectedModelIds((prev) => {
-      const next = prev.includes(modelId) ? prev.filter((id) => id !== modelId) : [...prev, modelId];
-      try {
-        localStorage.setItem(`${STORAGE_SELECTED_MODELS_PREFIX}${selectedProvider}`, JSON.stringify(next));
-      } catch (_) {}
+  const effectiveQueue =
+    activeSuite && activeSuite.status === "running" ? runningQueue : queuedModelIds;
+
+  const handleAddToQueue = async (modelId: string) => {
+    const trimmed = modelId.trim();
+    if (!trimmed) return;
+    setQueuedModelIds((prev) => {
+      if (prev.includes(trimmed)) return prev;
+      const next = [...prev, trimmed];
+      saveStoredQueue(next);
       return next;
     });
+
+    if (activeSuite && activeSuite.status === "running") {
+      try {
+        const tokens = modelMaxTokens[trimmed];
+        const res = await fetchApiJson("/api/evaluation/queue/add", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            models: [trimmed],
+            modelMaxTokens: tokens ? { [trimmed]: tokens } : undefined,
+          }),
+        });
+        if (res.ok && Array.isArray(res.queue)) {
+          setActiveSuite((prev) => (prev ? { ...prev, queue: res.queue } : null));
+        }
+      } catch (err) {
+        console.error("Error adding model to running queue:", err);
+      }
+    }
+    setModelActionFeedback(`✓ Added to Queue: "${trimmed}"`);
+    setTimeout(() => setModelActionFeedback(null), 3000);
   };
 
-  const handleRemoveSelectedModel = (modelId: string) => {
-    setSelectedModelIds((prev) => {
+  const handleRemoveFromQueue = async (modelId: string) => {
+    setQueuedModelIds((prev) => {
       const next = prev.filter((id) => id !== modelId);
-      try {
-        localStorage.setItem(`${STORAGE_SELECTED_MODELS_PREFIX}${selectedProvider}`, JSON.stringify(next));
-      } catch (_) {}
+      saveStoredQueue(next);
       return next;
     });
+
+    if (activeSuite && activeSuite.status === "running") {
+      try {
+        const res = await fetchApiJson("/api/evaluation/queue/remove", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: modelId }),
+        });
+        if (res.ok && Array.isArray(res.queue)) {
+          setActiveSuite((prev) => (prev ? { ...prev, queue: res.queue } : null));
+        }
+      } catch (err) {
+        console.error("Error removing model from running queue:", err);
+      }
+    }
   };
 
-  const handleSelectAll = (ids: string[]) => {
-    setSelectedModelIds(ids);
-    try {
-      localStorage.setItem(`${STORAGE_SELECTED_MODELS_PREFIX}${selectedProvider}`, JSON.stringify(ids));
-    } catch (_) {}
+  const handleSelectAll = async (ids: string[]) => {
+    setQueuedModelIds((prev) => {
+      const next = Array.from(new Set([...prev, ...ids]));
+      saveStoredQueue(next);
+      return next;
+    });
+
+    if (activeSuite && activeSuite.status === "running") {
+      const currentQueue = activeSuite.queue || [];
+      const toAdd = ids.filter((id) => !currentQueue.includes(id) && activeSuite.activeRun?.model !== id);
+      if (toAdd.length > 0) {
+        try {
+          const res = await fetchApiJson("/api/evaluation/queue/add", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              models: toAdd,
+              modelMaxTokens,
+            }),
+          });
+          if (res.ok && Array.isArray(res.queue)) {
+            setActiveSuite((prev) => (prev ? { ...prev, queue: res.queue } : null));
+          }
+        } catch (err) {
+          console.error("Error enqueuing models:", err);
+        }
+      }
+    }
   };
 
-  const handleClearAll = () => {
-    setSelectedModelIds([]);
-    try {
-      localStorage.setItem(`${STORAGE_SELECTED_MODELS_PREFIX}${selectedProvider}`, JSON.stringify([]));
-    } catch (_) {}
+  const handleClearAll = async () => {
+    setQueuedModelIds([]);
+    saveStoredQueue([]);
+
+    if (activeSuite && activeSuite.status === "running" && activeSuite.queue) {
+      for (const m of activeSuite.queue) {
+        try {
+          await fetchApiJson("/api/evaluation/queue/remove", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model: m }),
+          });
+        } catch (_) {}
+      }
+      setActiveSuite((prev) => (prev ? { ...prev, queue: [] } : null));
+    }
   };
 
   const handleSetIterations = (n: number) => {
@@ -338,20 +611,25 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
     } catch (_) {}
   };
 
-  const handleAddCustomModel = () => {
+  const handleAddCustomModel = async () => {
     const trimmed = customModelInput.trim();
     if (!trimmed) return;
 
     let updatedCustom = [...customModels];
     const existing = [...availableModels, ...customModels].find((m) => m.id === trimmed);
     if (!existing) {
+      const inferredProvider = trimmed.includes("/")
+        ? "openrouter"
+        : selectedProviderFilter !== "all"
+        ? selectedProviderFilter
+        : "openrouter";
       const newCustom: ModelCatalogEntry = {
         id: trimmed,
-        name: trimmed,
-        provider: selectedProvider,
+        name: trimmed.includes("/") ? trimmed.split("/")[1] : trimmed,
+        provider: inferredProvider,
         tier: "T2",
         contextWindow: 128000,
-        description: `Custom model ID configured for ${selectedProvider}`,
+        description: `Custom model ID configured for ${inferredProvider}`,
         isCustom: true,
       };
       updatedCustom = [...customModels, newCustom];
@@ -361,16 +639,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
       } catch (_) {}
     }
 
-    if (!selectedModelIds.includes(trimmed)) {
-      const nextSelected = [...selectedModelIds, trimmed];
-      setSelectedModelIds(nextSelected);
-      try {
-        localStorage.setItem(
-          `${STORAGE_SELECTED_MODELS_PREFIX}${selectedProvider}`,
-          JSON.stringify(nextSelected)
-        );
-      } catch (_) {}
-    }
+    await handleAddToQueue(trimmed);
     setCustomModelInput("");
     setModelActionFeedback(`✓ Added and queued model: "${trimmed}"`);
     setTimeout(() => setModelActionFeedback(null), 3500);
@@ -383,15 +652,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
       localStorage.setItem(STORAGE_CUSTOM_MODELS, JSON.stringify(updatedCustom));
     } catch (_) {}
 
-    const nextSelected = selectedModelIds.filter((id) => id !== modelId);
-    setSelectedModelIds(nextSelected);
-    try {
-      localStorage.setItem(
-        `${STORAGE_SELECTED_MODELS_PREFIX}${selectedProvider}`,
-        JSON.stringify(nextSelected)
-      );
-    } catch (_) {}
-
+    handleRemoveFromQueue(modelId);
     setModelActionFeedback(`Removed custom model: "${modelId}"`);
     setTimeout(() => setModelActionFeedback(null), 3500);
   };
@@ -422,25 +683,30 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
   };
 
   const handleStartBenchmark = async () => {
-    if (selectedModelIds.length === 0) {
-      setErrorMsg("Please select at least one LLM to benchmark.");
+    if (effectiveQueue.length === 0) {
+      setErrorMsg("Please add at least one LLM to the queue before running.");
       return;
     }
     setErrorMsg(null);
     setIsLoading(true);
 
     try {
+      const allCatalog = [...availableModels, ...customModels];
+      const primaryProvider =
+        allCatalog.find((m) => m.id === effectiveQueue[0])?.provider ||
+        (selectedProviderFilter !== "all" ? selectedProviderFilter : "openrouter");
+
       const data = await fetchApiJson("/api/evaluation/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          provider: selectedProvider,
-          models: selectedModelIds,
+          provider: primaryProvider,
+          models: effectiveQueue,
           modelMaxTokens: Object.fromEntries(
-            Object.entries(modelMaxTokens).filter(([id, val]) => selectedModelIds.includes(id) && Boolean(val))
+            Object.entries(modelMaxTokens).filter(([id, val]) => effectiveQueue.includes(id) && Boolean(val))
           ),
           iterations,
-          experimentPath: selectedExpPath,
+          experimentPath: selectedExpPath || "docs/experiment.md",
         }),
       });
       if (!data.ok) {
@@ -511,50 +777,6 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
       setIsDeletingRunId(null);
     }
   };
-
-  // Construct baseline preview suite if no multi-model benchmark suite has run yet
-  const baselinePreviewSuite: BenchmarkSuite | null = baselineRun
-    ? {
-        id: "suite_workspace_baseline",
-        title: `Workspace Baseline Run: ${baselineRun.model}`,
-        createdAt: baselineRun.timestamp,
-        provider: baselineRun.provider,
-        models: [baselineRun.model],
-        iterations: 1,
-        experimentPath: "docs/experiment.md",
-        experimentTitle: baselineRun.manuscriptTitle || "Active Completed Project",
-        status: "completed",
-        runs: [baselineRun],
-        aggregated: [
-          {
-            model: baselineRun.model,
-            provider: baselineRun.provider,
-            isBaseline: true,
-            completedRuns: 1,
-            failedRuns: 0,
-            meanDurationSeconds: baselineRun.totalDurationSeconds,
-            meanTurns: baselineRun.totalTurns,
-            meanPromptTokens: baselineRun.tokenUsage.promptTokens,
-            meanCompletionTokens: baselineRun.tokenUsage.completionTokens,
-            meanTotalTokens: baselineRun.tokenUsage.totalTokens,
-            meanOverallScore: baselineRun.scores.overallBenchmarkScore,
-            meanManuscriptScore: baselineRun.scores.overallManuscriptScore,
-            meanMcpToolUseScore: baselineRun.scores.mcpToolUseScore,
-            meanBioinformaticsIntelligence: baselineRun.scores.bioinformaticsIntelligenceScore,
-            dimensionAverages: {
-              insights: baselineRun.scores.insights,
-              clarity: baselineRun.scores.clarity,
-              scientificEvaluation: baselineRun.scores.scientificEvaluation,
-              bioinformaticsIntelligence: baselineRun.scores.bioinformaticsIntelligence,
-              actionableInsights: baselineRun.scores.actionableInsights,
-            },
-            runs: [baselineRun],
-          },
-        ],
-      }
-    : null;
-
-  const currentDisplaySuite = activeSuite || suites[0] || baselinePreviewSuite;
 
   // Active runs selected by the user for comparison
   const activeRuns = React.useMemo(() => {
@@ -702,6 +924,12 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
           agg.meanBioinformaticsIntelligence,
         ],
         text: [
+          agg.meanOverallScore > 0 ? String(agg.meanOverallScore) : "",
+          scaledManuscript > 0 ? `${scaledManuscript}%` : "",
+          agg.meanMcpToolUseScore > 0 ? `${agg.meanMcpToolUseScore}%` : "",
+          agg.meanBioinformaticsIntelligence > 0 ? String(agg.meanBioinformaticsIntelligence) : "",
+        ],
+        hoverText: [
           `${agg.meanOverallScore} / 100`,
           `${agg.meanManuscriptScore} / 10 (${scaledManuscript}%)`,
           `${agg.meanMcpToolUseScore}%`,
@@ -730,6 +958,13 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
           agg.dimensionAverages.actionableInsights,
         ],
         text: [
+          String(agg.dimensionAverages.insights),
+          String(agg.dimensionAverages.clarity),
+          String(agg.dimensionAverages.scientificEvaluation),
+          String(agg.dimensionAverages.bioinformaticsIntelligence),
+          String(agg.dimensionAverages.actionableInsights),
+        ],
+        hoverText: [
           `${agg.dimensionAverages.insights} / 10`,
           `${agg.dimensionAverages.clarity} / 10`,
           `${agg.dimensionAverages.scientificEvaluation} / 10`,
@@ -768,6 +1003,11 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
       const inTokTexts: string[] = [];
       const outTokTexts: string[] = [];
 
+      const timeHoverTexts: string[] = [];
+      const turnHoverTexts: string[] = [];
+      const inTokHoverTexts: string[] = [];
+      const outTokHoverTexts: string[] = [];
+
       phaseList.forEach((p) => {
         let durSum = 0;
         let turnSum = 0;
@@ -801,12 +1041,17 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
         turnTexts.push(`${avgTurns}`);
         inTokTexts.push(`${avgInTok.toLocaleString()}`);
         outTokTexts.push(`${avgOutTok.toLocaleString()}`);
+
+        timeHoverTexts.push(avgDur < 60 ? `${avgDur}s` : `${Math.floor(avgDur / 60)}m ${avgDur % 60}s`);
+        turnHoverTexts.push(`${avgTurns} turns`);
+        inTokHoverTexts.push(`${avgInTok.toLocaleString()} input tokens`);
+        outTokHoverTexts.push(`${avgOutTok.toLocaleString()} output tokens`);
       });
 
-      time.push({ name: modelDisplayName, values: timeVals, text: timeTexts, color: modelColor });
-      turns.push({ name: modelDisplayName, values: turnVals, text: turnTexts, color: modelColor });
-      inTok.push({ name: modelDisplayName, values: inTokVals, text: inTokTexts, color: modelColor });
-      outTok.push({ name: modelDisplayName, values: outTokVals, text: outTokTexts, color: modelColor });
+      time.push({ name: modelDisplayName, values: timeVals, text: timeTexts, hoverText: timeHoverTexts, color: modelColor });
+      turns.push({ name: modelDisplayName, values: turnVals, text: turnTexts, hoverText: turnHoverTexts, color: modelColor });
+      inTok.push({ name: modelDisplayName, values: inTokVals, text: inTokTexts, hoverText: inTokHoverTexts, color: modelColor });
+      outTok.push({ name: modelDisplayName, values: outTokVals, text: outTokTexts, hoverText: outTokHoverTexts, color: modelColor });
     });
 
     return { timeSeries: time, turnsSeries: turns, inputTokensSeries: inTok, outputTokensSeries: outTok };
@@ -814,584 +1059,830 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
 
 
 
-  const renderWorkspaceSubTab = () => (
-    <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-      {/* Header Banner */}
+  const renderReviewSubTab = () => (
+    <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+      {/* ======================================================== */}
+      {/* 1. TOP SECTION: [AI Audit] (formerly Performance Review) */}
+      {/* ======================================================== */}
       <div
         style={{
           background: "var(--panel)",
           border: "1px solid var(--border)",
           borderRadius: "8px",
-          padding: "16px 20px",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          flexWrap: "wrap",
-          gap: "12px",
-        }}
-      >
-        <div>
-          <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--fg-bright)", display: "flex", alignItems: "center", gap: "8px" }}>
-            <Award size={16} color="var(--primary)" />
-            Active Workspace Live Evaluation &amp; Rubric
-          </div>
-          <div style={{ fontSize: "11.5px", color: "var(--muted)", marginTop: "2px" }}>
-            Score the current workspace's manuscript (<code>docs/manuscript.md</code>) and TidyProteomics MCP tool telemetry on-demand using the 5-dimension publication rubric.
-          </div>
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          {onOpenFile && (
-            <>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => onOpenFile("docs/manuscript.md")}
-                style={{ gap: "5px" }}
-                title="Open docs/manuscript.md"
-              >
-                <FileText size={12} /> View Manuscript
-              </button>
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                onClick={() => onOpenFile("logs/pipeline.md")}
-                style={{ gap: "5px" }}
-                title="Open logs/pipeline.md"
-              >
-                <Terminal size={12} /> View Logs
-              </button>
-            </>
-          )}
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            onClick={handleScoreCurrentWorkspace}
-            disabled={isScoringCurrent}
-            style={{ gap: "6px" }}
-          >
-            <Award size={13} />
-            {isScoringCurrent ? "Evaluating Workspace..." : "Score Current Workspace"}
-          </button>
-        </div>
-      </div>
-
-      {/* On-Demand Workspace Score Card */}
-      {currentScoreResult && (
-        <div
-          style={{
-            background: "linear-gradient(180deg, rgba(59, 130, 246, 0.08) 0%, rgba(15, 23, 42, 0.4) 100%)",
-            border: "1px solid rgba(59, 130, 246, 0.3)",
-            borderRadius: "8px",
-            padding: "14px 18px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "12px",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ fontSize: "12.5px", fontWeight: 700, color: "var(--fg-bright)", display: "flex", alignItems: "center", gap: "6px" }}>
-              <Award size={15} color="#60a5fa" />
-              Active Workspace Live Evaluation Scores
-            </span>
-            <button
-              type="button"
-              className="btn btn-secondary btn-xs"
-              onClick={() => setCurrentScoreResult(null)}
-            >
-              Dismiss
-            </button>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: "10px" }}>
-            <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
-              <div style={{ fontSize: "10.5px", color: "var(--muted)", textTransform: "uppercase", fontWeight: 600 }}>Overall Benchmark Score</div>
-              <div style={{ fontSize: "20px", fontWeight: 800, color: "#60a5fa", marginTop: "2px" }}>
-                {currentScoreResult.scores.overallBenchmarkScore}<span style={{ fontSize: "12px", color: "var(--muted)" }}>/100</span>
-              </div>
-            </div>
-            <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
-              <div style={{ fontSize: "10.5px", color: "var(--muted)", textTransform: "uppercase", fontWeight: 600 }}>Overall Manuscript Score</div>
-              <div style={{ fontSize: "20px", fontWeight: 800, color: "#34d399", marginTop: "2px" }}>
-                {currentScoreResult.scores.overallManuscriptScore}<span style={{ fontSize: "12px", color: "var(--muted)" }}>/10</span>
-              </div>
-            </div>
-            <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
-              <div style={{ fontSize: "10.5px", color: "var(--muted)", textTransform: "uppercase", fontWeight: 600 }}>TidyProteomics-MCP Tool Score</div>
-              <div style={{ fontSize: "20px", fontWeight: 800, color: "#f59e0b", marginTop: "2px" }}>
-                {currentScoreResult.scores.mcpToolUseScore}<span style={{ fontSize: "12px", color: "var(--muted)" }}>%</span>
-              </div>
-            </div>
-            <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
-              <div style={{ fontSize: "10.5px", color: "var(--muted)", textTransform: "uppercase", fontWeight: 600 }}>Bioinformatics Intelligence</div>
-              <div style={{ fontSize: "20px", fontWeight: 800, color: "#c084fc", marginTop: "2px" }}>
-                {currentScoreResult.scores.bioinformaticsIntelligenceScore}<span style={{ fontSize: "12px", color: "var(--muted)" }}>/100</span>
-              </div>
-            </div>
-          </div>
-
-          {/* 5 Manuscript Dimensions Strip */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: "8px" }}>
-            {[
-              { label: "Insights", val: currentScoreResult.scores.insights },
-              { label: "Clarity", val: currentScoreResult.scores.clarity },
-              { label: "Scientific Rigor", val: currentScoreResult.scores.scientificEvaluation },
-              { label: "Bioinfo Rigor", val: currentScoreResult.scores.bioinformaticsIntelligence },
-              { label: "Actionable Insights", val: currentScoreResult.scores.actionableInsights },
-            ].map((d) => (
-              <div key={d.label} style={{ background: "rgba(0,0,0,0.25)", border: "1px solid var(--border)", borderRadius: "6px", padding: "6px 8px", textAlign: "center" }}>
-                <div style={{ fontSize: "9.5px", color: "var(--muted)", textTransform: "uppercase" }}>{d.label}</div>
-                <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--fg-bright)" }}>{d.val}/10</div>
-              </div>
-            ))}
-          </div>
-
-          {currentScoreResult.scores.rubricNotes && (
-            <div style={{ fontSize: "11.5px", color: "var(--muted)", fontStyle: "italic", background: "rgba(0,0,0,0.2)", padding: "6px 10px", borderRadius: "4px" }}>
-              Feedback: {currentScoreResult.scores.rubricNotes}
-            </div>
-          )}
-        </div>
-      )}
-
-      {!currentScoreResult && (
-        <div
-          style={{
-            background: "var(--panel)",
-            border: "1px dashed var(--border)",
-            borderRadius: "8px",
-            padding: "24px 28px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "16px",
-          }}
-        >
-          <div style={{ fontSize: "13px", color: "var(--fg)", lineHeight: "1.6" }}>
-            Evaluate the active workspace outputs on-demand without launching a full multi-model benchmark suite. The scoring engine evaluates the following dimensions:
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "12px" }}>
-            <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "12px 14px" }}>
-              <div style={{ fontSize: "12px", fontWeight: 700, color: "#60a5fa", marginBottom: "4px" }}>
-                1. 5-Dimension Manuscript Rubric
-              </div>
-              <div style={{ fontSize: "11px", color: "var(--muted)" }}>
-                Evaluates Insights, Clarity, Scientific Rigor, Bioinformatics Rigor, and Actionable Roadmap in <code>docs/manuscript.md</code>.
-              </div>
-            </div>
-
-            <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "12px 14px" }}>
-              <div style={{ fontSize: "12px", fontWeight: 700, color: "#34d399", marginBottom: "4px" }}>
-                2. TidyProteomics-MCP Tool Telemetry
-              </div>
-              <div style={{ fontSize: "11px", color: "var(--muted)" }}>
-                Measures tool invocation accuracy, parameter compliance, and execution success across analysis phases.
-              </div>
-            </div>
-
-            <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "12px 14px" }}>
-              <div style={{ fontSize: "12px", fontWeight: 700, color: "#f59e0b", marginBottom: "4px" }}>
-                3. Bioinformatics Intelligence
-              </div>
-              <div style={{ fontSize: "11px", color: "var(--muted)" }}>
-                Assesses biological interpretation, statistical thresholds, volcano/heatmap choices, and pathway context.
-              </div>
-            </div>
-
-            <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "12px 14px" }}>
-              <div style={{ fontSize: "12px", fontWeight: 700, color: "#c084fc", marginBottom: "4px" }}>
-                4. Reference Baseline Calibration
-              </div>
-              <div style={{ fontSize: "11px", color: "var(--muted)" }}>
-                Establishes the active project run as the reference baseline against which automated benchmarks compare.
-              </div>
-            </div>
-          </div>
-
-          <div style={{ marginTop: "4px" }}>
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              onClick={handleScoreCurrentWorkspace}
-              disabled={isScoringCurrent}
-              style={{ gap: "6px", padding: "8px 16px", fontSize: "13px" }}
-            >
-              <Award size={15} />
-              {isScoringCurrent ? "Evaluating Workspace Artifacts..." : "Score Current Workspace Now"}
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
-
-  const renderBenchmarkSubTab = () => (
-    <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-      {/* Benchmark Suite Configuration Panel */}
-      <div
-        style={{
-          background: "var(--panel)",
-          border: "1px solid var(--border)",
-          borderRadius: "8px",
-          padding: "14px 18px",
+          padding: "18px 20px",
           display: "flex",
           flexDirection: "column",
           gap: "14px",
         }}
       >
-        <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--fg-bright)", textTransform: "uppercase", letterSpacing: "0.5px", display: "flex", alignItems: "center", gap: "6px" }}>
-          <Cpu size={14} color="var(--primary)" />
-          Configure New Multi-Model Benchmark Run
-        </div>
-
-        {/* Provider Selection Tabs */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-          <label style={{ fontSize: "11px", fontWeight: 600, color: "var(--muted)", textTransform: "uppercase" }}>
-            1. Select LLM Provider (One provider at a time)
-          </label>
-          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            {[
-              { id: "openrouter", label: "OpenRouter (Multi-Model)" },
-              { id: "anthropic", label: "Anthropic Claude" },
-              { id: "openai", label: "OpenAI" },
-              { id: "gemini", label: "Google Gemini" },
-              { id: "ollama", label: "Ollama (Local Private)" },
-            ].map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                className={`btn btn-xs ${selectedProvider === p.id ? "btn-primary" : "btn-secondary"}`}
-                onClick={() => handleSelectProvider(p.id)}
-                style={{ padding: "6px 12px", fontSize: "11.5px" }}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "12px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--fg-bright)", display: "flex", alignItems: "center", gap: "8px" }}>
+              <Sparkles size={17} color="var(--warning)" />
+              <span>AI Audit</span>
+              <span
+                style={{
+                  fontSize: "10px",
+                  fontWeight: 600,
+                  textTransform: "uppercase",
+                  padding: "2px 7px",
+                  borderRadius: "4px",
+                  background: "rgba(245, 158, 11, 0.15)",
+                  color: "#f59e0b",
+                  border: "1px solid rgba(245, 158, 11, 0.3)",
+                }}
               >
-                {p.label}
+                Autonomous Agent Performance Review
+              </span>
+            </div>
+            <div style={{ fontSize: "12px", color: "var(--muted)", maxWidth: "750px", lineHeight: 1.5 }}>
+              Prompt the Tier-3 Reasoner model to audit all pipeline execution traces, evaluate MCP tool usage schemas, assess empirical grounding of biological hypotheses, and attribute bugs across <strong>[LLM]</strong>, <strong>[Prompt]</strong>, and <strong>[Tools]</strong>.
+            </div>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="btn btn-secondary btn-xs"
+              onClick={() => setShowAuditFocusInput((prev) => !prev)}
+              style={{ gap: "4px" }}
+              title="Add custom focus instruction for review generation"
+            >
+              <Edit3 size={11} /> {showAuditFocusInput ? "Hide Custom Focus" : "Custom Focus"}
+            </button>
+
+            {onOpenFile && (
+              <button
+                type="button"
+                className="btn btn-secondary btn-xs"
+                onClick={() => onOpenFile("docs/performance_review.md")}
+                style={{ gap: "4px" }}
+                title="Open docs/performance_review.md in editor"
+              >
+                <FileText size={11} /> View docs/performance_review.md
               </button>
-            ))}
+            )}
+
+            {auditContent && (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-xs"
+                  onClick={handleCopyAudit}
+                  style={{ gap: "4px" }}
+                  title="Copy markdown content to clipboard"
+                >
+                  {auditCopied ? <Check size={11} color="var(--success)" /> : <Copy size={11} />}
+                  {auditCopied ? "Copied" : "Copy"}
+                </button>
+
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-xs"
+                  onClick={() => setIsEditingAudit((prev) => !prev)}
+                  style={{ gap: "4px" }}
+                  title={isEditingAudit ? "Switch to formatted view" : "Edit review markdown directly"}
+                >
+                  {isEditingAudit ? <Eye size={11} /> : <Edit3 size={11} />}
+                  {isEditingAudit ? "Preview" : "Edit"}
+                </button>
+
+                {isEditingAudit && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-xs"
+                    onClick={handleSaveAuditEdit}
+                    style={{ gap: "4px", color: "var(--success)" }}
+                  >
+                    <Save size={11} /> {auditSaveNotice ? "Saved!" : "Save"}
+                  </button>
+                )}
+              </>
+            )}
+
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={handleGenerateAudit}
+              disabled={isGeneratingAudit}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "6px",
+                background: "linear-gradient(135deg, #f59e0b, #d97706)",
+                borderColor: "#b45309",
+                color: "#fff",
+                fontWeight: 600,
+              }}
+            >
+              <Sparkles size={13} />
+              {isGeneratingAudit ? "Auditing Pipeline..." : auditContent ? "Re-run AI Audit" : "Run AI Audit"}
+            </button>
           </div>
         </div>
 
-        {/* Experiment Setup & Iterations Selection */}
-        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "12px" }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+        {/* Custom Focus Prompt Input */}
+        {showAuditFocusInput && (
+          <div
+            style={{
+              background: "rgba(0,0,0,0.25)",
+              border: "1px solid var(--border)",
+              borderRadius: "6px",
+              padding: "10px 14px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "8px",
+            }}
+          >
+            <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--fg-bright)" }}>
+              Optional Custom Audit Directives:
+            </div>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <input
+                type="text"
+                className="input input-sm"
+                placeholder="e.g. Scrutinize volcano plot p-value cutoffs and inspect Phase 4 tool retry loops"
+                value={customAuditFocus}
+                onChange={(e) => setCustomAuditFocus(e.target.value)}
+                style={{ flex: 1, fontSize: "12px" }}
+                disabled={isGeneratingAudit}
+              />
+              {customAuditFocus && (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-xs"
+                  onClick={() => setCustomAuditFocus("")}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Active Generation Progress Banner */}
+        {isGeneratingAudit && (
+          <div
+            style={{
+              background: "linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(15, 23, 42, 0.6))",
+              border: "1px solid rgba(245, 158, 11, 0.4)",
+              borderRadius: "8px",
+              padding: "14px 18px",
+              display: "flex",
+              alignItems: "center",
+              gap: "12px",
+            }}
+          >
+            <span
+              className="spinner"
+              style={{
+                width: "16px",
+                height: "16px",
+                border: "2px solid #f59e0b",
+                borderTopColor: "transparent",
+                borderRadius: "50%",
+                flexShrink: 0,
+              }}
+            />
+            <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
+              <span style={{ fontSize: "12.5px", fontWeight: 700, color: "var(--fg-bright)" }}>
+                AI Audit in Progress
+              </span>
+              <span style={{ fontSize: "11.5px", color: "#f59e0b" }}>
+                {auditStepDescriptions[auditGenStep]}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Status Strip & 3 Pillars Overview */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px", fontSize: "11.5px" }}>
+          <div>
+            {auditStatus?.hasReview ? (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: "5px", color: "var(--success)", fontWeight: 600 }}>
+                <Check size={13} /> Active Audit Ready
+                {auditStatus.lastGenerated && (
+                  <span style={{ color: "var(--muted)", fontWeight: 400 }}>
+                    &middot; Generated {new Date(auditStatus.lastGenerated).toLocaleString()}
+                  </span>
+                )}
+              </span>
+            ) : auditStatus?.hasLogs ? (
+              <span style={{ color: "var(--muted)" }}>
+                Logs discovered across {auditStatus.phaseCount} phases. Ready for AI audit.
+              </span>
+            ) : (
+              <span style={{ color: "var(--muted)" }}>
+                No execution logs recorded in workspace yet.
+              </span>
+            )}
+          </div>
+
+          {auditContent && (
+            <button
+              type="button"
+              className="btn btn-secondary btn-xs"
+              onClick={() => setIsAuditExpanded((prev) => !prev)}
+              style={{ gap: "4px" }}
+            >
+              {isAuditExpanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+              {isAuditExpanded ? "Collapse Report" : "Expand Report"}
+            </button>
+          )}
+        </div>
+
+        {/* 3 Audit Pillars Grid */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "10px" }}>
+          <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "12px 14px", display: "flex", flexDirection: "column", gap: "4px" }}>
+            <div style={{ fontWeight: 700, fontSize: "12px", color: "#60a5fa" }}>
+              🛠️ Pillar 1: Tools &amp; Reasoning
+            </div>
+            <div style={{ fontSize: "11px", color: "var(--muted)", lineHeight: 1.45 }}>
+              Evaluates parameterization of MCP tools (<code>tpa_*</code>), wide tabular schemas, user HITL gates, and reasoning loop efficiency.
+            </div>
+          </div>
+
+          <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "12px 14px", display: "flex", flexDirection: "column", gap: "4px" }}>
+            <div style={{ fontWeight: 700, fontSize: "12px", color: "#34d399" }}>
+              🧬 Pillar 2: Scientific Hypotheses
+            </div>
+            <div style={{ fontSize: "11px", color: "var(--muted)", lineHeight: 1.45 }}>
+              Assesses empirical grounding of biological claims in volcano plots, fold changes, and GO enrichments vs. speculative leaps.
+            </div>
+          </div>
+
+          <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "12px 14px", display: "flex", flexDirection: "column", gap: "4px" }}>
+            <div style={{ fontWeight: 700, fontSize: "12px", color: "#f87171" }}>
+              🐞 Pillar 3: Bug Attribution
+            </div>
+            <div style={{ fontSize: "11px", color: "var(--muted)", lineHeight: 1.45 }}>
+              Audits errors, retry loops, and unexpected halts, strictly attributing issues to <strong>[LLM]</strong>, <strong>[Prompt]</strong>, or <strong>[Tools]</strong>.
+            </div>
+          </div>
+        </div>
+
+        {/* Content Box: Formatted Markdown or Edit Textarea */}
+        {auditContent && isAuditExpanded && (
+          <div
+            style={{
+              background: "var(--bg)",
+              border: "1px solid var(--border)",
+              borderRadius: "8px",
+              padding: isEditingAudit ? "12px" : "18px 24px",
+              maxHeight: "550px",
+              overflowY: "auto",
+            }}
+          >
+            {isEditingAudit ? (
+              <textarea
+                className="input"
+                value={auditEditBuffer}
+                onChange={(e) => setAuditEditBuffer(e.target.value)}
+                style={{
+                  width: "100%",
+                  minHeight: "360px",
+                  fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                  fontSize: "12px",
+                  lineHeight: 1.5,
+                  background: "transparent",
+                  color: "var(--fg)",
+                  border: "none",
+                  resize: "vertical",
+                  boxSizing: "border-box",
+                }}
+              />
+            ) : (
+              <div
+                className="markdown-body"
+                dangerouslySetInnerHTML={{ __html: renderedAuditHtml }}
+                style={{
+                  fontSize: "12.5px",
+                  lineHeight: 1.65,
+                  color: "var(--fg)",
+                }}
+              />
+            )}
+          </div>
+        )}
+
+        {!auditContent && !isGeneratingAudit && (
+          <div
+            style={{
+              background: "var(--bg)",
+              border: "1px dashed var(--border)",
+              borderRadius: "6px",
+              padding: "20px",
+              textAlign: "center",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: "8px",
+            }}
+          >
+            <div style={{ fontSize: "12px", color: "var(--muted)" }}>
+              No AI Audit generated yet for this workspace. Click <strong>Run AI Audit</strong> to inspect execution logs, tool parameters, and hypothesis grounding.
+            </div>
+            <button
+              type="button"
+              className="btn btn-secondary btn-xs"
+              onClick={handleGenerateAudit}
+              style={{ gap: "5px", color: "var(--warning)" }}
+            >
+              <Sparkles size={12} /> Run AI Audit Now
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ====================================================================== */}
+      {/* 2. BOTTOM SECTION: [Scientific Audit] (formerly Workspace Evaluation) */}
+      {/* ====================================================================== */}
+      <div
+        style={{
+          background: "var(--panel)",
+          border: "1px solid var(--border)",
+          borderRadius: "8px",
+          padding: "18px 20px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "14px",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
+          <div>
+            <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--fg-bright)", display: "flex", alignItems: "center", gap: "8px" }}>
+              <Award size={17} color="var(--primary)" />
+              <span>Scientific Audit</span>
+              <span
+                style={{
+                  fontSize: "10px",
+                  fontWeight: 600,
+                  textTransform: "uppercase",
+                  padding: "2px 7px",
+                  borderRadius: "4px",
+                  background: "rgba(59, 130, 246, 0.15)",
+                  color: "#60a5fa",
+                  border: "1px solid rgba(59, 130, 246, 0.3)",
+                }}
+              >
+                Manuscript &amp; Tool Rubric
+              </span>
+            </div>
+            <div style={{ fontSize: "12px", color: "var(--muted)", marginTop: "2px" }}>
+              Score the active workspace manuscript (<code>docs/manuscript.md</code>) and TidyProteomics MCP tool telemetry on-demand using the 5-dimension publication rubric.
+            </div>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            {onOpenFile && (
+              <>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => onOpenFile("docs/manuscript.md")}
+                  style={{ gap: "5px" }}
+                  title="Open docs/manuscript.md in viewer"
+                >
+                  <FileText size={12} /> View Manuscript
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => onOpenFile("logs/pipeline.md")}
+                  style={{ gap: "5px" }}
+                  title="Open logs/pipeline.md in viewer"
+                >
+                  <Terminal size={12} /> View Logs
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={handleScoreCurrentWorkspace}
+              disabled={isScoringCurrent}
+              style={{ gap: "6px" }}
+            >
+              <Award size={13} />
+              {isScoringCurrent ? "Evaluating Workspace..." : "Score Current Workspace"}
+            </button>
+          </div>
+        </div>
+
+        {/* On-Demand Workspace Score Card */}
+        {currentScoreResult && (
+          <div
+            style={{
+              background: "linear-gradient(180deg, rgba(59, 130, 246, 0.08) 0%, rgba(15, 23, 42, 0.4) 100%)",
+              border: "1px solid rgba(59, 130, 246, 0.3)",
+              borderRadius: "8px",
+              padding: "14px 18px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "12px",
+            }}
+          >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <label style={{ fontSize: "11px", fontWeight: 600, color: "var(--muted)", textTransform: "uppercase" }}>
-                2. Benchmark Target: Active Completed Project (No HITL Required)
-              </label>
-              {predefinedExperiments.length > 1 && (
+              <span style={{ fontSize: "12.5px", fontWeight: 700, color: "var(--fg-bright)", display: "flex", alignItems: "center", gap: "6px" }}>
+                <Award size={15} color="#60a5fa" />
+                Active Workspace Evaluation Scores
+              </span>
+              <button
+                type="button"
+                className="btn btn-secondary btn-xs"
+                onClick={() => setCurrentScoreResult(null)}
+              >
+                Dismiss
+              </button>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "10px" }}>
+              <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
+                <div style={{ fontSize: "10px", color: "var(--muted)", textTransform: "uppercase", fontWeight: 600 }}>Overall Benchmark Score</div>
+                <div style={{ fontSize: "20px", fontWeight: 800, color: "#60a5fa", marginTop: "2px" }}>
+                  {currentScoreResult.scores.overallBenchmarkScore}<span style={{ fontSize: "12px", color: "var(--muted)" }}>/100</span>
+                </div>
+              </div>
+              <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
+                <div style={{ fontSize: "10px", color: "var(--muted)", textTransform: "uppercase", fontWeight: 600 }}>Overall Manuscript Score</div>
+                <div style={{ fontSize: "20px", fontWeight: 800, color: "#34d399", marginTop: "2px" }}>
+                  {currentScoreResult.scores.overallManuscriptScore}<span style={{ fontSize: "12px", color: "var(--muted)" }}>/10</span>
+                </div>
+              </div>
+              <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
+                <div style={{ fontSize: "10px", color: "var(--muted)", textTransform: "uppercase", fontWeight: 600 }}>TidyProteomics-MCP Tool Score</div>
+                <div style={{ fontSize: "20px", fontWeight: 800, color: "#f59e0b", marginTop: "2px" }}>
+                  {currentScoreResult.scores.mcpToolUseScore}<span style={{ fontSize: "12px", color: "var(--muted)" }}>%</span>
+                </div>
+              </div>
+              <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
+                <div style={{ fontSize: "10px", color: "var(--muted)", textTransform: "uppercase", fontWeight: 600 }}>Bioinformatics Intelligence</div>
+                <div style={{ fontSize: "20px", fontWeight: 800, color: "#c084fc", marginTop: "2px" }}>
+                  {currentScoreResult.scores.bioinformaticsIntelligenceScore}<span style={{ fontSize: "12px", color: "var(--muted)" }}>/100</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 5 Manuscript Dimensions Strip */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: "8px" }}>
+              {[
+                { label: "Insights", val: currentScoreResult.scores.insights },
+                { label: "Clarity", val: currentScoreResult.scores.clarity },
+                { label: "Scientific Rigor", val: currentScoreResult.scores.scientificEvaluation },
+                { label: "Bioinfo Rigor", val: currentScoreResult.scores.bioinformaticsIntelligence },
+                { label: "Actionable Insights", val: currentScoreResult.scores.actionableInsights },
+              ].map((d) => (
+                <div key={d.label} style={{ background: "rgba(0,0,0,0.25)", border: "1px solid var(--border)", borderRadius: "6px", padding: "6px 8px", textAlign: "center" }}>
+                  <div style={{ fontSize: "9.5px", color: "var(--muted)", textTransform: "uppercase" }}>{d.label}</div>
+                  <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--fg-bright)" }}>{d.val}/10</div>
+                </div>
+              ))}
+            </div>
+
+            {currentScoreResult.scores.rubricNotes && (
+              <div style={{ fontSize: "11.5px", color: "var(--muted)", fontStyle: "italic", background: "rgba(0,0,0,0.2)", padding: "6px 10px", borderRadius: "4px" }}>
+                Feedback: {currentScoreResult.scores.rubricNotes}
+              </div>
+            )}
+          </div>
+        )}
+
+        {!currentScoreResult && (
+          <div
+            style={{
+              background: "var(--bg)",
+              border: "1px dashed var(--border)",
+              borderRadius: "8px",
+              padding: "20px 24px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "14px",
+            }}
+          >
+            <div style={{ fontSize: "12.5px", color: "var(--fg)", lineHeight: "1.6" }}>
+              Evaluate the active workspace outputs on-demand without launching a full multi-model benchmark suite. The scoring engine evaluates the following dimensions:
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "10px" }}>
+              <div style={{ background: "var(--panel)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
+                <div style={{ fontSize: "11.5px", fontWeight: 700, color: "#60a5fa", marginBottom: "3px" }}>
+                  1. 5-Dimension Manuscript Rubric
+                </div>
+                <div style={{ fontSize: "11px", color: "var(--muted)" }}>
+                  Evaluates Insights, Clarity, Scientific Rigor, Bioinformatics Rigor, and Actionable Roadmap in <code>docs/manuscript.md</code>.
+                </div>
+              </div>
+
+              <div style={{ background: "var(--panel)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
+                <div style={{ fontSize: "11.5px", fontWeight: 700, color: "#34d399", marginBottom: "3px" }}>
+                  2. TidyProteomics-MCP Telemetry
+                </div>
+                <div style={{ fontSize: "11px", color: "var(--muted)" }}>
+                  Measures tool invocation accuracy, parameter compliance, and execution success across analysis phases.
+                </div>
+              </div>
+
+              <div style={{ background: "var(--panel)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
+                <div style={{ fontSize: "11.5px", fontWeight: 700, color: "#f59e0b", marginBottom: "3px" }}>
+                  3. Bioinformatics Intelligence
+                </div>
+                <div style={{ fontSize: "11px", color: "var(--muted)" }}>
+                  Assesses biological interpretation, statistical thresholds, volcano/heatmap choices, and pathway context.
+                </div>
+              </div>
+
+              <div style={{ background: "var(--panel)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
+                <div style={{ fontSize: "11.5px", fontWeight: 700, color: "#c084fc", marginBottom: "3px" }}>
+                  4. Baseline Calibration
+                </div>
+                <div style={{ fontSize: "11px", color: "var(--muted)" }}>
+                  Establishes the active project run as the baseline against which automated benchmarks compare.
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={handleScoreCurrentWorkspace}
+                disabled={isScoringCurrent}
+                style={{ gap: "6px", padding: "6px 14px", fontSize: "12px" }}
+              >
+                <Award size={14} />
+                {isScoringCurrent ? "Evaluating Workspace Artifacts..." : "Score Current Workspace Now"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+
+  const renderBenchmarkSubTab = () => {
+    const allCatalog = [...availableModels, ...customModels];
+    const displayedModels =
+      selectedProviderFilter === "all"
+        ? allCatalog
+        : allCatalog.filter((m) => m.provider === selectedProviderFilter);
+
+    const currentExp =
+      predefinedExperiments.find((e) => e.path === selectedExpPath) ||
+      predefinedExperiments.find((e) => e.isCurrentWorkspace) ||
+      predefinedExperiments[0];
+
+    const isExperimentReady: boolean = (() => {
+      if (experimentSpec) {
+        const hasMissing =
+          (experimentSpec.missingInitialFields && experimentSpec.missingInitialFields.length > 0) ||
+          !experimentSpec.exists ||
+          !experimentSpec.pathToDataFile?.trim() ||
+          !experimentSpec.platform?.trim() ||
+          !experimentSpec.analyte?.trim() ||
+          !experimentSpec.description?.trim();
+        if (hasMissing) return false;
+      }
+      if (currentExp && currentExp.isHitlFreeReady === false) {
+        return false;
+      }
+      return true;
+    })();
+
+    // Calculate pipeline progress metrics
+    const isRunning = activeSuite?.status === "running";
+    const currentModel = activeSuite?.activeRun?.model || (isRunning ? "Evaluating..." : null);
+    const runningPhaseObj = pipelineState?.phases?.find((p) => p.status === "running");
+    const currentPhase =
+      activeSuite?.activeRun?.phaseTitle ||
+      runningPhaseObj?.title ||
+      runningPhaseObj?.fileName ||
+      (isRunning ? "Running pipeline" : "Idle");
+
+    const enabledPhases = pipelineState?.phases?.filter((p) => p.enabled) || [];
+    const totalPhaseCount = enabledPhases.length || 7;
+    const completedPhaseCount = enabledPhases.filter((p) => p.status === "completed").length;
+    const runningPhaseIdx = enabledPhases.findIndex((p) => p.status === "running");
+    const effectivePhaseIdx =
+      runningPhaseIdx >= 0 ? runningPhaseIdx + 1 : (completedPhaseCount > 0 ? completedPhaseCount : 0);
+    const phaseProgressPct = isRunning
+      ? Math.min(100, Math.max(10, Math.round((effectivePhaseIdx / totalPhaseCount) * 100)))
+      : (activeSuite?.status === "completed" ? 100 : 0);
+
+    const filledTicks = Math.round((phaseProgressPct / 100) * 10);
+    const asciiBar = "=".repeat(filledTicks) + "-".repeat(10 - filledTicks);
+
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+        {/* Benchmark Suite Configuration Panel */}
+        <div
+          style={{
+            background: "var(--panel)",
+            border: "1px solid var(--border)",
+            borderRadius: "8px",
+            padding: "16px 20px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "18px",
+          }}
+        >
+          {/* 1. Workspace indicator */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                1. Workspace
+              </span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+              {isExperimentReady ? (
+                <div
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    padding: "6px 14px",
+                    borderRadius: "6px",
+                    background: "rgba(34, 197, 94, 0.15)",
+                    border: "1px solid rgba(34, 197, 94, 0.4)",
+                    color: "#4ade80",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                  }}
+                >
+                  <CheckCircle2 size={14} color="#4ade80" />
+                  <span>Ready</span>
+                </div>
+              ) : (
+                <div
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "10px",
+                    padding: "6px 12px",
+                    borderRadius: "6px",
+                    background: "rgba(245, 158, 11, 0.15)",
+                    border: "1px solid rgba(245, 158, 11, 0.45)",
+                    color: "#fbbf24",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <AlertTriangle size={14} color="#fbbf24" style={{ flexShrink: 0 }} />
+                  <span>The Experiment document requires valid input for all fields</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (onSelectTab) onSelectTab("experiment");
+                      else if (onOpenFile) onOpenFile("docs/experiment.md");
+                    }}
+                    style={{
+                      background: "rgba(245, 158, 11, 0.25)",
+                      border: "1px solid rgba(245, 158, 11, 0.5)",
+                      borderRadius: "4px",
+                      color: "#fef3c7",
+                      padding: "2px 8px",
+                      fontSize: "11px",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "4px",
+                    }}
+                    title="Open experiment design document"
+                  >
+                    Configure <ExternalLink size={11} />
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 2. Run Benchmarking Evaluations */}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "12px",
+              background: "rgba(0, 0, 0, 0.18)",
+              border: "1px solid var(--border)",
+              borderRadius: "8px",
+              padding: "14px 16px",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+              <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                2. Run Benchmarking Evaluations
+              </div>
+
+              {/* Iterations dropdown + RUN button */}
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                  <span style={{ fontSize: "10.5px", color: "var(--muted)" }}>Preset:</span>
+                  <label style={{ fontSize: "11px", fontWeight: 600, color: "var(--muted)", textTransform: "uppercase" }}>
+                    Iterations:
+                  </label>
                   <select
                     className="select"
-                    style={{ fontSize: "11px", padding: "2px 6px" }}
-                    value={selectedExpPath}
-                    onChange={(e) => setSelectedExpPath(e.target.value)}
+                    value={iterations}
+                    onChange={(e) => handleSetIterations(Number(e.target.value))}
+                    style={{ fontSize: "12px", padding: "4px 8px", minWidth: "60px", cursor: "pointer" }}
                   >
-                    {predefinedExperiments.map((exp) => (
-                      <option key={exp.id} value={exp.path}>
-                        {exp.title}
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <option key={n} value={n}>
+                        {n}
                       </option>
                     ))}
                   </select>
                 </div>
-              )}
-            </div>
 
-            {/* Active Completed Project Card */}
-            {(() => {
-              const currentExp =
-                predefinedExperiments.find((e) => e.path === selectedExpPath) ||
-                predefinedExperiments.find((e) => e.isCurrentWorkspace) ||
-                predefinedExperiments[0];
-
-              const isHitlFree = currentExp?.isHitlFreeReady ?? true;
-              const hasDownloadedRaw = currentExp?.hasRawDataDownloaded ?? Boolean(currentExp?.rawDataFile);
-
-              return (
-                <div
-                  style={{
-                    background: "rgba(0, 0, 0, 0.25)",
-                    border: `1px solid ${isHitlFree ? "rgba(34, 197, 94, 0.3)" : "rgba(245, 158, 11, 0.3)"}`,
-                    borderRadius: "6px",
-                    padding: "10px 14px",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "6px",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "6px" }}>
-                    <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--fg-bright)", display: "flex", alignItems: "center", gap: "6px" }}>
-                      <FileText size={13} color="var(--primary)" />
-                      {currentExp?.title || "Active Workspace Project (docs/experiment.md)"}
-                    </span>
-                    <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-                      {hasDownloadedRaw && (
-                        <span
-                          style={{
-                            fontSize: "10px",
-                            fontWeight: 700,
-                            padding: "2px 6px",
-                            borderRadius: "3px",
-                            background: "rgba(59, 130, 246, 0.2)",
-                            color: "#60a5fa",
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: "3px",
-                          }}
-                          title="Raw data is downloaded locally in data/raw/ and will be reused without re-downloading"
-                        >
-                          <CheckCircle2 size={10} />
-                          Raw Data Staged ({currentExp?.rawDataFile ? currentExp.rawDataFile.split("/").pop() : "data/raw"})
-                        </span>
-                      )}
-                      {isHitlFree ? (
-                        <span
-                          style={{
-                            fontSize: "10px",
-                            fontWeight: 700,
-                            padding: "2px 6px",
-                            borderRadius: "3px",
-                            background: "rgba(34, 197, 94, 0.2)",
-                            color: "#4ade80",
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: "3px",
-                          }}
-                          title="All Section 3 subtask gates are confirmed. Ready for autonomous headless benchmarking without HITL pauses."
-                        >
-                          <CheckCircle2 size={10} />
-                          No HITL Required
-                        </span>
-                      ) : (
-                        <span
-                          style={{
-                            fontSize: "10px",
-                            fontWeight: 700,
-                            padding: "2px 6px",
-                            borderRadius: "3px",
-                            background: "rgba(245, 158, 11, 0.2)",
-                            color: "#fbbf24",
-                          }}
-                        >
-                          HITL Gates Pending
-                        </span>
-                      )}
-                      {onOpenFile && (
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-xs"
-                          onClick={() => onOpenFile(currentExp?.path || "docs/experiment.md")}
-                          title="Open experiment design document"
-                          style={{ gap: "3px", padding: "1px 6px", fontSize: "10px" }}
-                        >
-                          <ExternalLink size={10} /> View
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  <div style={{ fontSize: "11px", color: "var(--muted)", lineHeight: 1.35 }}>
-                    {currentExp?.summary || "Completed proteomics study design configured for autonomous multi-model evaluation starting from downloaded raw data."}
-                  </div>
-
-                  {currentExp?.contrasts && currentExp.contrasts.length > 0 && (
-                    <div style={{ display: "flex", gap: "6px", alignItems: "center", marginTop: "2px", flexWrap: "wrap" }}>
-                      <span style={{ fontSize: "10px", fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>
-                        Confirmed Contrasts:
-                      </span>
-                      {currentExp.contrasts.map((c, i) => (
-                        <span
-                          key={i}
-                          style={{
-                            fontSize: "10.5px",
-                            fontFamily: "var(--font-mono)",
-                            background: "rgba(59, 130, 246, 0.15)",
-                            color: "#60a5fa",
-                            padding: "1px 6px",
-                            borderRadius: "3px",
-                          }}
-                        >
-                          {c}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-          </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-            <label style={{ fontSize: "11px", fontWeight: 600, color: "var(--muted)", textTransform: "uppercase" }}>
-              3. Iterations per Model (N)
-            </label>
-            <div style={{ display: "flex", gap: "6px" }}>
-              {[1, 2, 3, 5].map((n) => (
                 <button
-                  key={n}
                   type="button"
-                  className={`btn btn-xs ${iterations === n ? "btn-primary" : "btn-secondary"}`}
-                  onClick={() => handleSetIterations(n)}
-                  style={{ flex: 1, padding: "6px 0", fontSize: "12px", fontWeight: 600 }}
+                  className="btn btn-primary"
+                  onClick={handleStartBenchmark}
+                  disabled={effectiveQueue.length === 0 || isLoading || isRunning}
+                  style={{ gap: "6px", padding: "6px 18px", fontWeight: 700 }}
+                  title={effectiveQueue.length === 0 ? "Add models to queue below before running" : "Run benchmark evaluations"}
                 >
-                  {n}x
+                  <Play size={12} fill="currentColor" />
+                  {isLoading ? "Starting..." : isRunning ? "RUNNING" : "> RUN"}
                 </button>
-              ))}
-            </div>
-            <div style={{ fontSize: "10.5px", color: "var(--muted)", marginTop: "4px" }}>
-              Autonomous executions will run {iterations} time{iterations > 1 ? "s" : ""} per model starting from downloaded raw data.
-            </div>
-          </div>
-        </div>
 
-        {/* Models List for Selected Provider */}
-        {(() => {
-          const displayedModels = [
-            ...availableModels,
-            ...customModels.filter((m) => m.provider === selectedProvider),
-          ];
-
-          return (
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <label style={{ fontSize: "11px", fontWeight: 600, color: "var(--muted)", textTransform: "uppercase" }}>
-                  4. Select Models to Benchmark ({selectedModelIds.length} selected &middot; Total Planned Runs: {selectedModelIds.length * iterations})
-                </label>
-                <div style={{ display: "flex", gap: "8px" }}>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-xs"
-                    onClick={() => handleSelectAll(displayedModels.map((m) => m.id))}
-                  >
-                    Select All ({displayedModels.length})
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-xs"
-                    onClick={handleClearAll}
-                  >
-                    Clear All
-                  </button>
-                </div>
-              </div>
-
-              {/* Custom Model input (at top of Section 4) */}
-              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                <div style={{ display: "flex", gap: "8px" }}>
-                  <input
-                    type="text"
-                    className="input"
-                    style={{ flex: 1, padding: "6px 10px", fontSize: "11.5px" }}
-                    placeholder="Enter custom model ID (e.g. meta-llama/llama-3.3-70b-instruct or openai/gpt-4.5-preview)"
-                    value={customModelInput}
-                    onChange={(e) => setCustomModelInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") handleAddCustomModel();
-                    }}
-                  />
+                {isRunning && (
                   <button
                     type="button"
                     className="btn btn-secondary btn-sm"
-                    onClick={handleAddCustomModel}
-                    disabled={!customModelInput.trim()}
-                    style={{ gap: "4px" }}
+                    onClick={handleCancelBenchmark}
+                    style={{ gap: "4px", color: "#f87171", borderColor: "rgba(239, 68, 68, 0.4)" }}
+                    title="Cancel active benchmark suite"
                   >
-                    <Plus size={12} /> Add Model
+                    <Square size={11} fill="currentColor" /> Cancel
                   </button>
-                </div>
-
-                {modelActionFeedback && (
-                  <div style={{ fontSize: "11px", color: "#4ade80", fontWeight: 600, display: "flex", alignItems: "center", gap: "4px" }}>
-                    <Check size={12} />
-                    <span>{modelActionFeedback}</span>
-                  </div>
                 )}
               </div>
+            </div>
 
-              {/* Selected Models Tray / Confirmation Bar */}
-              {selectedModelIds.length > 0 && (
-                <div
-                  style={{
-                    background: "rgba(59, 130, 246, 0.08)",
-                    border: "1px solid rgba(59, 130, 246, 0.25)",
-                    borderRadius: "6px",
-                    padding: "8px 12px",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "6px",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: "10.5px", fontWeight: 700, color: "#93c5fd", textTransform: "uppercase", letterSpacing: "0.5px" }}>
-                      Queued for Benchmark ({selectedModelIds.length} models &middot; {selectedModelIds.length * iterations} runs)
-                    </span>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-xs"
-                      onClick={handleClearAll}
-                      style={{ padding: "1px 6px", fontSize: "10px" }}
-                    >
-                      Clear Selection
-                    </button>
-                  </div>
+            {/* Queue display */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>
+                Queue ({effectiveQueue.length} {effectiveQueue.length === 1 ? "model" : "models"} &middot; {effectiveQueue.length * iterations} runs planned):
+              </div>
+              {effectiveQueue.length === 0 ? (
+                <div style={{ fontSize: "11.5px", color: "var(--muted)", fontStyle: "italic", padding: "4px 0" }}>
+                  No models in queue. Add models from the catalog below.
+                </div>
+              ) : (
+                <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+                  {effectiveQueue.map((id) => {
+                    const entry = allCatalog.find((m) => m.id === id);
+                    const displayName = entry ? entry.name : (id.includes("/") ? id.split("/")[1] : id);
+                    const isCurrentlyRunning = isRunning && activeSuite?.activeRun?.model === id;
+                    const currentTokens = modelMaxTokens[id];
 
-                  <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
-                    {selectedModelIds.map((id) => {
-                      const entry = displayedModels.find((m) => m.id === id);
-                      const displayName = entry ? entry.name : id;
-                      return (
-                        <span
-                          key={id}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: "5px",
-                            background: "rgba(15, 23, 42, 0.85)",
-                            border: "1px solid var(--primary)",
-                            borderRadius: "4px",
-                            padding: "3px 8px",
-                            fontSize: "11px",
-                            color: "var(--fg-bright)",
-                            fontFamily: "var(--font-mono)",
-                          }}
-                        >
-                          <CheckCircle2 size={12} color="var(--primary)" />
-                          <span title={id}>
-                            {displayName.includes("/") ? displayName.split("/")[1] : displayName}
-                          </span>
-                          <select
-                            value={modelMaxTokens[id] || ""}
-                            onChange={(e) => {
-                              const val = e.target.value ? parseInt(e.target.value, 10) : undefined;
-                              setModelMaxTokens((prev) => {
-                                const next = { ...prev };
-                                if (val) next[id] = val;
-                                else delete next[id];
-                                return next;
-                              });
-                            }}
-                            title="Max output tokens for this model"
+                    return (
+                      <span
+                        key={id}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "6px",
+                          background: isCurrentlyRunning ? "rgba(59, 130, 246, 0.2)" : "rgba(15, 23, 42, 0.85)",
+                          border: `1px solid ${isCurrentlyRunning ? "#60a5fa" : "var(--primary)"}`,
+                          borderRadius: "4px",
+                          padding: "3px 8px",
+                          fontSize: "11px",
+                          color: "var(--fg-bright)",
+                          fontFamily: "var(--font-mono)",
+                        }}
+                      >
+                        {isCurrentlyRunning ? (
+                          <span
+                            className="spinner"
                             style={{
-                              background: "rgba(0,0,0,0.6)",
-                              border: "1px solid var(--border)",
-                              borderRadius: "3px",
-                              color: "var(--fg-bright)",
-                              fontSize: "10px",
-                              padding: "1px 4px",
-                              cursor: "pointer",
+                              width: "10px",
+                              height: "10px",
+                              border: "2px solid #60a5fa",
+                              borderTopColor: "transparent",
+                              borderRadius: "50%",
                             }}
-                          >
-                            <option value="">Default ({entry?.maxTokens ? `${(entry.maxTokens / 1024).toFixed(0)}k` : "Global"})</option>
-                            {BENCHMARK_TOKEN_LIMITS.map((t) => (
-                              <option key={t.value} value={t.value}>
-                                {t.label}
-                              </option>
-                            ))}
-                          </select>
+                          />
+                        ) : (
+                          <CheckCircle2 size={12} color="var(--primary)" />
+                        )}
+                        <span title={id} style={{ fontWeight: isCurrentlyRunning ? 700 : 500 }}>
+                          {displayName}
+                        </span>
+                        {currentTokens && (
+                          <span style={{ fontSize: "9.5px", color: "var(--muted)", background: "rgba(0,0,0,0.4)", padding: "1px 4px", borderRadius: "2px" }}>
+                            {currentTokens >= 1024 ? `${Math.round(currentTokens / 1024)}k` : `${currentTokens}`}
+                          </span>
+                        )}
+                        {isCurrentlyRunning ? (
+                          <span style={{ fontSize: "9px", fontWeight: 700, color: "#60a5fa", textTransform: "uppercase" }}>Running</span>
+                        ) : (
                           <button
                             type="button"
-                            onClick={() => handleRemoveSelectedModel(id)}
-                            title={`Remove ${id} from benchmark selection`}
+                            onClick={() => handleRemoveFromQueue(id)}
+                            title={`Remove ${id} from queue`}
                             style={{
                               background: "transparent",
                               border: "none",
@@ -1406,194 +1897,333 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
                           >
                             <X size={12} />
                           </button>
-                        </span>
-                      );
-                    })}
-                  </div>
+                        )}
+                      </span>
+                    );
+                  })}
                 </div>
               )}
+            </div>
 
-              {/* Models List: Row-based with Selectable Token Limits */}
-              <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "6px",
-                }}
-              >
-                {displayedModels.map((m) => {
-                  const isSelected = selectedModelIds.includes(m.id);
-                  const currentTokens = modelMaxTokens[m.id];
-                  return (
-                    <div
-                      key={m.id}
-                      onClick={() => handleToggleModel(m.id)}
-                      style={{
-                        background: isSelected ? "rgba(59, 130, 246, 0.10)" : "var(--bg)",
-                        border: `1px solid ${isSelected ? "var(--primary)" : "var(--border)"}`,
-                        borderRadius: "6px",
-                        padding: "8px 12px",
-                        cursor: "pointer",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        gap: "12px",
-                        transition: "all 0.15s ease",
-                      }}
-                    >
-                      {/* Left: Checkbox + Name + Tier Badge + Description */}
-                      <div style={{ display: "flex", alignItems: "center", gap: "10px", flex: 1, minWidth: 0 }}>
-                        {isSelected ? (
-                          <CheckCircle2 size={16} color="var(--primary)" style={{ flexShrink: 0 }} />
-                        ) : (
-                          <Circle size={16} color="var(--muted)" style={{ flexShrink: 0 }} />
-                        )}
-                        <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0, flex: 1 }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                            <span style={{ fontSize: "12.5px", fontWeight: 600, color: isSelected ? "var(--fg-bright)" : "var(--fg)" }}>
-                              {m.name}
-                            </span>
-                            {m.isCustom ? (
-                              <span
-                                style={{
-                                  fontSize: "9px",
-                                  fontWeight: 700,
-                                  padding: "2px 5px",
-                                  borderRadius: "3px",
-                                  background: "rgba(245, 158, 11, 0.2)",
-                                  color: "#fbbf24",
-                                }}
-                              >
-                                CUSTOM
-                              </span>
-                            ) : (
-                              <span
-                                style={{
-                                  fontSize: "9.5px",
-                                  fontWeight: 700,
-                                  padding: "1px 5px",
-                                  borderRadius: "3px",
-                                  background: m.tier === "T3" ? "rgba(168, 85, 247, 0.2)" : m.tier === "T2" ? "rgba(59, 130, 246, 0.2)" : "rgba(34, 197, 94, 0.2)",
-                                  color: m.tier === "T3" ? "#c084fc" : m.tier === "T2" ? "#60a5fa" : "#4ade80",
-                                }}
-                              >
-                                {m.tier}
-                              </span>
-                            )}
-                            <span style={{ fontSize: "10.5px", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
-                              {m.id}
-                            </span>
-                          </div>
-                          {m.description && (
-                            <div
-                              style={{
-                                fontSize: "11px",
-                                color: "var(--muted)",
-                                whiteSpace: "nowrap",
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                              }}
-                              title={m.description}
-                            >
-                              {m.description}
-                            </div>
-                          )}
-                        </div>
-                      </div>
+            {/* Progress display */}
+            <div
+              style={{
+                background: "rgba(0, 0, 0, 0.25)",
+                border: "1px solid rgba(255, 255, 255, 0.08)",
+                borderRadius: "6px",
+                padding: "8px 12px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "8px",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", fontSize: "11.5px" }}>
+                <span style={{ fontWeight: 700, color: "var(--muted)", textTransform: "uppercase" }}>
+                  Progress:
+                </span>
+                {currentModel ? (
+                  <span
+                    style={{
+                      padding: "2px 8px",
+                      borderRadius: "4px",
+                      background: "rgba(59, 130, 246, 0.15)",
+                      border: "1px solid rgba(59, 130, 246, 0.4)",
+                      color: "#60a5fa",
+                      fontWeight: 600,
+                      fontFamily: "var(--font-mono)",
+                    }}
+                  >
+                    [ {currentModel} {activeSuite?.activeRun?.iteration ? `(Iter ${activeSuite.activeRun.iteration}/${activeSuite.iterations})` : ""} ]
+                  </span>
+                ) : (
+                  <span
+                    style={{
+                      padding: "2px 8px",
+                      borderRadius: "4px",
+                      background: "rgba(255, 255, 255, 0.05)",
+                      border: "1px solid var(--border)",
+                      color: "var(--muted)",
+                    }}
+                  >
+                    [ Idle ]
+                  </span>
+                )}
 
-                      {/* Right: Selectable Token Limit + Actions */}
-                      <div
-                        style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
-                          <span style={{ fontSize: "10.5px", color: "var(--muted)", textTransform: "uppercase", fontWeight: 600 }}>
-                            Tokens:
-                          </span>
-                          <select
-                            value={currentTokens || ""}
-                            onChange={(e) => {
-                              const val = e.target.value ? parseInt(e.target.value, 10) : undefined;
-                              setModelMaxTokens((prev) => {
-                                const next = { ...prev };
-                                if (val) next[m.id] = val;
-                                else delete next[m.id];
-                                return next;
-                              });
-                              if (!isSelected) {
-                                handleToggleModel(m.id);
-                              }
-                            }}
-                            title={`Max output token limit for ${m.name}`}
-                            style={{
-                              background: "rgba(0,0,0,0.5)",
-                              border: `1px solid ${currentTokens ? "var(--primary)" : "var(--border)"}`,
-                              borderRadius: "4px",
-                              color: currentTokens ? "var(--fg-bright)" : "var(--fg)",
-                              fontSize: "11px",
-                              padding: "3px 6px",
-                              cursor: "pointer",
-                            }}
-                          >
-                            <option value="">Default ({m.maxTokens ? `${(m.maxTokens / 1024).toFixed(0)}k` : "Global"})</option>
-                            {BENCHMARK_TOKEN_LIMITS.map((t) => (
-                              <option key={t.value} value={t.value}>
-                                {t.label}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                <span
+                  style={{
+                    padding: "2px 8px",
+                    borderRadius: "4px",
+                    background: isRunning ? "rgba(168, 85, 247, 0.15)" : "rgba(255, 255, 255, 0.05)",
+                    border: `1px solid ${isRunning ? "rgba(168, 85, 247, 0.4)" : "var(--border)"}`,
+                    color: isRunning ? "#c084fc" : "var(--muted)",
+                    fontWeight: isRunning ? 600 : 400,
+                  }}
+                >
+                  [ {currentPhase} ]
+                </span>
 
-                        {m.isCustom && (
-                          <button
-                            type="button"
-                            title="Delete custom model"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleRemoveCustomModel(m.id);
-                            }}
-                            style={{
-                              background: "transparent",
-                              border: "none",
-                              color: "var(--muted)",
-                              cursor: "pointer",
-                              padding: "3px",
-                              display: "flex",
-                              alignItems: "center",
-                            }}
-                            onMouseEnter={(e) => (e.currentTarget.style.color = "#f87171")}
-                            onMouseLeave={(e) => (e.currentTarget.style.color = "var(--muted)")}
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+                <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg-bright)", fontSize: "11px" }}>
+                  pipeline:[ <span style={{ color: isRunning ? "#4ade80" : "var(--muted)" }}>{asciiBar}</span> ] {phaseProgressPct}%
+                </span>
+              </div>
+
+              {/* Progress Bar track */}
+              <div style={{ width: "100%", height: "4px", background: "rgba(255, 255, 255, 0.08)", borderRadius: "2px", overflow: "hidden" }}>
+                <div
+                  style={{
+                    width: `${phaseProgressPct}%`,
+                    height: "100%",
+                    background: isRunning ? "linear-gradient(90deg, #3b82f6, #10b981)" : (phaseProgressPct === 100 ? "#10b981" : "transparent"),
+                    transition: "width 0.3s ease",
+                  }}
+                />
               </div>
             </div>
-          );
-        })()}
+          </div>
 
-        {/* Launch Button */}
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "6px" }}>
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={handleStartBenchmark}
-            disabled={selectedModelIds.length === 0 || isLoading || (activeSuite?.status === "running")}
-            style={{ gap: "6px", padding: "8px 20px" }}
-          >
-            <Play size={13} />
-            {isLoading
-              ? "Starting..."
-              : `Execute Benchmark Suite (${selectedModelIds.length} Models &times; ${iterations} Iterations)`}
-          </button>
+          {/* 3. AI Models */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
+              <label style={{ fontSize: "11px", fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                3. AI Models ({displayedModels.length} models available)
+              </label>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-xs"
+                  onClick={() => handleSelectAll(displayedModels.map((m) => m.id))}
+                >
+                  Select All ({displayedModels.length})
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-xs"
+                  onClick={handleClearAll}
+                >
+                  Clear All
+                </button>
+              </div>
+            </div>
+
+            {/* Custom Model Input */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <input
+                  type="text"
+                  className="input"
+                  style={{ flex: 1, padding: "6px 10px", fontSize: "11.5px" }}
+                  placeholder="Enter custom model ID (e.g. meta-llama/llama-3.3-70b-instruct or openai/gpt-4.5-preview)"
+                  value={customModelInput}
+                  onChange={(e) => setCustomModelInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleAddCustomModel();
+                  }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleAddCustomModel}
+                  disabled={!customModelInput.trim()}
+                  style={{ gap: "4px" }}
+                >
+                  <Plus size={12} /> ADD
+                </button>
+              </div>
+
+              {modelActionFeedback && (
+                <div style={{ fontSize: "11px", color: "#4ade80", fontWeight: 600, display: "flex", alignItems: "center", gap: "4px" }}>
+                  <Check size={12} />
+                  <span>{modelActionFeedback}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Provider Filter Tabs */}
+            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+              {[
+                { id: "all", label: "All Providers" },
+                { id: "openrouter", label: "OpenRouter" },
+                { id: "anthropic", label: "Anthropic" },
+                { id: "openai", label: "OpenAI" },
+                { id: "gemini", label: "Gemini" },
+                { id: "ollama", label: "Ollama" },
+              ].map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={`btn btn-xs ${selectedProviderFilter === p.id ? "btn-primary" : "btn-secondary"}`}
+                  onClick={() => setSelectedProviderFilter(p.id)}
+                  style={{ padding: "4px 10px", fontSize: "11px" }}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Model rows */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              {displayedModels.map((m) => {
+                const isQueued = effectiveQueue.includes(m.id);
+                const currentTokens = modelMaxTokens[m.id];
+                return (
+                  <div
+                    key={m.id}
+                    style={{
+                      background: isQueued ? "rgba(59, 130, 246, 0.08)" : "var(--bg)",
+                      border: `1px solid ${isQueued ? "rgba(59, 130, 246, 0.35)" : "var(--border)"}`,
+                      borderRadius: "6px",
+                      padding: "8px 12px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "12px",
+                      transition: "all 0.15s ease",
+                    }}
+                  >
+                    {/* Left: Name + Tier + Provider + ID + Description */}
+                    <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0, flex: 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                        <span style={{ fontSize: "12.5px", fontWeight: 600, color: isQueued ? "var(--fg-bright)" : "var(--fg)" }}>
+                          {m.name}
+                        </span>
+                        {m.isCustom ? (
+                          <span
+                            style={{
+                              fontSize: "9px",
+                              fontWeight: 700,
+                              padding: "2px 5px",
+                              borderRadius: "3px",
+                              background: "rgba(245, 158, 11, 0.2)",
+                              color: "#fbbf24",
+                            }}
+                          >
+                            CUSTOM
+                          </span>
+                        ) : (
+                          <span
+                            style={{
+                              fontSize: "9.5px",
+                              fontWeight: 700,
+                              padding: "1px 5px",
+                              borderRadius: "3px",
+                              background: m.tier === "T3" ? "rgba(168, 85, 247, 0.2)" : m.tier === "T2" ? "rgba(59, 130, 246, 0.2)" : "rgba(34, 197, 94, 0.2)",
+                              color: m.tier === "T3" ? "#c084fc" : m.tier === "T2" ? "#60a5fa" : "#4ade80",
+                            }}
+                          >
+                            {m.tier}
+                          </span>
+                        )}
+                        <span
+                          style={{
+                            fontSize: "9.5px",
+                            fontWeight: 600,
+                            padding: "1px 5px",
+                            borderRadius: "3px",
+                            background: "rgba(255, 255, 255, 0.06)",
+                            color: "var(--muted)",
+                            textTransform: "uppercase",
+                          }}
+                        >
+                          {m.provider}
+                        </span>
+                        <span style={{ fontSize: "10.5px", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+                          {m.id}
+                        </span>
+                      </div>
+                      {m.description && (
+                        <div
+                          style={{
+                            fontSize: "11px",
+                            color: "var(--muted)",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                          title={m.description}
+                        >
+                          {m.description}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Right: Selectable Token Limit + Add to Queue Button */}
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                        <span style={{ fontSize: "10.5px", color: "var(--muted)", textTransform: "uppercase", fontWeight: 600 }}>
+                          Tokens:
+                        </span>
+                        <select
+                          value={currentTokens || ""}
+                          onChange={(e) => {
+                            const val = e.target.value ? parseInt(e.target.value, 10) : undefined;
+                            setModelMaxTokens((prev) => {
+                              const next = { ...prev };
+                              if (val) next[m.id] = val;
+                              else delete next[m.id];
+                              return next;
+                            });
+                          }}
+                          title={`Max output token limit for ${m.name}`}
+                          style={{
+                            background: "rgba(0,0,0,0.5)",
+                            border: `1px solid ${currentTokens ? "var(--primary)" : "var(--border)"}`,
+                            borderRadius: "4px",
+                            color: currentTokens ? "var(--fg-bright)" : "var(--fg)",
+                            fontSize: "11px",
+                            padding: "3px 6px",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <option value="">Default ({m.maxTokens ? `${(m.maxTokens / 1024).toFixed(0)}k` : "Global"})</option>
+                          {BENCHMARK_TOKEN_LIMITS.map((t) => (
+                            <option key={t.value} value={t.value}>
+                              {t.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <button
+                        type="button"
+                        className={`btn btn-xs ${isQueued ? "btn-secondary" : "btn-primary"}`}
+                        onClick={() => (isQueued ? handleRemoveFromQueue(m.id) : handleAddToQueue(m.id))}
+                        style={{ gap: "4px", padding: "4px 10px", fontSize: "11px" }}
+                        title={isQueued ? "Remove from queue" : "Add to benchmark queue"}
+                      >
+                        {isQueued ? <Check size={11} color="var(--primary)" /> : <Plus size={11} />}
+                        {isQueued ? "In Queue" : "Add to Queue"}
+                      </button>
+
+                      {m.isCustom && (
+                        <button
+                          type="button"
+                          title="Delete custom model"
+                          onClick={() => handleRemoveCustomModel(m.id)}
+                          style={{
+                            background: "transparent",
+                            border: "none",
+                            color: "var(--muted)",
+                            cursor: "pointer",
+                            padding: "3px",
+                            display: "flex",
+                            alignItems: "center",
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.color = "#f87171")}
+                          onMouseLeave={(e) => (e.currentTarget.style.color = "var(--muted)")}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
 
   const renderRunsSubTab = () => (
@@ -2250,9 +2880,9 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
               subtitle="Composite metrics across LLMs (Manuscript scaled to % for uniform comparison)"
               categories={overallCategories}
               series={overallSeries}
-              xAxisTitle="Score (0 - 100)"
-              xAxisRange={[0, 105]}
-              height={380}
+              yAxisTitle="Score (0 - 100)"
+              yAxisRange={[0, 105]}
+              height={400}
             />
 
             {/* Scientific Rigor Dimensions */}
@@ -2261,9 +2891,9 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
               subtitle="5 core manuscript dimensions evaluated via domain rubric (Scale: 1-10)"
               categories={scientificCategories}
               series={scientificSeries}
-              xAxisTitle="Score (1 - 10)"
-              xAxisRange={[0, 10.5]}
-              height={380}
+              yAxisTitle="Score (1 - 10)"
+              yAxisRange={[0, 10.5]}
+              height={400}
             />
           </div>
 
@@ -2361,8 +2991,8 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
                   subtitle="Wall-clock duration per pipeline phase across models (color bar = LLM)"
                   categories={phaseCategories}
                   series={timeSeries}
-                  xAxisTitle="Time (Seconds)"
-                  height={380}
+                  yAxisTitle="Time (Seconds)"
+                  height={400}
                 />
               )}
 
@@ -2372,8 +3002,8 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
                   subtitle="Total LLM conversational iterations and tool reasoning loops per phase (color bar = LLM)"
                   categories={phaseCategories}
                   series={turnsSeries}
-                  xAxisTitle="Turn Count"
-                  height={380}
+                  yAxisTitle="Turn Count"
+                  height={400}
                 />
               )}
 
@@ -2383,8 +3013,8 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
                   subtitle="Cumulative prompt, document, and tool context tokens ingested per phase (color bar = LLM)"
                   categories={phaseCategories}
                   series={inputTokensSeries}
-                  xAxisTitle="Input Tokens"
-                  height={380}
+                  yAxisTitle="Input Tokens"
+                  height={400}
                 />
               )}
 
@@ -2394,8 +3024,8 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
                   subtitle="Tokens emitted by model for code generation, scientific discourse, and tool payloads (color bar = LLM)"
                   categories={phaseCategories}
                   series={outputTokensSeries}
-                  xAxisTitle="Output Tokens"
-                  height={380}
+                  yAxisTitle="Output Tokens"
+                  height={400}
                 />
               )}
 
@@ -2412,32 +3042,32 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
                     subtitle="Duration per phase across models"
                     categories={phaseCategories}
                     series={timeSeries}
-                    xAxisTitle="Time (Seconds)"
-                    height={340}
+                    yAxisTitle="Time (Seconds)"
+                    height={380}
                   />
                   <EvaluationBarChart
                     title="Phase Conversational Turns"
                     subtitle="Turn count per phase across models"
                     categories={phaseCategories}
                     series={turnsSeries}
-                    xAxisTitle="Turn Count"
-                    height={340}
+                    yAxisTitle="Turn Count"
+                    height={380}
                   />
                   <EvaluationBarChart
                     title="Input Tokens per Phase"
                     subtitle="Cumulative prompt context tokens"
                     categories={phaseCategories}
                     series={inputTokensSeries}
-                    xAxisTitle="Input Tokens"
-                    height={340}
+                    yAxisTitle="Input Tokens"
+                    height={380}
                   />
                   <EvaluationBarChart
                     title="Output Tokens per Phase"
                     subtitle="Generated completion tokens"
                     categories={phaseCategories}
                     series={outputTokensSeries}
-                    xAxisTitle="Output Tokens"
-                    height={340}
+                    yAxisTitle="Output Tokens"
+                    height={380}
                   />
                 </div>
               )}
@@ -2481,7 +3111,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
               type="button"
               className="btn btn-secondary btn-sm"
               onClick={() => {
-                handleSelectSubTab("workspace");
+                handleSelectSubTab("review");
                 handleScoreCurrentWorkspace();
               }}
               disabled={isScoringCurrent}
@@ -2545,7 +3175,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
             type="button"
             className="btn btn-secondary btn-sm"
             onClick={() => {
-              handleSelectSubTab("workspace");
+              handleSelectSubTab("review");
               handleScoreCurrentWorkspace();
             }}
             disabled={isScoringCurrent}
@@ -2558,7 +3188,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
         </div>
       </div>
 
-      {/* Navigation Sub-Tabs Bar */}
+      {/* Navigation Sub-Tabs Bar: [ Review | Evaluations | Analytics | Benchmarking ] */}
       <div
         style={{
           padding: "8px 20px",
@@ -2571,38 +3201,40 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
           overflowX: "auto",
         }}
       >
+        {/* 1. Review Tab (AI Audit + Scientific Audit) */}
         <button
           type="button"
           className="btn btn-sm"
           style={{
-            background: activeSubTab === "analytics" ? "var(--primary)" : "transparent",
-            color: activeSubTab === "analytics" ? "#fff" : "var(--muted)",
-            border: activeSubTab === "analytics" ? "1px solid var(--primary)" : "1px solid var(--border)",
+            background: activeSubTab === "review" ? "var(--primary)" : "transparent",
+            color: activeSubTab === "review" ? "#fff" : "var(--muted)",
+            border: activeSubTab === "review" ? "1px solid var(--primary)" : "1px solid var(--border)",
             display: "inline-flex",
             alignItems: "center",
             gap: "6px",
-            fontWeight: activeSubTab === "analytics" ? 600 : 500,
+            fontWeight: activeSubTab === "review" ? 600 : 500,
           }}
-          onClick={() => handleSelectSubTab("analytics")}
+          onClick={() => handleSelectSubTab("review")}
         >
-          <BarChart3 size={14} />
-          <span>Comparative Analytics</span>
-          {activeRuns.length > 0 && (
+          <Award size={14} />
+          <span>Review</span>
+          {currentScoreResult && (
             <span
               style={{
                 fontSize: "10px",
                 padding: "1px 6px",
                 borderRadius: "10px",
-                background: activeSubTab === "analytics" ? "rgba(255,255,255,0.25)" : "var(--border)",
-                color: activeSubTab === "analytics" ? "#fff" : "var(--fg)",
+                background: activeSubTab === "review" ? "rgba(255,255,255,0.25)" : "var(--border)",
+                color: activeSubTab === "review" ? "#fff" : "#60a5fa",
                 fontWeight: 700,
               }}
             >
-              {activeRuns.length}
+              {currentScoreResult.scores.overallBenchmarkScore}/100
             </span>
           )}
         </button>
 
+        {/* 2. Evaluations Tab */}
         <button
           type="button"
           className="btn btn-sm"
@@ -2618,7 +3250,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
           onClick={() => handleSelectSubTab("runs")}
         >
           <Layers size={14} />
-          <span>Evaluations Directory</span>
+          <span>Evaluations</span>
           {(currentDisplaySuite?.runs?.length ?? 0) > 0 && (
             <span
               style={{
@@ -2635,6 +3267,40 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
           )}
         </button>
 
+        {/* 3. Analytics Tab */}
+        <button
+          type="button"
+          className="btn btn-sm"
+          style={{
+            background: activeSubTab === "analytics" ? "var(--primary)" : "transparent",
+            color: activeSubTab === "analytics" ? "#fff" : "var(--muted)",
+            border: activeSubTab === "analytics" ? "1px solid var(--primary)" : "1px solid var(--border)",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "6px",
+            fontWeight: activeSubTab === "analytics" ? 600 : 500,
+          }}
+          onClick={() => handleSelectSubTab("analytics")}
+        >
+          <BarChart3 size={14} />
+          <span>Analytics</span>
+          {activeRuns.length > 0 && (
+            <span
+              style={{
+                fontSize: "10px",
+                padding: "1px 6px",
+                borderRadius: "10px",
+                background: activeSubTab === "analytics" ? "rgba(255,255,255,0.25)" : "var(--border)",
+                color: activeSubTab === "analytics" ? "#fff" : "var(--fg)",
+                fontWeight: 700,
+              }}
+            >
+              {activeRuns.length}
+            </span>
+          )}
+        </button>
+
+        {/* 4. Benchmarking Tab */}
         <button
           type="button"
           className="btn btn-sm"
@@ -2650,7 +3316,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
           onClick={() => handleSelectSubTab("benchmark")}
         >
           <Cpu size={14} />
-          <span>Benchmark Studio</span>
+          <span>Benchmarking</span>
           {activeSuite && activeSuite.status === "running" && (
             <span
               style={{
@@ -2663,38 +3329,6 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
               }}
             >
               RUNNING
-            </span>
-          )}
-        </button>
-
-        <button
-          type="button"
-          className="btn btn-sm"
-          style={{
-            background: activeSubTab === "workspace" ? "var(--primary)" : "transparent",
-            color: activeSubTab === "workspace" ? "#fff" : "var(--muted)",
-            border: activeSubTab === "workspace" ? "1px solid var(--primary)" : "1px solid var(--border)",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "6px",
-            fontWeight: activeSubTab === "workspace" ? 600 : 500,
-          }}
-          onClick={() => handleSelectSubTab("workspace")}
-        >
-          <Award size={14} />
-          <span>Workspace Evaluation</span>
-          {currentScoreResult && (
-            <span
-              style={{
-                fontSize: "10px",
-                padding: "1px 6px",
-                borderRadius: "10px",
-                background: activeSubTab === "workspace" ? "rgba(255,255,255,0.25)" : "var(--border)",
-                color: activeSubTab === "workspace" ? "#fff" : "#60a5fa",
-                fontWeight: 700,
-              }}
-            >
-              {currentScoreResult.scores.overallBenchmarkScore}/100
             </span>
           )}
         </button>
@@ -2718,7 +3352,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <span className="spinner" style={{ width: "14px", height: "14px", border: "2px solid #f59e0b", borderTopColor: "transparent", borderRadius: "50%" }} />
               <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--fg-bright)" }}>
-                Benchmark Suite Active: {activeSuite.title}
+                Benchmark In Progress &bull; <span style={{ color: "#60a5fa" }}>{activeSuite.activeRun?.model || "Evaluating..."}</span> (Run {activeSuite.runs.length + 1} of {activeSuite.models.length * activeSuite.iterations})
               </span>
             </div>
             <button
@@ -2815,10 +3449,10 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({ onOpenFile }) 
           gap: "16px",
         }}
       >
-        {activeSubTab === "analytics" && renderAnalyticsSubTab()}
+        {activeSubTab === "review" && renderReviewSubTab()}
         {activeSubTab === "runs" && renderRunsSubTab()}
+        {activeSubTab === "analytics" && renderAnalyticsSubTab()}
         {activeSubTab === "benchmark" && renderBenchmarkSubTab()}
-        {activeSubTab === "workspace" && renderWorkspaceSubTab()}
       </div>
     </div>
   );

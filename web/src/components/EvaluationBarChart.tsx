@@ -5,6 +5,7 @@ export interface EvaluationSeries {
   name: string;
   values: number[];
   text?: (string | number)[];
+  hoverText?: (string | number)[];
   color?: string;
 }
 
@@ -33,6 +34,36 @@ export const MODEL_PALETTE = [
   "#84cc16", // Lime
 ];
 
+/**
+ * Wraps category labels by inserting <br> line breaks to keep x-axis labels
+ * horizontal without overlapping or cramping.
+ */
+export function wrapCategoryLabel(label: string, maxLineLength = 16): string {
+  if (!label || label.includes("<br>")) return label;
+
+  const words = label.split(" ");
+  if (words.length <= 1) return label;
+
+  const lines: string[] = [];
+  let currentLine = "";
+
+  for (const word of words) {
+    if (!currentLine) {
+      currentLine = word;
+    } else if ((currentLine + " " + word).length <= maxLineLength) {
+      currentLine += " " + word;
+    } else {
+      lines.push(currentLine);
+      currentLine = word;
+    }
+  }
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
+  return lines.join("<br>");
+}
+
 export const EvaluationBarChart: React.FC<EvaluationBarChartProps> = ({
   title,
   subtitle,
@@ -42,30 +73,61 @@ export const EvaluationBarChart: React.FC<EvaluationBarChartProps> = ({
   xAxisRange,
   yAxisTitle,
   yAxisRange,
-  height = 360,
+  height = 400,
   valueFormatter,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // ResizeObserver for dynamic pane adjustments (created once per mount)
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const ro = new ResizeObserver(() => {
+      if (el) Plotly.Plots.resize(el);
+    });
+    ro.observe(el);
+
+    return () => {
+      ro.disconnect();
+    };
+  }, []);
+
+  // Cleanup plot on unmount
+  useEffect(() => {
+    const el = containerRef.current;
+    return () => {
+      if (el) {
+        Plotly.purge(el);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el || series.length === 0) return;
 
-    const effectiveValueTitle = xAxisTitle || yAxisTitle;
-    const effectiveValueRange = xAxisRange || yAxisRange;
+    // The value axis is now the vertical y-axis
+    const effectiveValueTitle = yAxisTitle || xAxisTitle;
+    const effectiveValueRange = yAxisRange || xAxisRange;
+
+    // Wrap x-axis category labels so they stay horizontal without overlapping
+    const wrappedCategories = categories.map((c) => wrapCategoryLabel(c, 16));
 
     const data: any[] = series.map((s, idx) => {
       const color = s.color || MODEL_PALETTE[idx % MODEL_PALETTE.length];
       const textLabels = s.text
         ? s.text
         : s.values.map((v) => (valueFormatter ? valueFormatter(v) : String(v)));
+      const hoverLabels = s.hoverText || s.text || textLabels;
 
       return {
-        x: s.values,
-        y: categories,
+        x: wrappedCategories,
+        y: s.values,
         name: s.name,
         type: "bar",
-        orientation: "h",
+        orientation: "v",
+        customdata: hoverLabels,
         marker: {
           color,
           line: {
@@ -75,14 +137,14 @@ export const EvaluationBarChart: React.FC<EvaluationBarChartProps> = ({
         },
         text: textLabels,
         textposition: "auto",
-        hoverinfo: "x+y+name",
-        hovertemplate: `<b>%{data.name}</b><br>%{y}: <b>%{text}</b><extra></extra>`,
+        hoverinfo: "x+name",
+        hovertemplate: `<b>%{data.name}</b><br>%{x}: <b>%{customdata}</b><extra></extra>`,
       };
     });
 
     const layout: any = {
       barmode: "group",
-      bargap: 0.22,
+      bargap: 0.24,
       bargroupgap: 0.08,
       autosize: true,
       height,
@@ -94,34 +156,36 @@ export const EvaluationBarChart: React.FC<EvaluationBarChartProps> = ({
         size: 11,
       },
       margin: {
-        l: 140,
+        l: 55,
         r: 25,
-        t: 45,
-        b: 50,
+        t: 25,
+        b: 105,
       },
+      // Horizontal legend placed at the bottom, full width of the plot
       legend: {
         orientation: "h",
-        y: 1.18,
-        x: 0.5,
+        yanchor: "top",
+        y: -0.25,
         xanchor: "center",
-        font: { color: "#e4e4e7", size: 11 },
+        x: 0.5,
+        font: { color: "#e4e4e7", size: 10.5 },
         bgcolor: "rgba(0, 0, 0, 0.35)",
         bordercolor: "rgba(255, 255, 255, 0.12)",
         borderwidth: 1,
       },
       xaxis: {
+        tickangle: 0, // Keep metric names strictly horizontal
+        tickfont: { color: "#e4e4e7", size: 10.5, weight: 600 },
+        gridcolor: "rgba(255, 255, 255, 0.05)",
+        linecolor: "rgba(255, 255, 255, 0.18)",
+        automargin: true,
+      },
+      yaxis: {
         title: effectiveValueTitle ? { text: effectiveValueTitle, font: { color: "#a1a1aa", size: 11 } } : undefined,
         range: effectiveValueRange,
         tickfont: { color: "#a1a1aa", size: 10.5 },
         gridcolor: "rgba(255, 255, 255, 0.07)",
         zerolinecolor: "rgba(255, 255, 255, 0.15)",
-        linecolor: "rgba(255, 255, 255, 0.18)",
-        automargin: true,
-      },
-      yaxis: {
-        autorange: "reversed",
-        tickfont: { color: "#e4e4e7", size: 11, weight: 600 },
-        gridcolor: "rgba(255, 255, 255, 0.05)",
         linecolor: "rgba(255, 255, 255, 0.18)",
         automargin: true,
       },
@@ -148,17 +212,7 @@ export const EvaluationBarChart: React.FC<EvaluationBarChartProps> = ({
       },
     };
 
-    Plotly.newPlot(el, data, layout, config);
-
-    const ro = new ResizeObserver(() => {
-      if (el) Plotly.Plots.resize(el);
-    });
-    ro.observe(el);
-
-    return () => {
-      ro.disconnect();
-      if (el) Plotly.purge(el);
-    };
+    Plotly.react(el, data, layout, config);
   }, [categories, series, xAxisTitle, xAxisRange, yAxisTitle, yAxisRange, height, title, valueFormatter]);
 
   return (

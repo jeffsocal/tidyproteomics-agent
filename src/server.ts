@@ -111,8 +111,14 @@ async function startServer() {
     VERSION,
     (phase, text) => agentService?.handleStageActivity(phase, text),
     (phase, text, meta) => agentService?.handleStageObservation(phase, text, meta),
-    (phase) => agentService?.handlePhaseStarted(phase),
-    (phase) => agentService?.handlePhaseCompleted(phase),
+    (phase) => {
+      agentService?.handlePhaseStarted(phase);
+      evaluationService.handlePhaseStarted(phase);
+    },
+    (phase) => {
+      agentService?.handlePhaseCompleted(phase);
+      evaluationService.handlePhaseCompleted(phase);
+    },
     (state) => agentService?.handlePipelineFinished(state)
   );
 
@@ -401,7 +407,6 @@ async function startServer() {
     const sharedDir = path.join(templateBase, "shared");
     if (fs.existsSync(sharedDir)) {
       copyFileSafe(path.join(sharedDir, "tools", "lint_tidyproteomics.R"), path.join(targetRoot, "tools", "lint_tidyproteomics.R"), true);
-      copyFileSafe(path.join(sharedDir, "tools", "export_plotly_json.R"), path.join(targetRoot, "tools", "export_plotly_json.R"), true);
       copyFileSafe(path.join(sharedDir, "tools", "reactome_pathways.tsv"), path.join(targetRoot, "tools", "reactome_pathways.tsv"), true);
       const agentTemplatesDir = path.join(sharedDir, "agent");
       if (fs.existsSync(agentTemplatesDir)) {
@@ -469,6 +474,8 @@ async function startServer() {
         ok: true,
         config: configStore.getAll(),
         pipelineState,
+        isBenchmarkRunning: evaluationService.getActiveSuite()?.status === "running",
+        activeBenchmarkSuite: evaluationService.getActiveSuite(),
         mcpStatus: executionManager.getStatus(),
         literatureState: literatureService.getViewState(ingestionRunner.getIsRunning() ? "ingesting" : undefined),
         agentState: {
@@ -672,72 +679,9 @@ async function startServer() {
     }
   });
 
-  // 8.B Serve interactive Plotly JSON for a plot
-  app.get("/api/workspace/plot/plotly", async (req, res) => {
-    try {
-      const relPath = String(req.query.path || req.query.file || "").trim();
-      if (!relPath || !workspaceRoot) {
-        return res.status(400).json({ ok: false, error: "Path required" });
-      }
-
-      // Normalize path (handle ../data/plot.png or data/plot.png or plot.png)
-      const cleanRel = relPath.replace(/^(\.\.\/)+/, "").replace(/^\/+/, "");
-      const baseName = path.basename(cleanRel);
-      const jsonBaseName = baseName.replace(/\.(png|jpg|jpeg|svg)$/i, "") + ".plotly.json";
-
-      // 1. Check if <name>.plotly.json exists directly in data/ or the file's dir
-      const candidatePaths = [
-        path.join(workspaceRoot, path.dirname(cleanRel), jsonBaseName),
-        path.join(workspaceRoot, "data", jsonBaseName),
-      ];
-
-      for (const cp of candidatePaths) {
-        if (fs.existsSync(cp)) {
-          const content = await fs.promises.readFile(cp, "utf-8");
-          try {
-            const parsed = JSON.parse(content);
-            return res.json({ ok: true, plotly: parsed, cached: true });
-          } catch (_) { }
-        }
-      }
-
-      // 2. If not on disk, attempt dynamic generation via tools/export_plotly_json.R
-      const scriptCandidates = [
-        path.join(workspaceRoot, "tools", "export_plotly_json.R"),
-        path.join(__dirname, "..", "templates", "shared", "tools", "export_plotly_json.R"),
-      ];
-      const rScript = scriptCandidates.find((p) => fs.existsSync(p));
-
-      if (rScript) {
-        try {
-          await new Promise<void>((resolve, reject) => {
-            const proc = spawn("Rscript", [rScript, cleanRel], {
-              cwd: workspaceRoot,
-              timeout: 15000,
-            });
-            proc.on("close", (code) => {
-              if (code === 0) resolve();
-              else reject(new Error(`Rscript exited with code ${code}`));
-            });
-            proc.on("error", reject);
-          });
-
-          for (const cp of candidatePaths) {
-            if (fs.existsSync(cp)) {
-              const content = await fs.promises.readFile(cp, "utf-8");
-              const parsed = JSON.parse(content);
-              return res.json({ ok: true, plotly: parsed, generated: true });
-            }
-          }
-        } catch (err: any) {
-          console.warn("[Plotly Dynamic Render Warning]", err.message);
-        }
-      }
-
-      res.status(404).json({ ok: false, error: "Plotly JSON not available for this figure" });
-    } catch (err: any) {
-      res.status(500).json({ ok: false, error: err.message });
-    }
+  // 8.B Plotly JSON endpoint (disabled - plotly plot creation dropped)
+  app.get("/api/workspace/plot/plotly", async (_req, res) => {
+    return res.status(404).json({ ok: false, error: "Plotly plot generation disabled" });
   });
 
   // 9. Write/Save a workspace file
@@ -819,6 +763,9 @@ async function startServer() {
   // 11. Pipeline Execution Controls
   app.post("/api/pipeline/start", async (_req, res) => {
     try {
+      if (evaluationService.getActiveSuite()?.status === "running") {
+        return res.status(409).json({ ok: false, error: "Cannot start pipeline: AI Evaluation benchmark is actively running." });
+      }
       await syncModelSummary();
       orchestrator.runFullPipeline(false).catch((err) => appendLog(`[Pipeline Error] ${err.message}`));
       res.json({ ok: true });
@@ -829,6 +776,9 @@ async function startServer() {
 
   app.post("/api/pipeline/restart", async (_req, res) => {
     try {
+      if (evaluationService.getActiveSuite()?.status === "running") {
+        return res.status(409).json({ ok: false, error: "Cannot restart pipeline: AI Evaluation benchmark is actively running." });
+      }
       await syncModelSummary();
       orchestrator.restartPipeline().catch((err) => appendLog(`[Pipeline Error] ${err.message}`));
       res.json({ ok: true });
@@ -839,6 +789,9 @@ async function startServer() {
 
   app.post("/api/pipeline/resume", async (req, res) => {
     try {
+      if (evaluationService.getActiveSuite()?.status === "running") {
+        return res.status(409).json({ ok: false, error: "Cannot resume pipeline: AI Evaluation benchmark is actively running." });
+      }
       const phaseId = req.body?.phaseId ? String(req.body.phaseId) : undefined;
       await syncModelSummary();
       orchestrator.resumePipeline(phaseId).catch((err) => appendLog(`[Pipeline Error] ${err.message}`));
@@ -850,6 +803,9 @@ async function startServer() {
 
   app.post("/api/pipeline/run-phase", async (req, res) => {
     try {
+      if (evaluationService.getActiveSuite()?.status === "running") {
+        return res.status(409).json({ ok: false, error: "Cannot run phase: AI Evaluation benchmark is actively running." });
+      }
       const phaseId = String(req.body?.phaseId || "").trim();
       if (!phaseId) return res.status(400).json({ ok: false, error: "phaseId required" });
       await syncModelSummary();
@@ -874,6 +830,9 @@ async function startServer() {
 
   app.post("/api/pipeline/reset", async (_req, res) => {
     try {
+      if (evaluationService.getActiveSuite()?.status === "running") {
+        return res.status(409).json({ ok: false, error: "Cannot reset pipeline: AI Evaluation benchmark is actively running." });
+      }
       await orchestrator.resetAllState();
       res.json({ ok: true });
     } catch (err: any) {
@@ -1110,7 +1069,8 @@ async function startServer() {
           experimentPath,
           predefinedExperimentId,
         },
-        orchestrator
+        orchestrator,
+        agentService
       );
 
       res.json({ ok: true, suite });
@@ -1129,6 +1089,34 @@ async function startServer() {
       res.json({ ok: true });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  app.post("/api/evaluation/queue/add", (req, res) => {
+    try {
+      const { models, modelMaxTokens } = req.body || {};
+      if (!models || !Array.isArray(models) || models.length === 0) {
+        return res.status(400).json({ ok: false, error: "models array is required" });
+      }
+      const result = evaluationService.enqueueModels(models, modelMaxTokens);
+      appendLog(`[AI Evaluation] Enqueued ${models.length} model(s) to benchmark queue: ${models.join(", ")}`);
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ ok: false, error: err.message });
+    }
+  });
+
+  app.post("/api/evaluation/queue/remove", (req, res) => {
+    try {
+      const { model } = req.body || {};
+      if (!model) {
+        return res.status(400).json({ ok: false, error: "model is required" });
+      }
+      const result = evaluationService.dequeueModel(model);
+      appendLog(`[AI Evaluation] Removed model '${model}' from benchmark queue.`);
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ ok: false, error: err.message });
     }
   });
 

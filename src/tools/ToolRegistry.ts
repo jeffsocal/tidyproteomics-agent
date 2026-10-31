@@ -103,6 +103,10 @@ export class ToolRegistry {
     this.workspaceRoot = newRoot || "";
   }
 
+  public getWorkspaceRoot(): string {
+    return this.workspaceRoot || "";
+  }
+
   public setMcpPhaseListener(listener: (phaseName: string) => void) {
     this.mcpPhaseListener = listener;
   }
@@ -175,10 +179,17 @@ export class ToolRegistry {
 
     try {
       const output = await handler.execute(args);
+      const isErr = typeof output === "string" && (
+        output.startsWith("Error:") ||
+        output.startsWith("Error in ") ||
+        output.startsWith("Tool error:") ||
+        output.startsWith("Execution halted") ||
+        /Error in [a-zA-Z0-9_]+:/i.test(output.slice(0, 100))
+      );
       return {
         tool_call_id: "",
         content: output,
-        isError: false,
+        isError: isErr,
       };
     } catch (err: any) {
       return {
@@ -489,7 +500,7 @@ export class ToolRegistry {
             const basePattern = path.basename(file);
             try {
               const entries = await fs.readdir(dir);
-              const regexStr = "^" + basePattern.replace(/[-/\\^$+?.()|[\]{}]/g, "\\$&").replace(/\\\*/g, ".*") + "$";
+              const regexStr = "^" + basePattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$";
               const regex = new RegExp(regexStr);
               const matched = entries.filter((e) => regex.test(e));
               if (matched.length > 0) {

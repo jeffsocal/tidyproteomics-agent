@@ -159,7 +159,7 @@ export class PerformanceReviewService {
           const content = await fs.readFile(path.join(agentLogsDir, file), "utf-8");
           const lines = content.split("\n");
           const dialogSnippet = lines
-            .filter((l) => l.startsWith("### User") || l.startsWith("### Assistant") || l.startsWith("User:") || l.startsWith("Assistant:"))
+            .filter((l) => l.startsWith("### User") || l.startsWith("### Assistant") || l.startsWith("### Agent") || l.startsWith("User:") || l.startsWith("Assistant:") || l.startsWith("Agent:"))
             .slice(0, 30)
             .join("\n");
           if (dialogSnippet) {

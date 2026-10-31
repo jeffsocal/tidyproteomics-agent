@@ -214,6 +214,7 @@ Available MCP & File System Tools for this phase:
 - tpa_enrichment: Run pathway/GO enrichment analysis
 - tpa_batch_analysis(type = "expressions" | "enrichments"): Automated batch differential expression or multi-ontology enrichment analysis
 - tpa_query_expression(comparison, min_log2fc, max_adjp, direction = "up"|"down"|"both", sort_by, limit, save_csv): Query and screen differential candidate proteins directly from empirical Bayes / limma results without row truncation or bash pipe clipping
+- tpa_query_enrichment(comparison, terms, max_adjp, direction, sort_by, limit, resolve_reactome, save_csv): Query and screen enriched pathways across annotation categories with resolved Reactome names
 - tpa_extract(values = "loess" | "raw", na_rm, save_csv): Extract sample-level quantitative abundance matrix (not statistical tests)
 - tpa_plot: Generate volcano, PCA, heatmap, variation, counts, proteins_enrichment plots (Note: plot_heatmap renders across all samples/proteins and does not take comparison contrasts)
 - tpa_export_table: Export analysis tables to TSV/CSV
@@ -229,7 +230,7 @@ Available MCP & File System Tools for this phase:
 STANDARD PHASE STRUCTURE REQUIREMENT:
 1. YAML frontmatter:
 ---
-tools: [tpa_health, tpa_load, tpa_inspect, tpa_expression, tpa_enrichment, tpa_batch_analysis, tpa_query_expression, tpa_plot, tpa_export_table, tpa_export_state, read_file, write_file, edit_file, execute_command, complete_phase, fail_phase]
+tools: [tpa_health, tpa_load, tpa_inspect, tpa_expression, tpa_enrichment, tpa_batch_analysis, tpa_query_expression, tpa_query_enrichment, tpa_plot, tpa_export_table, tpa_export_state, read_file, write_file, edit_file, execute_command, complete_phase, fail_phase]
 ---
 
 2. Phase Header:

@@ -100,8 +100,10 @@ export interface BenchmarkSuite {
     model: string;
     iteration: number;
     phaseTitle?: string;
+    phaseId?: string;
     elapsedSeconds: number;
   };
+  queue?: string[];
   runs: EvaluationRunSummary[];
   aggregated: ModelAggregatedPerformance[];
   error?: string;

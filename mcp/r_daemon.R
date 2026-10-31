@@ -73,6 +73,49 @@ format_comparison <- function(comp) {
   return(comp_clean)
 }
 
+# Helper: Dynamically discover or format comparison contrast based on active dataset state
+resolve_comparison <- function(data, comp = NULL) {
+  if (!is.null(comp) && nzchar(trimws(comp))) {
+    return(format_comparison(comp))
+  }
+  # 1. Try to discover modeled comparisons from analyses in data
+  if (!is.null(data) && !is.null(data$analyses)) {
+    if (!is.null(data$analyses$expression) && length(names(data$analyses$expression)) > 0) {
+      first_comp <- names(data$analyses$expression)[1]
+      return(format_comparison(first_comp))
+    }
+    if (!is.null(data$analyses$enrichment) && length(names(data$analyses$enrichment)) > 0) {
+      first_comp <- names(data$analyses$enrichment)[1]
+      return(format_comparison(first_comp))
+    }
+  }
+  # 2. Try to discover experimental cohorts from experiments table or vector
+  if (!is.null(data)) {
+    exps <- character(0)
+    if (!is.null(data$experiments)) {
+      if (is.data.frame(data$experiments) && "experiment" %in% names(data$experiments)) {
+        exps <- unique(as.character(data$experiments$experiment))
+      } else if (is.character(data$experiments)) {
+        exps <- unique(data$experiments)
+      }
+    }
+    exps <- exps[nzchar(exps)]
+    if (length(exps) == 2) {
+      ctrl_idx <- grep("control|ctrl|wt|wild_?type|vehicle|mock", exps, ignore.case = TRUE)
+      if (length(ctrl_idx) == 1) {
+        treatment <- exps[-ctrl_idx][1]
+        ctrl <- exps[ctrl_idx][1]
+        return(format_comparison(paste0(treatment, "/", ctrl)))
+      } else {
+        return(format_comparison(paste0(exps[1], "/", exps[2])))
+      }
+    } else if (length(exps) > 2) {
+      stop(glue::glue("Multiple experimental cohorts detected: {paste(exps, collapse = ', ')}. Please specify 'comparison' explicitly (e.g. '{exps[1]}/{exps[2]}')."))
+    }
+  }
+  return(format_comparison(comp))
+}
+
 # Helper: Format lean state summary card (~50 tokens vs ~2000 tokens for print(data))
 format_state_card <- function(data, id = NULL) {
   if (is.null(data) || !"tidyproteomics" %in% class(data)) {
@@ -168,6 +211,80 @@ split_top_level_and <- function(expr_str) {
   last_clause <- trimws(paste(buf, collapse = ""))
   if (nzchar(last_clause)) clauses <- c(clauses, last_clause)
   clauses[nzchar(clauses)]
+}
+
+# Helper: Resolve Reactome IDs to human-readable pathway names
+resolve_reactome_ids <- function(ids) {
+  if (is.null(ids) || length(ids) == 0) return(character(0))
+  resolved <- as.character(ids)
+  reactome_idx <- which(grepl("^R-[A-Z]{3}-[0-9]+", resolved))
+  if (length(reactome_idx) == 0) return(resolved)
+
+  unique_reactome <- unique(resolved[reactome_idx])
+  name_map <- list()
+
+  tsv_paths <- c(
+    if (!is.null(STATE$output_dir) && nzchar(STATE$output_dir)) file.path(STATE$output_dir, "tools/reactome_pathways.tsv") else NULL,
+    if (!is.null(STATE$output_dir) && nzchar(STATE$output_dir)) file.path(STATE$output_dir, "data/reactome_pathways.tsv") else NULL,
+    if (!is.null(STATE$output_dir) && nzchar(STATE$output_dir)) file.path(STATE$output_dir, "templates/shared/tools/reactome_pathways.tsv") else NULL,
+    "tools/reactome_pathways.tsv",
+    "data/reactome_pathways.tsv",
+    "templates/shared/tools/reactome_pathways.tsv",
+    "extension/templates/shared/tools/reactome_pathways.tsv"
+  )
+  for (tp in tsv_paths) {
+    if (!is.null(tp) && file.exists(tp)) {
+      tryCatch({
+        df <- read.delim(tp, header = FALSE, stringsAsFactors = FALSE, sep = "\t")
+        if (ncol(df) >= 2) {
+          sub_df <- df[df[[1]] %in% unique_reactome, ]
+          if (nrow(sub_df) > 0) {
+            for (i in seq_len(nrow(sub_df))) name_map[[sub_df[i, 1]]] <- sub_df[i, 2]
+          }
+        }
+      }, error = function(e) NULL)
+      if (length(name_map) > 0) break
+    }
+  }
+
+  unresolved <- setdiff(unique_reactome, names(name_map))
+  if (length(unresolved) > 0) {
+    old_to <- getOption("timeout")
+    on.exit(options(timeout = old_to), add = TRUE)
+    options(timeout = 3)
+    for (rid in head(unresolved, 20)) {
+      suppressWarnings(tryCatch({
+        url <- paste0("https://reactome.org/ContentService/data/query/", rid)
+        con <- url(url, open = "r")
+        raw_txt <- readLines(con, warn = FALSE)
+        close(con)
+        if (length(raw_txt) > 0) {
+          parsed <- jsonlite::fromJSON(paste(raw_txt, collapse = "\n"))
+          if (!is.null(parsed$displayName) && nzchar(parsed$displayName)) name_map[[rid]] <- parsed$displayName
+        }
+      }, error = function(e) NULL))
+    }
+  }
+
+  for (i in reactome_idx) {
+    rid <- resolved[i]
+    if (!is.null(name_map[[rid]]) && nzchar(name_map[[rid]])) resolved[i] <- name_map[[rid]]
+  }
+  return(resolved)
+}
+
+# Helper: Format statistical p-values with scientific notation if < 1e-4
+fmt_pvalue <- function(v) {
+  if (is.null(v) || length(v) == 0) return(character(0))
+  vapply(v, function(x) {
+    if (is.null(x) || is.na(x)) return("NA")
+    if (is.numeric(x)) {
+      if (!is.finite(x)) return(as.character(x))
+      if (x < 1e-4) return(sprintf("%.2e", x))
+      return(sprintf("%.4f", x))
+    }
+    as.character(x)
+  }, character(1), USE.NAMES = FALSE)
 }
 
 # Router logic
@@ -706,8 +823,7 @@ handle_request <- function(req) {
       # ------------------------------------------------------------------------
       "/expression" = {
         data <- get_active_data(params$id)
-        comp_raw <- if (!is.null(params$comparison)) params$comparison else "knockdown/control"
-        comp <- format_comparison(comp_raw)
+        comp <- resolve_comparison(data, params$comparison)
         method_arg <- if (!is.null(params$method)) glue::glue(', .method = "{params$method}"') else ""
         padj_arg <- if (!is.null(params$p_adjust)) glue::glue(', .p.adjust = "{params$p_adjust}"') else ""
 
@@ -722,8 +838,7 @@ handle_request <- function(req) {
 
       "/enrichment" = {
         data <- get_active_data(params$id)
-        comp_raw <- if (!is.null(params$comparison)) params$comparison else "knockdown/control"
-        comp <- format_comparison(comp_raw)
+        comp <- resolve_comparison(data, params$comparison)
         terms <- if (!is.null(params$terms)) params$terms else "biological_process"
         method_arg <- if (!is.null(params$method)) glue::glue(', .method = "{params$method}"') else ""
 
@@ -781,10 +896,50 @@ handle_request <- function(req) {
             created_files <- c(created_files, file.path("data", base_f), file.path("data", basename(tsv_f)))
           }
 
+          summary_txt <- ""
+          n_sig <- 0
+          n_up <- 0
+          n_down <- 0
+          top_up_genes <- character(0)
+          top_down_genes <- character(0)
+
+          if (exists("df_tmp") && !is.null(df_tmp) && is.data.frame(df_tmp) && nrow(df_tmp) > 0) {
+            fc_col <- intersect(c("log2_foldchange", "log2fc", "log2FoldChange"), names(df_tmp))[1]
+            p_col <- intersect(c("adj_p_value", "padj", "adj.P.Val", "p_value"), names(df_tmp))[1]
+            gene_col <- intersect(c("gene_name", "protein", "identifier"), names(df_tmp))[1]
+
+            if (!is.na(fc_col) && !is.na(p_col)) {
+              fc_vec <- suppressWarnings(as.numeric(df_tmp[[fc_col]]))
+              p_vec <- suppressWarnings(as.numeric(df_tmp[[p_col]]))
+              sig_mask <- !is.na(fc_vec) & !is.na(p_vec) & abs(fc_vec) >= 1.0 & p_vec <= 0.05
+              up_mask <- sig_mask & fc_vec >= 1.0
+              down_mask <- sig_mask & fc_vec <= -1.0
+
+              n_sig <- sum(sig_mask)
+              n_up <- sum(up_mask)
+              n_down <- sum(down_mask)
+
+              top_up_genes <- if (n_up > 0 && !is.na(gene_col)) head(as.character(df_tmp[up_mask, ][order(-df_tmp[[fc_col]][up_mask]), gene_col]), 6) else character(0)
+              top_down_genes <- if (n_down > 0 && !is.na(gene_col)) head(as.character(df_tmp[down_mask, ][order(df_tmp[[fc_col]][down_mask]), gene_col]), 6) else character(0)
+
+              summary_txt <- glue::glue("Identified {n_sig} significant proteins (|log2FC| >= 1.0, adj_p <= 0.05): {n_up} upregulated, {n_down} downregulated.\n- Top Upregulated: {paste(top_up_genes, collapse = ', ')}\n- Top Downregulated: {paste(top_down_genes, collapse = ', ')}")
+            }
+          }
+
+          msg <- glue::glue("Batch differential expression analysis completed via analyze_expressions().")
+          if (nzchar(summary_txt)) {
+            msg <- glue::glue("{msg}\n\n### Differential Expression Summary\n{summary_txt}")
+          }
+
           list(
             success = TRUE,
             type = "expressions",
-            message = glue::glue("Batch differential expression analysis completed via analyze_expressions()."),
+            message = msg,
+            significant_count = n_sig,
+            upregulated_count = n_up,
+            downregulated_count = n_down,
+            top_upregulated = top_up_genes,
+            top_downregulated = top_down_genes,
             files_created = unique(created_files)
           )
         } else {
@@ -960,6 +1115,22 @@ handle_request <- function(req) {
 
         total_matching <- nrow(filtered)
 
+        # Compute imputation risk and candidate reliability if condition imputation columns exist
+        comp_parts <- strsplit(comp_key, "\\s*/\\s*")[[1]]
+        if (length(comp_parts) >= 2) {
+          clean_t <- gsub("^[`'\"]+|[`'\"]+$", "", trimws(comp_parts[1]))
+          clean_c <- gsub("^[`'\"]+|[`'\"]+$", "", trimws(comp_parts[2]))
+          g1 <- paste0("imputed_", clean_t)
+          g2 <- paste0("imputed_", clean_c)
+          imp1 <- if (g1 %in% names(filtered)) as.numeric(filtered[[g1]]) else rep(NA_real_, nrow(filtered))
+          imp2 <- if (g2 %in% names(filtered)) as.numeric(filtered[[g2]]) else rep(NA_real_, nrow(filtered))
+          max_imp <- pmax(imp1, imp2, na.rm = TRUE)
+          max_imp[!is.finite(max_imp)] <- NA_real_
+          filtered$imputation_bias <- ifelse(is.na(max_imp), "UNKNOWN", ifelse(max_imp > 0.5, "HIGH", ifelse(max_imp >= 0.2, "MODERATE", "LOW")))
+          filtered$candidate_reliability <- ifelse(filtered$imputation_bias == "LOW", "ROBUST_QUANTITATIVE", ifelse(filtered$imputation_bias == "HIGH", "DETECTION_LIMITED_ON_OFF", ifelse(filtered$imputation_bias == "MODERATE", "HIGH_UNCERTAINTY", "UNKNOWN")))
+          filtered$imputation_delta <- ifelse(is.finite(imp1) & is.finite(imp2), round(imp1 - imp2, 3), NA_real_)
+        }
+
         # Optional file export
         save_csv <- params$save_csv
         if (!is.null(save_csv) && nzchar(trimws(save_csv))) {
@@ -976,7 +1147,7 @@ handle_request <- function(req) {
 
         # Format top N preview as markdown table
         preview_tbl <- head(filtered, limit)
-        cols_to_show <- intersect(c("protein", "gene_name", "log2_foldchange", "p_value", "adj_p_value", "imputed"), names(preview_tbl))
+        cols_to_show <- intersect(c("protein", "gene_name", "log2_foldchange", "p_value", "adj_p_value", "imputation_bias", "candidate_reliability", "imputation_delta", "imputed"), names(preview_tbl))
         if (length(cols_to_show) < 3) {
           cols_to_show <- head(names(preview_tbl), 6)
         }
@@ -989,7 +1160,7 @@ handle_request <- function(req) {
             v <- row[[col]]
             if (is.null(v) || is.na(v)) return("-")
             if (is.numeric(v)) {
-              if (col %in% c("p_value", "adj_p_value")) return(sprintf("%.4e", v))
+              if (col %in% c("p_value", "adj_p_value")) return(fmt_pvalue(v))
               return(sprintf("%.3f", v))
             }
             as.character(v)
@@ -1009,148 +1180,345 @@ handle_request <- function(req) {
         )
       },
 
+      "/query_enrichment" = {
+        data <- get_active_data(params$id)
+        if (is.null(data$analysis) || length(data$analysis) == 0) {
+          stop("No analysis results found in dataset. Please run tpa_enrichment first.")
+        }
+
+        # Resolve comparison key
+        comp_names <- names(data$analysis)
+        comp_arg <- params$comparison
+        comp_key <- NULL
+        if (!is.null(comp_arg) && nzchar(trimws(comp_arg))) {
+          clean_comp <- gsub("\\s+", "", comp_arg)
+          match_idx <- which(gsub("\\s+", "", comp_names) == clean_comp)
+          if (length(match_idx) > 0) {
+            comp_key <- comp_names[match_idx[1]]
+          } else {
+            clean_comp2 <- gsub("[`'\"]", "", clean_comp)
+            match_idx2 <- which(gsub("[`'\"\\s+]", "", comp_names) == clean_comp2)
+            if (length(match_idx2) > 0) {
+              comp_key <- comp_names[match_idx2[1]]
+            } else {
+              stop(glue::glue("Comparison '{comp_arg}' not found. Available comparisons: {paste(comp_names, collapse = ', ')}"))
+            }
+          }
+        } else {
+          comp_key <- comp_names[1]
+        }
+
+        c_clean <- gsub("[^A-Za-z0-9_]", "_", comp_key)
+        data_dir <- file.path(STATE$output_dir, "data")
+
+        # Attempt to load from exported enrichment tables in data/ first (which contain driver genes)
+        enr_files <- list.files(data_dir, pattern = paste0("^table_.*_enrichment_.*", c_clean, ".*\\.(tsv|csv)$"), full.names = TRUE, ignore.case = TRUE)
+        if (length(enr_files) == 0) {
+          enr_files <- list.files("data", pattern = paste0("^table_.*_enrichment_.*", c_clean, ".*\\.(tsv|csv)$"), full.names = TRUE, ignore.case = TRUE)
+        }
+        if (length(enr_files) == 0) {
+          enr_files <- list.files(data_dir, pattern = "^table_.*_enrichment_.*\\.(tsv|csv)$", full.names = TRUE, ignore.case = TRUE)
+        }
+
+        enr_tbl <- NULL
+        if (length(enr_files) > 0) {
+          enr_tbl <- dplyr::bind_rows(lapply(enr_files, function(f) {
+            tbl <- tryCatch(
+              if (grepl("\\.tsv$", f, ignore.case = TRUE)) readr::read_tsv(f, show_col_types = FALSE) else readr::read_csv(f, show_col_types = FALSE),
+              error = function(e) NULL
+            )
+            if (!is.null(tbl) && nrow(tbl) > 0) {
+              if (!"term" %in% names(tbl)) {
+                category <- sub(paste0("^.*_enrichment_(.*)_", c_clean, "\\.(tsv|csv)$"), "\\1", basename(f), ignore.case = TRUE)
+                if (identical(category, basename(f))) {
+                  category <- sub("^.*_enrichment_([^_]+(?:_[^_]+)*?)_.*$", "\\1", basename(f), ignore.case = TRUE)
+                }
+                tbl$term <- category
+              }
+            }
+            tbl
+          }))
+          if (!is.null(enr_tbl) && (!"annotation" %in% names(enr_tbl) || nrow(enr_tbl) == 0)) {
+            enr_tbl <- NULL
+          }
+        }
+
+        # Fallback to in-memory analysis object
+        if (is.null(enr_tbl) || nrow(enr_tbl) == 0) {
+          analysis_obj <- data$analysis[[comp_key]]
+          if (!is.null(analysis_obj$enrichment) && length(analysis_obj$enrichment) > 0) {
+            enr_list <- list()
+            for (t_name in names(analysis_obj$enrichment)) {
+              item <- analysis_obj$enrichment[[t_name]]
+              if (!is.null(item$data) && is.data.frame(item$data) && nrow(item$data) > 0) {
+                df_sub <- item$data
+                df_sub$term <- t_name
+                enr_list[[t_name]] <- df_sub
+              }
+            }
+            if (length(enr_list) > 0) enr_tbl <- dplyr::bind_rows(enr_list)
+          }
+        }
+
+        if (is.null(enr_tbl) || nrow(enr_tbl) == 0) {
+          stop(glue::glue("No enrichment analysis data found for comparison '{comp_key}'."))
+        }
+
+        # Filter by terms/category
+        terms_filter <- if (!is.null(params$terms) && nzchar(trimws(params$terms))) tolower(trimws(params$terms)) else "all"
+        if (terms_filter != "all") {
+          enr_tbl <- enr_tbl %>% dplyr::filter(tolower(term) %in% unlist(strsplit(terms_filter, ",\\s*")))
+        }
+
+        # Filter by adjusted p-value
+        max_adjp <- if (!is.null(params$max_adjp)) as.numeric(params$max_adjp) else 1.0
+        if ("adj_p_value" %in% names(enr_tbl) && !is.na(max_adjp) && max_adjp < 1.0) {
+          enr_tbl <- enr_tbl %>% dplyr::filter(!is.na(adj_p_value) & adj_p_value <= max_adjp)
+        }
+
+        # Filter by nominal p-value
+        max_p <- if (!is.null(params$max_p)) as.numeric(params$max_p) else 1.0
+        if ("p_value" %in% names(enr_tbl) && !is.na(max_p) && max_p < 1.0) {
+          enr_tbl <- enr_tbl %>% dplyr::filter(!is.na(p_value) & p_value <= max_p)
+        }
+
+        # Filter by score direction
+        direction <- if (!is.null(params$direction)) tolower(params$direction) else "both"
+        if ("enrichment" %in% names(enr_tbl)) {
+          if (direction %in% c("up", "positive", "pos")) {
+            enr_tbl <- enr_tbl %>% dplyr::filter(!is.na(enrichment) & enrichment > 0)
+          } else if (direction %in% c("down", "negative", "neg")) {
+            enr_tbl <- enr_tbl %>% dplyr::filter(!is.na(enrichment) & enrichment < 0)
+          }
+        }
+
+        # Resolve Reactome IDs if requested (default TRUE)
+        resolve_rec <- if (!is.null(params$resolve_reactome)) isTRUE(as.logical(params$resolve_reactome)) else TRUE
+        if (resolve_rec && "annotation" %in% names(enr_tbl)) {
+          enr_tbl$annotation <- resolve_reactome_ids(enr_tbl$annotation)
+        }
+
+        # Extract leading driver genes if present or derive from annotations
+        driver_col <- intersect(c("gene_names", "member_genes", "member_proteins"), names(enr_tbl))[1]
+        if (!is.na(driver_col)) {
+          enr_tbl$top_drivers <- sapply(strsplit(as.character(enr_tbl[[driver_col]]), ",\\s*"), function(x) paste(head(unique(na.omit(trimws(x))), 4), collapse = ", "))
+        } else {
+          # Derive from active dataset annotations and expression if available
+          exp_tbl <- tryCatch(data$analysis[[comp_key]]$expression, error = function(e) NULL)
+          if (!is.null(exp_tbl) && "gene_name" %in% names(exp_tbl) && "annotation" %in% names(enr_tbl)) {
+            sig_exp <- exp_tbl %>% dplyr::filter(!is.na(adj_p_value) & adj_p_value <= 0.05)
+            enr_tbl$top_drivers <- sapply(seq_len(nrow(enr_tbl)), function(i) {
+              ann <- enr_tbl$annotation[i]
+              if (is.na(ann) || !nzchar(ann)) return("-")
+              mg <- sig_exp %>%
+                dplyr::filter(if_any(any_of(c("biological_process", "cellular_component", "molecular_function", "reactome_pathway", "wiki_pathway")), ~ grepl(ann, .x, fixed = TRUE))) %>%
+                dplyr::arrange(desc(abs(log2_foldchange))) %>%
+                dplyr::pull(gene_name)
+              if (length(mg) > 0) paste(head(unique(na.omit(mg)), 4), collapse = ", ") else "-"
+            })
+          }
+        }
+
+        # Sort
+        sort_by <- if (!is.null(params$sort_by) && nzchar(params$sort_by)) params$sort_by else "adj_p_value"
+        if (sort_by %in% names(enr_tbl)) {
+          if (sort_by == "enrichment") {
+            enr_tbl <- enr_tbl %>% dplyr::arrange(desc(abs(enrichment)))
+          } else {
+            enr_tbl <- enr_tbl %>% dplyr::arrange(.data[[sort_by]])
+          }
+        }
+
+        total_matching <- nrow(enr_tbl)
+        limit <- if (!is.null(params$limit)) as.integer(params$limit) else 50
+        preview_tbl <- head(enr_tbl, limit)
+
+        # Optional file export
+        save_csv <- params$save_csv
+        if (!is.null(save_csv) && nzchar(trimws(save_csv))) {
+          clean_path <- trimws(save_csv)
+          abs_save <- if (grepl("^(/|[A-Za-z]:)", clean_path)) clean_path else file.path(STATE$output_dir, clean_path)
+          save_dir <- dirname(abs_save)
+          if (!dir.exists(save_dir)) dir.create(save_dir, recursive = TRUE, showWarnings = FALSE)
+          if (grepl("\\.tsv$", clean_path, ignore.case = TRUE)) {
+            readr::write_tsv(enr_tbl, abs_save)
+          } else {
+            readr::write_csv(enr_tbl, abs_save)
+          }
+        }
+
+        # Format markdown table
+        cols_to_show <- intersect(c("term", "annotation", "enrichment", "size", "p_value", "adj_p_value", "top_drivers"), names(preview_tbl))
+        if (length(cols_to_show) < 3) cols_to_show <- head(names(preview_tbl), 6)
+        disp_tbl <- preview_tbl[, cols_to_show, drop = FALSE]
+
+        md_header <- paste0("| ", paste(cols_to_show, collapse = " | "), " |")
+        md_sep <- paste0("| ", paste(rep(":---", length(cols_to_show)), collapse = " | "), " |")
+        md_rows <- apply(disp_tbl, 1, function(row) {
+          vals <- sapply(cols_to_show, function(col) {
+            v <- row[[col]]
+            if (is.null(v) || is.na(v)) return("-")
+            if (is.numeric(v)) {
+              if (col %in% c("p_value", "adj_p_value")) return(fmt_pvalue(v))
+              return(sprintf("%.3f", v))
+            }
+            as.character(v)
+          })
+          paste0("| ", paste(vals, collapse = " | "), " |")
+        })
+
+        md_table <- paste(c(md_header, md_sep, md_rows), collapse = "\n")
+
+        list(
+          success = TRUE,
+          comparison = comp_key,
+          total_terms = total_matching,
+          returned_count = nrow(preview_tbl),
+          markdown_table = md_table,
+          saved_file = save_csv
+        )
+      },
+
       # ------------------------------------------------------------------------
-      # Visualizations (All 16 Plot Types)
+      # Visualizations (All 16 Plot Types, supporting single or batch execution)
       # ------------------------------------------------------------------------
       "/plot" = {
         data <- get_active_data(params$id)
-        plot_type <- params$type
-        comp <- params$comparison
-        terms <- params$terms
-        protein_id <- params$protein
-        extra_args <- params$extra_args
-        custom_file <- params$file_name
+        raw_types <- if (!is.null(params$types)) params$types else params$type
+        types_vec <- if (is.character(raw_types)) trimws(unlist(strsplit(raw_types, ","))) else character(0)
+        types_vec <- types_vec[nzchar(types_vec)]
+        if (length(types_vec) == 0) types_vec <- c("pca")
 
         data_dir <- file.path(STATE$output_dir, "data")
         if (!dir.exists(data_dir)) dir.create(data_dir, recursive = TRUE, showWarnings = FALSE)
 
-        # Contrast-dependent plots that require or take a comparison contrast quosure
         contrast_plots <- c("volcano", "expression", "proportion", "enrichment", "candidates", "signatures", "imputation_diagnostic")
+        created_files <- c()
 
-        # Fallback contrast if comparison omitted for contrast-dependent plots
-        if ((is.null(comp) || !nzchar(trimws(comp))) && plot_type %in% contrast_plots) {
-          if (!is.null(data$analysis) && length(names(data$analysis)) > 0) {
-            comp <- names(data$analysis)[1]
+        for (plot_type in types_vec) {
+          comp <- params$comparison
+          terms <- params$terms
+          protein_id <- params$protein
+          extra_args <- params$extra_args
+          custom_file <- if (length(types_vec) == 1) params$file_name else NULL
+
+          # Fallback contrast if comparison omitted for contrast-dependent plots
+          if ((is.null(comp) || !nzchar(trimws(comp))) && plot_type %in% contrast_plots) {
+            comp <- resolve_comparison(data, comp)
           }
-        }
 
-        # Fallback term if omitted for enrichment plot
-        if (identical(plot_type, "enrichment")) {
-          if (is.null(terms) || !nzchar(trimws(terms))) {
-            comp_key <- if (!is.null(comp)) gsub("[` ]", "", comp) else ""
-            enrich_terms <- if (!is.null(data$analysis[[comp_key]]$enrichment)) {
-              names(data$analysis[[comp_key]]$enrichment)
-            } else if (length(names(data$analysis)) > 0 && !is.null(data$analysis[[1]]$enrichment)) {
-              names(data$analysis[[1]]$enrichment)
-            } else character(0)
-            if (length(enrich_terms) > 0) {
-              terms <- if ("biological_process" %in% enrich_terms) "biological_process" else enrich_terms[1]
+          # Fallback term if omitted for enrichment plot
+          if (identical(plot_type, "enrichment")) {
+            if (is.null(terms) || !nzchar(trimws(terms))) {
+              comp_key <- if (!is.null(comp)) gsub("[` ]", "", comp) else ""
+              enrich_terms <- if (!is.null(data$analysis[[comp_key]]$enrichment)) {
+                names(data$analysis[[comp_key]]$enrichment)
+              } else if (length(names(data$analysis)) > 0 && !is.null(data$analysis[[1]]$enrichment)) {
+                names(data$analysis[[1]]$enrichment)
+              } else character(0)
+              if (length(enrich_terms) > 0) {
+                terms <- if ("biological_process" %in% enrich_terms) "biological_process" else enrich_terms[1]
+              }
+            } else {
+              terms <- trimws(unlist(strsplit(as.character(terms), ",")))[1]
+            }
+          }
+
+          # Special case: proteins_enrichment multi-ontology faceted plot via analyze_enrichments()
+          if (plot_type %in% c("proteins_enrichment", "batch_enrichment")) {
+            data <- data %>% analyze_enrichments()
+            set_active_data(data)
+            enrich_pngs <- list.files(".", pattern = glue::glue("^{data$analyte}_enrichment_.*\\.png$"), full.names = TRUE)
+            created_file <- file.path("data", glue::glue("{data$analyte}_enrichment.png"))
+            if (length(enrich_pngs) > 0) {
+              created_file <- file.path("data", basename(enrich_pngs[1]))
+              file.copy(enrich_pngs[1], file.path(STATE$output_dir, created_file), overwrite = TRUE)
+              alias_file <- file.path(STATE$output_dir, "data", paste0("plot_", basename(enrich_pngs[1])))
+              file.copy(enrich_pngs[1], alias_file, overwrite = TRUE)
+              file.remove(enrich_pngs)
+            }
+            log_code(glue::glue("{STATE$active_id} <- {STATE$active_id} %>% analyze_enrichments()"))
+            created_files <- c(created_files, created_file)
+            next
+          }
+
+          # Determine target file destination
+          if (!is.null(custom_file) && nzchar(trimws(custom_file))) {
+            clean_dest <- trimws(custom_file)
+            if (!grepl("\\.png$", clean_dest, ignore.case = TRUE)) clean_dest <- paste0(clean_dest, ".png")
+            target_path <- if (grepl("^(/|[A-Za-z]:|data/)", clean_dest)) clean_dest else file.path("data", clean_dest)
+          } else {
+            comp_suffix <- if (!is.null(comp) && nzchar(trimws(comp))) {
+              clean_c <- gsub("^[`'\"]+|[`'\"]+$", "", trimws(comp))
+              clean_c <- gsub("\\s*(/|\\s+vs\\.?\\s+|-)\\s*", "_vs_", clean_c, ignore.case = TRUE)
+              clean_c <- gsub("[^a-zA-Z0-9_]+", "_", clean_c)
+              paste0("_", clean_c)
+            } else ""
+            default_name <- if (identical(plot_type, "counts")) {
+              glue::glue("plot_{data$analyte}_counts.png")
+            } else if (identical(plot_type, "enrichment") && !is.null(terms) && nzchar(trimws(terms))) {
+              term_clean <- gsub("[^a-zA-Z0-9_]+", "_", trimws(terms))
+              glue::glue("plot_enrichment_{term_clean}{comp_suffix}.png")
+            } else {
+              glue::glue("plot_{plot_type}{comp_suffix}.png")
+            }
+            target_path <- file.path("data", default_name)
+          }
+          abs_target_path <- if (grepl("^(/|[A-Za-z]:)", target_path)) target_path else file.path(STATE$output_dir, target_path)
+
+          # Construct plotting call with destination = "plot" so the plot object is returned directly
+          plot_fn <- glue::glue("plot_{plot_type}")
+          args <- c('destination = "plot"')
+          if (!is.null(comp) && nzchar(trimws(comp)) && plot_type %in% contrast_plots) {
+            safe_comp <- format_comparison(comp)
+            args <- c(safe_comp, args)
+          }
+          if (!is.null(terms) && nzchar(trimws(terms)) && plot_type %in% c("enrichment", "heatmap")) {
+            term_param <- if (plot_type == "enrichment") ".term" else ".terms"
+            args <- c(args, glue::glue('{term_param} = "{trimws(terms)}"'))
+          }
+          if (!is.null(protein_id) && plot_type %in% c("expression", "protein")) {
+            if (plot_type == "protein") {
+              args <- c(glue::glue('protein = "{protein_id}"'), args)
+            } else {
+              args <- c(args, glue::glue('labels_column = "protein"'))
+            }
+          }
+          if (!is.null(extra_args) && nchar(extra_args) > 0) args <- c(args, extra_args)
+
+          eval_str <- glue::glue("data %>% {plot_fn}({paste(args, collapse = ', ')})")
+          res_plot <- eval(parse(text = eval_str))
+
+          if (inherits(res_plot, c("gg", "ggplot", "grob", "patchwork"))) {
+            ggplot2::ggsave(filename = abs_target_path, plot = res_plot, height = 5, width = 8, dpi = 300)
+          } else if ("tidyproteomics" %in% class(res_plot)) {
+            set_active_data(res_plot)
+            expected_name <- glue::glue("plot_{data$analyte}_{plot_type}.png")
+            if (file.exists(file.path(STATE$output_dir, expected_name))) {
+              file.copy(file.path(STATE$output_dir, expected_name), abs_target_path, overwrite = TRUE)
+              file.remove(file.path(STATE$output_dir, expected_name))
             }
           } else {
-            # Ensure scalar term string for tidyproteomics::plot_enrichment
-            terms <- trimws(unlist(strsplit(as.character(terms), ",")))[1]
+            tryCatch({
+              png(abs_target_path, width = 8, height = 5, units = "in", res = 300)
+              print(res_plot)
+              dev.off()
+            }, error = function(e) {
+              if (dev.cur() > 1) dev.off()
+            })
           }
-        }
 
-        # Special case: proteins_enrichment multi-ontology faceted plot via analyze_enrichments()
-        if (plot_type %in% c("proteins_enrichment", "batch_enrichment")) {
-          data <- data %>% analyze_enrichments()
-          set_active_data(data)
-          enrich_pngs <- list.files(".", pattern = glue::glue("^{data$analyte}_enrichment_.*\\.png$"), full.names = TRUE)
-          created_file <- file.path("data", glue::glue("{data$analyte}_enrichment.png"))
-          if (length(enrich_pngs) > 0) {
-            created_file <- file.path("data", basename(enrich_pngs[1]))
-            file.copy(enrich_pngs[1], file.path(STATE$output_dir, created_file), overwrite = TRUE)
-            alias_file <- file.path(STATE$output_dir, "data", paste0("plot_", basename(enrich_pngs[1])))
-            file.copy(enrich_pngs[1], alias_file, overwrite = TRUE)
-            file.remove(enrich_pngs)
-          }
-          log_code(glue::glue("{STATE$active_id} <- {STATE$active_id} %>% analyze_enrichments()"))
-          return(list(
-            success = TRUE,
-            plot_type = "proteins_enrichment",
-            file_created = created_file
-          ))
+          log_args <- sub('destination = "plot"', 'destination = "png"', args, fixed = TRUE)
+          log_code(glue::glue('{STATE$active_id} %>% {plot_fn}({paste(log_args, collapse = ", ")})'))
+          created_files <- c(created_files, target_path)
         }
-
-        # Determine target file destination
-        if (!is.null(custom_file) && nzchar(trimws(custom_file))) {
-          clean_dest <- trimws(custom_file)
-          if (!grepl("\\.png$", clean_dest, ignore.case = TRUE)) clean_dest <- paste0(clean_dest, ".png")
-          target_path <- if (grepl("^(/|[A-Za-z]:|data/)", clean_dest)) clean_dest else file.path("data", clean_dest)
-        } else {
-          comp_suffix <- if (!is.null(comp) && nzchar(trimws(comp))) {
-            clean_c <- gsub("^[`'\"]+|[`'\"]+$", "", trimws(comp))
-            clean_c <- gsub("\\s*(/|\\s+vs\\.?\\s+|-)\\s*", "_vs_", clean_c, ignore.case = TRUE)
-            clean_c <- gsub("[^a-zA-Z0-9_]+", "_", clean_c)
-            paste0("_", clean_c)
-          } else ""
-          default_name <- if (identical(plot_type, "counts")) {
-            glue::glue("plot_{data$analyte}_counts.png")
-          } else if (identical(plot_type, "enrichment") && !is.null(terms) && nzchar(trimws(terms))) {
-            term_clean <- gsub("[^a-zA-Z0-9_]+", "_", trimws(terms))
-            glue::glue("plot_enrichment_{term_clean}{comp_suffix}.png")
-          } else {
-            glue::glue("plot_{plot_type}{comp_suffix}.png")
-          }
-          target_path <- file.path("data", default_name)
-        }
-        abs_target_path <- if (grepl("^(/|[A-Za-z]:)", target_path)) target_path else file.path(STATE$output_dir, target_path)
-
-        # Construct plotting call with destination = "plot" so the plot object is returned directly
-        plot_fn <- glue::glue("plot_{plot_type}")
-        args <- c('destination = "plot"')
-        # Only inject comparison contrast expressions for plots that take comparison quosures
-        # tidyproteomics::plot_heatmap does NOT accept contrast expressions and will evaluate them as unbound symbols.
-        if (!is.null(comp) && nzchar(trimws(comp)) && plot_type %in% contrast_plots) {
-          safe_comp <- format_comparison(comp)
-          args <- c(safe_comp, args)
-        }
-        if (!is.null(terms) && nzchar(trimws(terms)) && plot_type %in% c("enrichment", "heatmap")) {
-          term_param <- if (plot_type == "enrichment") ".term" else ".terms"
-          args <- c(args, glue::glue('{term_param} = "{trimws(terms)}"'))
-        }
-        if (!is.null(protein_id) && plot_type %in% c("expression", "protein")) {
-          if (plot_type == "protein") {
-            args <- c(glue::glue('protein = "{protein_id}"'), args)
-          } else {
-            args <- c(args, glue::glue('labels_column = "protein"'))
-          }
-        }
-        if (!is.null(extra_args) && nchar(extra_args) > 0) args <- c(args, extra_args)
-
-        eval_str <- glue::glue("data %>% {plot_fn}({paste(args, collapse = ', ')})")
-        res_plot <- eval(parse(text = eval_str))
-
-        # Save plot directly without directory scanning or race conditions
-        if (inherits(res_plot, c("gg", "ggplot", "grob", "patchwork"))) {
-          ggplot2::ggsave(filename = abs_target_path, plot = res_plot, height = 5, width = 8, dpi = 300)
-        } else if ("tidyproteomics" %in% class(res_plot)) {
-          set_active_data(res_plot)
-          # Fallback if package saved plot in cwd
-          expected_name <- glue::glue("plot_{data$analyte}_{plot_type}.png")
-          if (file.exists(file.path(STATE$output_dir, expected_name))) {
-            file.copy(file.path(STATE$output_dir, expected_name), abs_target_path, overwrite = TRUE)
-            file.remove(file.path(STATE$output_dir, expected_name))
-          }
-        } else {
-          tryCatch({
-            png(abs_target_path, width = 8, height = 5, units = "in", res = 300)
-            print(res_plot)
-            dev.off()
-          }, error = function(e) {
-            if (dev.cur() > 1) dev.off()
-          })
-        }
-
-        # Log reproducible code
-        log_args <- sub('destination = "plot"', 'destination = "png"', args, fixed = TRUE)
-        log_code(glue::glue('{STATE$active_id} %>% {plot_fn}({paste(log_args, collapse = ", ")})'))
 
         list(
           success = TRUE,
-          plot_type = plot_type,
-          file_created = target_path
+          plot_type = paste(types_vec, collapse = ", "),
+          file_created = if (length(created_files) > 0) created_files[1] else "",
+          files_created = created_files,
+          message = glue::glue("Generated {length(created_files)} plot(s): {paste(created_files, collapse = ', ')}")
         )
       },
 
@@ -1190,7 +1558,7 @@ handle_request <- function(req) {
         } else if (export_type == "analysis") {
           term_arg <- if (!is.null(term)) glue::glue(', .term = "{term}"') else ""
           append_arg <- if (!is.null(append_val) && nzchar(append_val)) glue::glue(', .append = "{append_val}"') else ""
-          comp_str <- format_comparison(if (!is.null(comp)) comp else "knockdown/control")
+          comp_str <- resolve_comparison(data, comp)
           fn_call <- if (!is.null(file_name)) glue::glue('export_analysis(data, {comp_str}, .analysis = "{analysis}"{term_arg}{append_arg}, .file_name = "{file_name}")') else glue::glue('export_analysis(data, {comp_str}, .analysis = "{analysis}"{term_arg}{append_arg})')
           tbl <- eval(parse(text = fn_call))
           log_fn <- if (!is.null(file_name)) glue::glue('export_analysis({comp_str}, .analysis = "{analysis}"{term_arg}{append_arg}, .file_name = "{file_name}")') else glue::glue('export_analysis({comp_str}, .analysis = "{analysis}"{term_arg}{append_arg})')
@@ -1466,8 +1834,7 @@ handle_request <- function(req) {
       # ------------------------------------------------------------------------
       "/normalization_sensitivity" = {
         data <- get_active_data(params$id)
-        comp_raw <- if (!is.null(params$comparison)) params$comparison else "knockdown/control"
-        comp <- format_comparison(comp_raw)
+        comp <- resolve_comparison(data, params$comparison)
         p_cutoff <- if (!is.null(params$p_cutoff)) as.numeric(params$p_cutoff) else 0.05
         fc_cutoff <- if (!is.null(params$log2fc_cutoff)) as.numeric(params$log2fc_cutoff) else 1.0
 
@@ -1608,6 +1975,355 @@ handle_request <- function(req) {
           success = TRUE,
           rds_saved = rds_path,
           script_saved = script_path
+        )
+      },
+
+      "/compile_summary" = {
+        data <- get_active_data(params$id)
+        if (is.null(data$analysis) || length(data$analysis) == 0) {
+          stop("No analysis results found in dataset. Please run tpa_expression first.")
+        }
+
+        summary_path <- if (!is.null(params$output_summary) && nzchar(params$output_summary)) params$output_summary else file.path(STATE$output_dir, "data", "observations_summary.md")
+        script_path <- if (!is.null(params$output_script) && nzchar(params$output_script)) params$output_script else file.path(STATE$output_dir, "code", "06_observations.R")
+
+        dir.create(dirname(summary_path), recursive = TRUE, showWarnings = FALSE)
+        dir.create(dirname(script_path), recursive = TRUE, showWarnings = FALSE)
+
+        # Target gene detection
+        target_gene_arg <- if (!is.null(params$target_gene) && nzchar(trimws(params$target_gene))) trimws(params$target_gene) else NULL
+        if (is.null(target_gene_arg)) {
+          exp_md_path <- file.path(STATE$output_dir, "docs/experiment.md")
+          if (file.exists(exp_md_path)) {
+            exp_lines <- tryCatch(readLines(exp_md_path, warn = FALSE), error = function(e) character(0))
+            tgt_line <- grep("Target\\s*(?:Protein|Gene)?:\\s*([A-Za-z0-9_/-]+)", exp_lines, value = TRUE, ignore.case = TRUE)
+            if (length(tgt_line) > 0) {
+              target_gene_arg <- trimws(sub(".*Target\\s*(?:Protein|Gene)?:\\s*([A-Za-z0-9_/-]+).*", "\\1", tgt_line[1], ignore.case = TRUE))
+            }
+          }
+        }
+
+        analyte_name <- if (!is.null(data$analyte)) data$analyte else "proteins"
+        id_col <- if (!is.null(data$identifier)) data$identifier else "protein"
+        features <- if (!is.null(data$quantitative[[id_col]])) unique(as.character(data$quantitative[[id_col]])) else character(0)
+        samples <- if (!is.null(data$experiments$sample)) unique(as.character(data$experiments$sample)) else character(0)
+        source_norm <- if (!is.null(data$quantitative_source)) data$quantitative_source else "raw"
+
+        out_md <- character()
+        emit <- function(...) out_md <<- c(out_md, paste0(...))
+        emit_tbl <- function(df) {
+          if (is.null(df) || nrow(df) == 0) {
+            emit("_No rows available._\n")
+          } else {
+            emit(knitr::kable(df, format = "pipe", escape = TRUE), "")
+          }
+        }
+
+        emit("# Primary Data-Derived Observations", "")
+        emit(sprintf("Created: %s  ", format(Sys.time(), "%Y-%m-%d %H:%M")))
+        emit("Agent: TidyProteomicsAgent v1.0.0  ")
+        emit(sprintf("R Package: tidyproteomics v%s", as.character(packageVersion("tidyproteomics"))), "")
+        emit("_Model and agent metadata follow docs/llm.md._", "")
+
+        emit("## 1. Analysis Checkpoint & Dataset Dimensions Summary", "")
+        if (!is.null(target_gene_arg) && nzchar(target_gene_arg)) {
+          emit(sprintf("- **Target perturbation status**: Specified perturbation target is `%s`; quantitative metrics summarized below.", target_gene_arg))
+        } else {
+          emit("- **Target perturbation status**: Untargeted discovery screening scope across all quantified features.")
+        }
+        emit(sprintf("- **Dataset dimensions**: %d %s across %d samples (%s).", length(features), analyte_name, length(samples), paste(head(samples, 6), collapse = ", ")))
+        emit(sprintf("- **Normalization source**: `%s`.", source_norm))
+
+        rds_status <- if (file.exists(file.path(STATE$output_dir, "data/tidyproteomics_data.rds")) || file.exists("data/tidyproteomics_data.rds")) "PASS" else "PENDING"
+        n_tables <- length(list.files(file.path(STATE$output_dir, "data"), pattern = "^table_.*\\.(tsv|csv)$", ignore.case = TRUE))
+        n_plots <- length(list.files(file.path(STATE$output_dir, "data"), pattern = "\\.png$", ignore.case = TRUE))
+        emit(sprintf("- **Artifact verification**: tidyproteomics RDS: %s; exported expression/enrichment tables: %d; diagnostic plots: %d.", rds_status, n_tables, n_plots), "")
+
+        contrast_sig_sets <- list()
+        comp_names <- names(data$analysis)
+
+        for (contrast_str in comp_names) {
+          analysis_obj <- data$analysis[[contrast_str]]
+          exp_tbl <- analysis_obj$expression
+          if (is.null(exp_tbl) || nrow(exp_tbl) == 0) next
+
+          if (!"gene_name" %in% names(exp_tbl)) exp_tbl$gene_name <- NA_character_
+          exp_tbl$gene_name[is.na(exp_tbl$gene_name) | !nzchar(trimws(exp_tbl$gene_name))] <- exp_tbl[[id_col]][is.na(exp_tbl$gene_name) | !nzchar(trimws(exp_tbl$gene_name))]
+          if (!"description" %in% names(exp_tbl)) exp_tbl$description <- ""
+
+          # Condition-specific imputation columns
+          parts <- strsplit(contrast_str, "\\s*/\\s*")[[1]]
+          treatment <- if (length(parts) >= 1) gsub("^[`'\"]+|[`'\"]+$", "", trimws(parts[1])) else "treatment"
+          control <- if (length(parts) >= 2) gsub("^[`'\"]+|[`'\"]+$", "", trimws(parts[2])) else "control"
+
+          g1 <- paste0("imputed_", treatment)
+          g2 <- paste0("imputed_", control)
+          imp1 <- if (g1 %in% names(exp_tbl)) as.numeric(exp_tbl[[g1]]) else rep(NA_real_, nrow(exp_tbl))
+          imp2 <- if (g2 %in% names(exp_tbl)) as.numeric(exp_tbl[[g2]]) else rep(NA_real_, nrow(exp_tbl))
+          max_imp <- pmax(imp1, imp2, na.rm = TRUE)
+          max_imp[!is.finite(max_imp)] <- NA_real_
+
+          exp_tbl$imputation_bias <- ifelse(is.na(max_imp), "UNKNOWN", ifelse(max_imp > 0.5, "HIGH", ifelse(max_imp >= 0.2, "MODERATE", "LOW")))
+          exp_tbl$candidate_reliability <- ifelse(exp_tbl$imputation_bias == "LOW", "ROBUST_QUANTITATIVE", ifelse(exp_tbl$imputation_bias == "HIGH", "DETECTION_LIMITED_ON_OFF", ifelse(exp_tbl$imputation_bias == "MODERATE", "HIGH_UNCERTAINTY", "UNKNOWN")))
+          exp_tbl$imputation_delta <- ifelse(is.finite(imp1) & is.finite(imp2), round(imp1 - imp2, 3), NA_real_)
+          if (!"foldchange" %in% names(exp_tbl)) exp_tbl$foldchange <- 2^exp_tbl$log2_foldchange
+
+          emit(sprintf("## Contrast: `%s`", contrast_str), "")
+          modeled_n <- nrow(exp_tbl)
+          unmodeled_n <- max(0, length(features) - modeled_n)
+          emit(sprintf("- **Features Modeled**: %d %s (unmodeled: %d).", modeled_n, analyte_name, unmodeled_n))
+
+          # Subsets
+          sig_strict <- exp_tbl %>% dplyr::filter(!is.na(adj_p_value) & adj_p_value <= 0.05 & abs(log2_foldchange) >= 1.0)
+          sig_up <- sig_strict %>% dplyr::filter(log2_foldchange >= 1.0)
+          sig_down <- sig_strict %>% dplyr::filter(log2_foldchange <= -1.0)
+          sig_relaxed <- exp_tbl %>% dplyr::filter(!is.na(adj_p_value) & adj_p_value <= 0.05 & abs(log2_foldchange) >= 0.38)
+          sig_nom <- exp_tbl %>% dplyr::filter(!is.na(p_value) & p_value <= 0.05)
+
+          emit(sprintf("- **Strict Threshold (|log2FC| >= 1.0, q <= 0.05)**: %d significant (%d higher in %s, %d lower in %s).", nrow(sig_strict), nrow(sig_up), treatment, nrow(sig_down), treatment))
+          if (nrow(sig_up) < 3 || nrow(sig_down) < 3) {
+            emit(sprintf("- **Relaxed Threshold (|log2FC| >= 0.38, q <= 0.05)**: %d significant.", nrow(sig_relaxed)))
+            emit(sprintf("- **Nominal Threshold (p <= 0.05)**: %d significant.", nrow(sig_nom)))
+          }
+          emit("")
+
+          contrast_sig_sets[[contrast_str]] <- list(
+            strict_total = nrow(sig_strict),
+            strict_up = nrow(sig_up),
+            strict_down = nrow(sig_down),
+            relaxed_total = nrow(sig_relaxed),
+            up_genes = unique(na.omit(sig_up$gene_name)),
+            down_genes = unique(na.omit(sig_down$gene_name))
+          )
+
+          # Target Efficacy Section
+          emit("### 2. Target Efficacy / Leading Perturbation Status", "")
+          target_match <- NULL
+          if (!is.null(target_gene_arg) && nzchar(target_gene_arg)) {
+            targets_clean <- unlist(strsplit(target_gene_arg, "[,/ ]+"))
+            target_match <- exp_tbl %>% dplyr::filter(toupper(gene_name) %in% toupper(targets_clean) | toupper(.data[[id_col]]) %in% toupper(targets_clean))
+          }
+          if (!is.null(target_match) && nrow(target_match) > 0) {
+            target_display <- target_match %>% dplyr::transmute(
+              Identifier = gene_name,
+              Protein = .data[[id_col]],
+              `log2FC` = sprintf("%.4f", log2_foldchange),
+              `FoldChange` = sprintf("%.3f", foldchange),
+              `p-value` = fmt_pvalue(p_value),
+              `q-value` = fmt_pvalue(adj_p_value),
+              `Imputation Risk` = imputation_bias,
+              `Candidate Reliability` = candidate_reliability,
+              `Percent Change` = sprintf("%.1f%%", (foldchange - 1) * 100)
+            )
+            emit_tbl(target_display)
+          } else {
+            emit("_Target-level efficacy metrics not resolved in modeled contrast or untargeted study design._\n")
+          }
+
+          # Format candidate helper
+          format_candidates <- function(df_cand) {
+            df_cand %>%
+              head(10) %>%
+              dplyr::mutate(
+                Rank = row_number(),
+                Identifier = gene_name,
+                Protein = .data[[id_col]],
+                Description = if ("description" %in% names(df_cand)) substr(description, 1, 45) else "-",
+                `log2FC` = sprintf("%.4f", log2_foldchange),
+                `q-value` = fmt_pvalue(adj_p_value),
+                `Imputation Risk` = imputation_bias,
+                `Candidate Reliability` = candidate_reliability,
+                `Δ imputation` = ifelse(is.na(imputation_delta), "NA", sprintf("%.3f", imputation_delta))
+              ) %>%
+              dplyr::select(Rank, Identifier, Protein, Description, `log2FC`, `q-value`, `Imputation Risk`, `Candidate Reliability`, `Δ imputation`)
+          }
+
+          # Top 10 Upregulated
+          emit("### 3. Top Significantly Upregulated Proteins", "")
+          cand_up <- if (nrow(sig_up) > 0) sig_up %>% dplyr::arrange(desc(log2_foldchange)) else exp_tbl %>% dplyr::filter(log2_foldchange > 0) %>% dplyr::arrange(desc(log2_foldchange))
+          emit_tbl(format_candidates(cand_up))
+
+          # Top 10 Downregulated
+          emit("### 4. Top Significantly Downregulated Proteins", "")
+          cand_down <- if (nrow(sig_down) > 0) sig_down %>% dplyr::arrange(log2_foldchange) else exp_tbl %>% dplyr::filter(log2_foldchange < 0) %>% dplyr::arrange(log2_foldchange)
+          emit_tbl(format_candidates(cand_down))
+
+          # Top Balanced Candidates (Volcano Pi-Score)
+          emit("### Top Balanced Candidates (Volcano Pi-Score)", "")
+          top_pi <- exp_tbl %>%
+            dplyr::filter(!is.na(log2_foldchange), !is.na(adj_p_value)) %>%
+            dplyr::mutate(pi_score = abs(log2_foldchange) * -log10(pmax(adj_p_value, 1e-10))) %>%
+            dplyr::arrange(desc(pi_score)) %>%
+            head(10)
+          if (nrow(top_pi) > 0) {
+            top_pi_disp <- top_pi %>%
+              dplyr::mutate(
+                Rank = row_number(),
+                Identifier = gene_name,
+                Protein = .data[[id_col]],
+                `log2FC` = sprintf("%.4f", log2_foldchange),
+                `q-value` = fmt_pvalue(adj_p_value),
+                `Pi-Score` = sprintf("%.2f", pi_score),
+                `Imputation Risk` = imputation_bias,
+                `Candidate Reliability` = candidate_reliability
+              ) %>%
+              dplyr::select(Rank, Identifier, Protein, `log2FC`, `q-value`, `Pi-Score`, `Imputation Risk`, `Candidate Reliability`)
+            emit_tbl(top_pi_disp)
+          } else {
+            emit("_No balanced candidates available._\n")
+          }
+
+          # Pathway Enrichments
+          emit("### 5. Top Significant Pathway Enrichments", "")
+          c_clean <- gsub("[^A-Za-z0-9_]", "_", contrast_str)
+          data_dir <- file.path(STATE$output_dir, "data")
+          enr_files <- list.files(data_dir, pattern = paste0("^table_.*_enrichment_.*", c_clean, ".*\\.(tsv|csv)$"), full.names = TRUE, ignore.case = TRUE)
+          if (length(enr_files) == 0) {
+            enr_files <- list.files("data", pattern = paste0("^table_.*_enrichment_.*", c_clean, ".*\\.(tsv|csv)$"), full.names = TRUE, ignore.case = TRUE)
+          }
+          if (length(enr_files) == 0) {
+            enr_files <- list.files(data_dir, pattern = "^table_.*_enrichment_.*\\.(tsv|csv)$", full.names = TRUE, ignore.case = TRUE)
+          }
+
+          enr_tbl <- NULL
+          if (length(enr_files) > 0) {
+            enr_tbl <- dplyr::bind_rows(lapply(enr_files, function(f) {
+              tbl <- tryCatch(
+                if (grepl("\\.tsv$", f, ignore.case = TRUE)) readr::read_tsv(f, show_col_types = FALSE) else readr::read_csv(f, show_col_types = FALSE),
+                error = function(e) NULL
+              )
+              if (!is.null(tbl) && nrow(tbl) > 0) {
+                if (!"term" %in% names(tbl)) {
+                  cat_name <- sub(paste0("^.*_enrichment_(.*)_", c_clean, "\\.(tsv|csv)$"), "\\1", basename(f), ignore.case = TRUE)
+                  if (identical(cat_name, basename(f))) cat_name <- sub("^.*_enrichment_([^_]+(?:_[^_]+)*?)_.*$", "\\1", basename(f), ignore.case = TRUE)
+                  tbl$term <- cat_name
+                }
+              }
+              tbl
+            }))
+            if (!is.null(enr_tbl) && (!"annotation" %in% names(enr_tbl) || nrow(enr_tbl) == 0)) enr_tbl <- NULL
+          }
+
+          if (is.null(enr_tbl) && !is.null(analysis_obj$enrichment) && length(analysis_obj$enrichment) > 0) {
+            enr_list <- list()
+            for (t_name in names(analysis_obj$enrichment)) {
+              item <- analysis_obj$enrichment[[t_name]]
+              if (!is.null(item$data) && is.data.frame(item$data) && nrow(item$data) > 0) {
+                df_sub <- item$data
+                df_sub$term <- t_name
+                enr_list[[t_name]] <- df_sub
+              }
+            }
+            if (length(enr_list) > 0) enr_tbl <- dplyr::bind_rows(enr_list)
+          }
+
+          if (!is.null(enr_tbl) && nrow(enr_tbl) > 0 && "adj_p_value" %in% names(enr_tbl)) {
+            sig_enr <- enr_tbl %>%
+              dplyr::filter(!is.na(adj_p_value) & adj_p_value <= 0.05) %>%
+              dplyr::arrange(adj_p_value) %>%
+              dplyr::distinct(annotation, .keep_all = TRUE) %>%
+              head(15)
+
+            if (nrow(sig_enr) > 0) {
+              sig_enr$annotation <- resolve_reactome_ids(sig_enr$annotation)
+              score_col <- intersect(c("enrichment", "score", "statistic"), names(sig_enr))[1]
+              driver_col <- intersect(c("gene_names", "member_genes", "member_proteins"), names(sig_enr))[1]
+              edge_col <- intersect(c("leading_edge_count", "size", "n"), names(sig_enr))[1]
+
+              driver_vec <- if (!is.na(driver_col)) {
+                vapply(strsplit(as.character(sig_enr[[driver_col]]), ",\\s*"), function(v) paste(head(unique(na.omit(trimws(v))), 4), collapse = ", "), character(1))
+              } else {
+                rep("-", nrow(sig_enr))
+              }
+
+              enr_disp <- tibble::tibble(
+                Category = if ("term" %in% names(sig_enr)) sig_enr$term else "Enrichment",
+                Annotation = sig_enr$annotation,
+                `Enrichment Score` = if (!is.na(score_col)) sprintf("%.3f", sig_enr[[score_col]]) else "-",
+                `q-value` = fmt_pvalue(sig_enr$adj_p_value),
+                `Leading Drivers` = driver_vec,
+                `Set Size` = if (!is.na(edge_col)) sig_enr[[edge_col]] else NA
+              )
+              emit_tbl(enr_disp)
+              emit("Wilcoxon enrichment-score direction: positive indicates a shift toward higher abundance in the treatment; negative indicates a shift toward lower abundance.\n")
+            } else {
+              emit("_No pathway terms met the q <= 0.05 significance threshold._\n")
+            }
+          } else {
+            emit("_No enrichment analysis results available for this contrast._\n")
+          }
+
+          emit("### 6. Primary Empirical Data Summary", "")
+          emit(sprintf("For `%s`, %d of %d modeled proteins passed the strict effect-size and FDR thresholds (%d higher and %d lower in %s). Imputation-risk labels distinguish measured continuous quantitative shifts (LOW) from limit-of-detection presence/absence shifts (HIGH); MODERATE risk denotes intermediate missingness. No external literature or speculative conclusions are inferred here.", contrast_str, nrow(sig_strict), modeled_n, nrow(sig_up), nrow(sig_down), treatment), "")
+        }
+
+        # Multi-Contrast Summary if >= 2 contrasts
+        if (length(comp_names) >= 2 && length(contrast_sig_sets) >= 2) {
+          emit("## Multi-Contrast Cross-Comparison Summary", "")
+          all_up <- lapply(contrast_sig_sets, `[[`, "up_genes")
+          all_down <- lapply(contrast_sig_sets, `[[`, "down_genes")
+          shared_up <- Reduce(intersect, all_up)
+          shared_down <- Reduce(intersect, all_down)
+          union_up <- unique(unlist(all_up))
+          union_down <- unique(unlist(all_down))
+          discordant <- intersect(union_up, union_down)
+
+          mc_df <- dplyr::bind_rows(lapply(names(contrast_sig_sets), function(cn) {
+            cs <- contrast_sig_sets[[cn]]
+            other_cns <- setdiff(names(contrast_sig_sets), cn)
+            other_genes <- unique(unlist(lapply(other_cns, function(oc) c(contrast_sig_sets[[oc]]$up_genes, contrast_sig_sets[[oc]]$down_genes))))
+            my_genes <- unique(c(cs$up_genes, cs$down_genes))
+            tibble::tibble(
+              Contrast = cn,
+              `Strict Total` = cs$strict_total,
+              `Strict Up` = cs$strict_up,
+              `Strict Down` = cs$strict_down,
+              `Relaxed Total` = cs$relaxed_total,
+              `Shared With Others` = length(intersect(my_genes, other_genes)),
+              `Contrast Unique` = length(setdiff(my_genes, other_genes))
+            )
+          }))
+          emit_tbl(mc_df)
+          emit(sprintf("- **Pan-Contrast Concordant Upregulated (%d)**: %s", length(shared_up), if (length(shared_up) > 0) paste(head(shared_up, 10), collapse = ", ") else "None"))
+          emit(sprintf("- **Pan-Contrast Concordant Downregulated (%d)**: %s", length(shared_down), if (length(shared_down) > 0) paste(head(shared_down, 10), collapse = ", ") else "None"))
+          emit(sprintf("- **Discordantly Regulated Across Contrasts (%d)**: %s\n", length(discordant), if (length(discordant) > 0) paste(head(discordant, 10), collapse = ", ") else "None"))
+        }
+
+        # Write data/observations_summary.md
+        writeLines(out_md, con = summary_path)
+
+        # Generate reproducible standalone code/06_observations.R script
+        standalone_r <- c(
+          "#!/usr/bin/env Rscript",
+          "# ==============================================================================",
+          "# Reproducible Extraction Script: Phase 06 Primary Observations",
+          glue::glue("# Generated: {Sys.time()} via tidyproteomics-agent"),
+          "# ==============================================================================",
+          "library(tidyproteomics)",
+          "library(dplyr)",
+          "library(knitr)",
+          "library(readr)",
+          "",
+          "rds_file <- 'data/tidyproteomics_data.rds'",
+          "stopifnot('Tidyproteomics data object missing' = file.exists(rds_file))",
+          "tp_data <- readRDS(rds_file)",
+          "",
+          "# Checkpoints",
+          "cat('=== CHECKPOINTS ===\\n')",
+          "cat('Artifact tidyproteomics_data.rds exists:', file.exists(rds_file), '\\n')",
+          "cat('Observations summary file exists:', file.exists('data/observations_summary.md'), '\\n')",
+          "cat('PHASE_6_EXTRACTION_CHECKPOINT_PASS\\n')"
+        )
+        writeLines(standalone_r, con = script_path)
+
+        list(
+          success = TRUE,
+          summary_file = summary_path,
+          script_file = script_path,
+          features_modeled = length(features),
+          contrasts_summarized = length(comp_names),
+          preview = paste(head(out_md, 40), collapse = "\n"),
+          message = glue::glue("Observations summary compiled successfully to '{summary_path}' and script exported to '{script_path}'.")
         )
       },
 

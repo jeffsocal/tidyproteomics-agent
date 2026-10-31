@@ -36,7 +36,7 @@ Whenever formal ontology enrichment in Phase 5 was bypassed (or to test specific
 - **Constructing & Testing Unbiased De Novo Functional Modules (`data/de_novo_modules.tsv`)**:
   - Rather than relying on isolated top up/down genes, define **2 to 4 biologically coherent functional modules** informed by `description` annotations, shared operon/family prefixes (e.g., `^srfA`, `^rps|^rpl`, `^flg|^fli`, `^col|^mmp`, `^psm|^pma`), or complete macromolecular complex definitions.
   - ⚠️ **Anti-Circularity Rule (No Cherry-Picking)**: Define module membership across the **entire unthresholded expression table** using functional description regexes (`desc_pattern`), gene family prefix regexes (`gene_pattern`), or complete complex/operon subunit lists—**never** cherry-pick individual volcano winners into a custom module just to inflate its Wilcoxon $p$-value.
-  - Test each module's coordinate shift across the **entire unthresholded expression table** using a two-sided Wilcoxon rank-sum test (`wilcox.test` of member `log2_foldchange` vs. non-member background proteins), audit intra-module directional concordance (`pct_concordant`) and dispersion (`iqr_fc`) to detect uniform shifts vs. stoichiometric subunit uncoupling, and save the summary to `data/de_novo_modules.tsv` so downstream phases (`08_WEBSEARCH`, `10_FIGURES`, `11_SYNTHESIS`) have statistically supported biological signatures:
+  - Test each module's coordinate shift across the **entire unthresholded expression table** using a two-sided Wilcoxon rank-sum test (`wilcox.test` of member `log2_foldchange` vs. non-member background proteins), audit intra-module directional concordance (`pct_concordant`) and dispersion (`iqr_fc`) to detect uniform shifts vs. stoichiometric subunit uncoupling, and save the summary to `data/de_novo_modules.tsv` so downstream phases (`08_LITERATURE`, `09_WEBSEARCH`, `10_FIGURES`, `11_SYNTHESIS`) have statistically supported biological signatures:
   ```r
   library(tidyproteomics)
   library(dplyr)
@@ -148,8 +148,8 @@ Synthesize your internal biomedical knowledge to explain the observed proteomic 
 
 ---
 
-#### 4. Formulating Downstream Web-Search Keyphrases
-Develop a structured set of targeted keyphrases to guide Phase 08 (`08_WEBSEARCH.md`):
+#### 4. Formulating Downstream Literature Interrogation & Web-Search Keyphrases
+Develop a structured set of targeted keyphrases to guide Phase 08 (`08_LITERATURE.md`) and Phase 09 (`09_WEBSEARCH.md`):
 - **Entity Pairs & Operon/Complex Partners**: Specific pairs or clusters of altered proteins, prioritizing top empirical drivers (e.g. `"[Target Gene] [Top Dysregulated Gene] proteomics interaction"`).
 - **Phenotypic / Pathway Themes**: Disease states, cell stress modalities, or functional cascades tested in `data/de_novo_modules.tsv`.
 - **Actionable Target & Biomarker Queries**: Queries testing druggability, biomarker utility, or mechanistic dependency of top candidates in the model organism/tissue (e.g. `"[Candidate Gene] inhibitor vulnerability [Organism/Disease]"` or `"[Candidate Gene] biomarker [Condition]"`).
@@ -184,8 +184,8 @@ Organize the document strictly into the following structured sections:
    - Synthesis of the emerging **Actionable Biological Model** (how the induced and repressed programs interact mechanistically in the context of `docs/experiment.md`).
 5. **Emerging Hypotheses & Open Questions**:
    - Biological and translational questions raised by the empirical data that warrant external literature corroboration and experimental follow-up.
-6. **Curated Keyphrases for Downstream Web Search**:
-   - Structured, ranked list of specific keyphrases and search queries to be executed in Phase 08.
+6. **Curated Keyphrases for Downstream Literature Interrogation & Web Search**:
+   - Structured, ranked list of specific keyphrases and search queries to be executed in Phase 08 (Literature Database) and Phase 09 (Live Web Search).
 
 ---
 
@@ -193,6 +193,6 @@ Organize the document strictly into the following structured sections:
 - [ ] **Checkpoint Gate**:
   1. `docs/observations.md` successfully ingested.
   2. `code/07_knowledge.R` executed cleanly (`exit 0`) with output logged to `logs/07_knowledge/console.log` (and `data/de_novo_modules.tsv` generated if de novo functional modules were tested).
-  3. `docs/knowledge.md` exists on disk with non-zero size, containing first-layer conclusions, de novo module statistics, actionable candidate role classifications, and curated web search keyphrases.
+  3. `docs/knowledge.md` exists on disk with non-zero size, containing first-layer conclusions, de novo module statistics, actionable candidate role classifications, and curated search keyphrases.
 - [ ] **Complete Phase**:
-  - Invoke `complete_phase(phaseName = "07_KNOWLEDGE", summary = "Internal knowledge contextualization complete in docs/knowledge.md with de novo functional modules, actionable candidate role classifications, and curated web search keyphrases.")`
+  - Invoke `complete_phase(phaseName = "07_KNOWLEDGE", summary = "Internal knowledge contextualization complete in docs/knowledge.md with de novo functional modules, actionable candidate role classifications, and curated literature/web search keyphrases.")`

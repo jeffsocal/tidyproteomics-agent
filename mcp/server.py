@@ -611,6 +611,57 @@ TOOLS = [
         }
     },
     {
+        "name": "tpa_query_enrichment",
+        "description": "Queries pathway and functional enrichment results across annotation categories (GO, Reactome, WikiPathways) with filters for comparison contrast, ontology terms, significance threshold, Wilcoxon score direction, and leading driver genes. Automatically resolves Reactome IDs to human-readable names.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "comparison": {
+                    "type": "string",
+                    "description": "The comparison contrast, e.g. 'p97_knockout/control'. If omitted, the first available comparison is used."
+                },
+                "terms": {
+                    "type": "string",
+                    "description": "Annotation category to query: 'all', 'reactome_pathway', 'biological_process', 'cellular_component', 'molecular_function', or 'wiki_pathway'. Default is 'all'."
+                },
+                "max_adjp": {
+                    "type": "number",
+                    "description": "Maximum adjusted p-value threshold (e.g. 0.05 or 0.01). Default is 1.0 (no filter)."
+                },
+                "max_p": {
+                    "type": "number",
+                    "description": "Optional maximum nominal p-value threshold."
+                },
+                "direction": {
+                    "type": "string",
+                    "enum": ["up", "down", "positive", "negative", "both"],
+                    "description": "Direction of enrichment: 'positive'/'up' (higher abundance in treatment), 'negative'/'down' (lower abundance in treatment), or 'both'. Default is 'both'."
+                },
+                "sort_by": {
+                    "type": "string",
+                    "enum": ["adj_p_value", "enrichment", "p_value"],
+                    "description": "Column to sort candidate results by. Default is 'adj_p_value'."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum pathway rows to return in markdown preview. Default is 50."
+                },
+                "resolve_reactome": {
+                    "type": "boolean",
+                    "description": "Whether to resolve Reactome accession IDs (R-HSA-*) to human-readable names. Default is true."
+                },
+                "save_csv": {
+                    "type": "string",
+                    "description": "Optional file path to write the full filtered enrichment table (CSV or TSV)."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Optional dataset ID."
+                }
+            }
+        }
+    },
+    {
         "name": "tpa_plot",
         "description": "Generates any visualization from the tidyproteomics suite and saves it to a PNG file.",
         "inputSchema": {
@@ -932,6 +983,31 @@ TOOLS = [
         }
     },
     {
+        "name": "tpa_compile_summary",
+        "description": "Compiles the authoritative primary observations summary (data/observations_summary.md) from the active tidyproteomics dataset, extracting quality metrics, target perturbation efficacy, top upregulated/downregulated candidates with statistical precision and imputation risk scoring, multi-category pathway enrichments, and cross-contrast concordances. Automatically writes the reproducible code/06_observations.R script and verifies checkpoints.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target_gene": {
+                    "type": "string",
+                    "description": "Optional primary perturbation target gene symbol or accession (e.g. 'VCP'). If omitted, automatically checks docs/experiment.md or defaults to untargeted discovery scope."
+                },
+                "output_summary": {
+                    "type": "string",
+                    "description": "Optional output path for markdown summary. Defaults to 'data/observations_summary.md'."
+                },
+                "output_script": {
+                    "type": "string",
+                    "description": "Optional output path for reproducible R script. Defaults to 'code/06_observations.R'."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Optional dataset ID."
+                }
+            }
+        }
+    },
+    {
         "name": "tpa_operations",
         "description": "Returns the complete non-destructive audit trail of all transformations applied to the dataset.",
         "inputSchema": {
@@ -1097,6 +1173,18 @@ def handle_tool_call(name, args):
             )
         return f"Error in query_expression: {res.get('error')}"
 
+    elif name == "tpa_query_enrichment":
+        res = call_daemon("/query_enrichment", args)
+        if res.get("success"):
+            saved = f"\nSaved full results to: `{res.get('saved_file')}`" if res.get('saved_file') else ""
+            return (
+                f"Enrichment Query for `{res.get('comparison')}`:\n"
+                f"- Total pathways/terms matching criteria: {res.get('total_terms')}\n"
+                f"- Displaying top: {res.get('returned_count')}{saved}\n\n"
+                f"{res.get('markdown_table')}"
+            )
+        return f"Error in query_enrichment: {res.get('error')}"
+
     elif name == "tpa_plot":
         res = call_daemon("/plot", args)
         if res.get("success"):
@@ -1181,6 +1269,19 @@ def handle_tool_call(name, args):
                 f"\nYou can now open `{res.get('script_saved')}` outside Docker to reproduce the exact pipeline."
             )
         return f"Error exporting state: {res.get('error')}"
+
+    elif name == "tpa_compile_summary":
+        res = call_daemon("/compile_summary", args)
+        if res.get("success"):
+            return (
+                f"### Primary Observations Summary Successfully Compiled\n"
+                f"- **Summary Output:** `{res.get('summary_file')}`\n"
+                f"- **Reproducible R Script:** `{res.get('script_file')}`\n"
+                f"- **Modeled Features:** {res.get('features_modeled')}\n"
+                f"- **Contrasts Summarized:** {res.get('contrasts_summarized')}\n\n"
+                f"```markdown\n{res.get('preview')}\n...\n```"
+            )
+        return f"Error compiling observations summary: {res.get('error')}"
 
     elif name == "tpa_operations":
         res = call_daemon("/operations", args)
@@ -1267,6 +1368,12 @@ def main():
                 tool_args = params.get("arguments", {})
                 try:
                     result_text = handle_tool_call(tool_name, tool_args)
+                    is_err = isinstance(result_text, str) and (
+                        result_text.startswith("Error") or
+                        result_text.startswith("Tool error:") or
+                        result_text.startswith("Execution halted") or
+                        "Error in " in result_text[:100]
+                    )
                     resp = {
                         "jsonrpc": "2.0",
                         "id": req_id,
@@ -1276,21 +1383,22 @@ def main():
                                     "type": "text",
                                     "text": result_text
                                 }
-                            ]
+                            ],
+                            "isError": is_err
                         }
                     }
                 except Exception as e:
                     resp = {
                         "jsonrpc": "2.0",
                         "id": req_id,
-                        "isError": True,
                         "result": {
                             "content": [
                                 {
                                     "type": "text",
                                     "text": f"Tool error: {str(e)}"
                                 }
-                            ]
+                            ],
+                            "isError": True
                         }
                     }
                 sys.stdout.write(json.dumps(resp) + "\n")

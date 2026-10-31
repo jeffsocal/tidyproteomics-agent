@@ -1,8 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { createRoot } from "react-dom/client";
 import { marked } from "marked";
 import { Edit3, Eye, Save, Download, RefreshCw, Search, Printer } from "lucide-react";
-import { PlotlyPlot } from "./PlotlyPlot";
 
 interface MarkdownViewerProps {
   relPath: string;
@@ -97,17 +95,12 @@ export const MarkdownViewer: React.FC<MarkdownViewerProps> = ({ relPath, onOpenF
 
   const renderedHtml = useMemo(() => {
     if (!isMarkdown || !content) return "";
-    // Rewrite relative image paths so plots render as interactive Plotly widgets
+    // Rewrite relative image paths so plots and figures load via the workspace raw endpoint
     const processed = content.replace(
       /!\[([^\]]*)\]\(([^)]+)\)/g,
       (_match, alt, src) => {
         const trimmedSrc = String(src).trim();
         const resolved = resolveRelativeWorkspacePath(relPath, trimmedSrc);
-        const isPlot = /plot_.*\.png$/i.test(trimmedSrc) || /data\/plot_/i.test(resolved) || /plot_.*\.plotly\.json$/i.test(trimmedSrc);
-        if (isPlot) {
-          const rawUrl = `/api/workspace/raw?path=${encodeURIComponent(resolved)}`;
-          return `<div class="interactive-plot-placeholder" data-plot-rel="${resolved}" data-alt="${alt || ""}" data-raw="${rawUrl}"></div>`;
-        }
         if (trimmedSrc.startsWith("http://") || trimmedSrc.startsWith("https://") || trimmedSrc.startsWith("/api/")) {
           return `![${alt}](${trimmedSrc})`;
         }
@@ -116,32 +109,6 @@ export const MarkdownViewer: React.FC<MarkdownViewerProps> = ({ relPath, onOpenF
     );
     return marked.parse(processed, { async: false }) as string;
   }, [content, isMarkdown, relPath]);
-
-  // Mount interactive Plotly components into placeholders
-  useEffect(() => {
-    if (!contentContainerRef.current) return;
-    const placeholders = contentContainerRef.current.querySelectorAll<HTMLDivElement>(".interactive-plot-placeholder");
-    const roots: { root: any; el: HTMLElement }[] = [];
-
-    placeholders.forEach((el) => {
-      const plotRel = el.getAttribute("data-plot-rel") || "";
-      const alt = el.getAttribute("data-alt") || "";
-      const raw = el.getAttribute("data-raw") || "";
-      if (plotRel) {
-        const root = createRoot(el);
-        root.render(<PlotlyPlot plotRelPath={plotRel} altText={alt} rawImageUrl={raw} />);
-        roots.push({ root, el });
-      }
-    });
-
-    return () => {
-      roots.forEach(({ root }) => {
-        try {
-          root.unmount();
-        } catch (_) {}
-      });
-    };
-  }, [renderedHtml, isEditing]);
 
   const handleExportPdf = () => {
     const printWindow = window.open("", "_blank", "width=900,height=1000");

@@ -60,7 +60,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   onReconnectMcp,
   onOpenPerformanceReview,
 }) => {
-  const [activeSection, setActiveSection] = useState<"workspace" | "provider" | "mcp" | "library" | "performance">("workspace");
+  const [activeSection, setActiveSection] = useState<"workspace" | "provider" | "mcp" | "library">("workspace");
 
   // Provider inputs
   const [provider, setProvider] = useState<LLMProviderType>("anthropic");
@@ -284,18 +284,6 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          {onOpenPerformanceReview && (
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={onOpenPerformanceReview}
-              style={{ display: "flex", alignItems: "center", gap: "6px" }}
-              title="Launch LLM Performance Review"
-            >
-              <Award size={14} color="var(--warning)" /> Performance Review
-            </button>
-          )}
-
           <button
             type="button"
             className="btn btn-primary btn-sm"
@@ -385,21 +373,6 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
           onClick={() => setActiveSection("library")}
         >
           <BookOpen size={13} /> Literature Library &amp; PDF Ingestion
-        </button>
-        <button
-          type="button"
-          className="btn btn-sm"
-          style={{
-            background: activeSection === "performance" ? "var(--primary)" : "transparent",
-            color: activeSection === "performance" ? "#fff" : "var(--muted)",
-            border: activeSection === "performance" ? "none" : "1px solid var(--border)",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "6px",
-          }}
-          onClick={() => setActiveSection("performance")}
-        >
-          <Award size={13} /> Performance Review
         </button>
       </div>
 
@@ -851,116 +824,6 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             onOpenFile={onOpenFile}
             onRefreshState={onRefreshLiteratureState}
           />
-        )}
-
-        {/* SECTION 5: Performance Review */}
-        {activeSection === "performance" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-            <div className="card" style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "12px" }}>
-                <div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "16px", fontWeight: 700, color: "var(--fg-bright)" }}>
-                    <Award size={20} color="var(--warning)" />
-                    <span>Autonomous Agent Performance Review</span>
-                  </div>
-                  <div style={{ fontSize: "12.5px", color: "var(--muted)", marginTop: "4px", maxWidth: "680px", lineHeight: 1.5 }}>
-                    Prompt the Tier-3 Reasoner model to audit all pipeline execution traces, evaluate tool usage, assess biological hypotheses, and attribute bugs across LLM, Prompt, and Tools.
-                  </div>
-                </div>
-
-                <div style={{ display: "flex", gap: "8px" }}>
-                  {onOpenFile && (
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => onOpenFile("docs/performance_review.md")}
-                      style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}
-                    >
-                      <FileText size={13} /> View docs/performance_review.md
-                    </button>
-                  )}
-                  {onOpenPerformanceReview && (
-                    <button
-                      type="button"
-                      className="btn btn-primary btn-sm"
-                      onClick={onOpenPerformanceReview}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: "6px",
-                        background: "linear-gradient(135deg, #f59e0b, #d97706)",
-                        borderColor: "#b45309",
-                        color: "#fff",
-                        fontWeight: 600,
-                      }}
-                    >
-                      <Sparkles size={14} /> Open Review &amp; Audit Panel
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Three Evaluation Pillars Grid */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "14px", marginTop: "8px" }}>
-                <div
-                  style={{
-                    background: "var(--bg)",
-                    border: "1px solid var(--border)",
-                    borderRadius: "8px",
-                    padding: "14px",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "6px",
-                  }}
-                >
-                  <div style={{ fontWeight: 700, fontSize: "13px", color: "#60a5fa" }}>
-                    🛠️ Pillar 1: Tools &amp; Reasoning
-                  </div>
-                  <div style={{ fontSize: "12px", color: "var(--muted)", lineHeight: 1.45 }}>
-                    Evaluates how effectively the agent parameterized MCP tools (<code>tpa_*</code>), managed wide tabular schemas, interacted with the user at HITL gates, and reasoned through multi-step analytical protocols.
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    background: "var(--bg)",
-                    border: "1px solid var(--border)",
-                    borderRadius: "8px",
-                    padding: "14px",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "6px",
-                  }}
-                >
-                  <div style={{ fontWeight: 700, fontSize: "13px", color: "#34d399" }}>
-                    🧬 Pillar 2: Scientific Hypotheses
-                  </div>
-                  <div style={{ fontSize: "12px", color: "var(--muted)", lineHeight: 1.45 }}>
-                    Assesses whether data-derived observations in Phase 06/07 were empirically grounded in fold changes, volcano statistics, and functional enrichment, or if the agent engaged in speculative leaps.
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    background: "var(--bg)",
-                    border: "1px solid var(--border)",
-                    borderRadius: "8px",
-                    padding: "14px",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "6px",
-                  }}
-                >
-                  <div style={{ fontWeight: 700, fontSize: "13px", color: "#f87171" }}>
-                    🐞 Pillar 3: Bug Attribution
-                  </div>
-                  <div style={{ fontSize: "12px", color: "var(--muted)", lineHeight: 1.45 }}>
-                    Audits every error, retry, or unexpected halt, explicitly attributing each issue to <strong>[LLM]</strong> (syntax/logic), <strong>[Prompt]</strong> (unclear directives/missing schema), or <strong>[Tools]</strong> (runtime crashes/timeouts).
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
         )}
       </div>
 

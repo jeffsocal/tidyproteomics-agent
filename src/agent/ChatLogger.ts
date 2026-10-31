@@ -175,7 +175,7 @@ export class ChatLogger {
   ): Promise<void> {
     const timestamp = new Date().toISOString();
     const lines = [
-      `### [${timestamp}] Assistant (Turn ${turn})`,
+      `### [${timestamp}] Agent (Turn ${turn})`,
     ];
 
     if (content && content.trim().length > 0) {
@@ -340,7 +340,22 @@ export class ChatLogger {
       return;
     }
 
-    // 4. Default for other tools
+    // 4. MCP Tools: Mirror execution trace, parameters, and output to console.log
+    if (toolName.startsWith("tpa_")) {
+      if (this.consoleLogPath) {
+        const consoleEntry = [
+          "--------------------------------------------------------------------------------",
+          `[${timestamp}] [MCP Tool] ${toolName}(${toolArgs ? JSON.stringify(toolArgs) : ""})`,
+          `Status: ${status} (id: ${callId})`,
+          "--------------------------------------------------------------------------------",
+          cleanResult,
+          "",
+        ].join("\n");
+        await this.appendToFile(this.consoleLogPath, consoleEntry);
+      }
+    }
+
+    // 5. Default for other tools
     const lines = [
       `#### [${timestamp}] Tool Result: \`${toolName}\` [${status}] (id: \`${callId}\`)`,
       "```",

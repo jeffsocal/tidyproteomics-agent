@@ -31,6 +31,7 @@ import { SegmentedProgressBar } from "./SegmentedProgressBar";
 
 interface RightChatPaneProps {
   pipelineState?: PipelineState;
+  isBenchmarkRunning?: boolean;
   messages: AgentMessage[];
   activeChatSessionId?: string;
   chatSessions?: ChatSessionSummary[];
@@ -77,6 +78,7 @@ interface ExecutionStep {
 
 export const RightChatPane: React.FC<RightChatPaneProps> = ({
   pipelineState,
+  isBenchmarkRunning,
   messages,
   activeChatSessionId = "chat_00",
   chatSessions = [],
@@ -337,7 +339,8 @@ export const RightChatPane: React.FC<RightChatPaneProps> = ({
               type="button"
               className="btn btn-success btn-xs"
               onClick={onStartPipeline}
-              disabled={phases.length === 0}
+              disabled={phases.length === 0 || isBenchmarkRunning}
+              title={isBenchmarkRunning ? "AI Benchmark is running. Main pipeline is locked." : "Run Pipeline"}
             >
               <Play size={11} /> Run
             </button>

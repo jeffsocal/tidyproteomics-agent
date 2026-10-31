@@ -57,7 +57,7 @@ export function getDefaultTiersForProvider(provider: LLMProviderType): {
     case "openrouter":
       return {
         utility: { provider: "openrouter", model: "google/gemini-2.0-flash-001" },
-        toolRunner: { provider: "openrouter", model: "anthropic/claude-3.5-sonnet" },
+        toolRunner: { provider: "openrouter", model: "anthropic/claude-3.5-sonnet-20241022" },
         reasoner: { provider: "openrouter", model: "anthropic/claude-3.7-sonnet" },
       };
     case "ollama":

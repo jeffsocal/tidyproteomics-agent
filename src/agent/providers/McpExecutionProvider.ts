@@ -202,6 +202,10 @@ export class McpExecutionProvider implements IProteomicsExecutionProvider {
 
   private activePhase: string = "";
 
+  public setWorkspaceRoot(root: string): void {
+    this.workspaceRoot = root || "";
+  }
+
   public setActivePhase(phaseName: string): void {
     if (!phaseName) return;
     this.activePhase = path.basename(phaseName).replace(/\.md$/i, "").toLowerCase();
@@ -265,10 +269,17 @@ export class McpExecutionProvider implements IProteomicsExecutionProvider {
       .filter((c: any) => c.type === "text")
       .map((c: any) => c.text)
       .join("\n");
+    const isError = !!res.isError || (typeof content === "string" && (
+      content.startsWith("Error:") ||
+      content.startsWith("Error in ") ||
+      content.startsWith("Tool error:") ||
+      content.startsWith("Execution halted") ||
+      /Error in [a-zA-Z0-9_]+:/i.test(content.slice(0, 100))
+    ));
     return {
-      success: !res.isError,
+      success: !isError,
       content,
-      isError: !!res.isError,
+      isError,
     };
   }
 }

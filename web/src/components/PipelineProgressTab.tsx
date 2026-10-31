@@ -22,6 +22,7 @@ import { FollowonPhaseModal } from "./FollowonPhaseModal";
 interface PipelineProgressTabProps {
   pipelineState?: PipelineState;
   focusedPhaseId?: string | null;
+  isBenchmarkRunning?: boolean;
   onOpenFile: (relPath: string) => void;
   onOpenExperimentForm: () => void;
   onRunPhase: (phaseId: string) => void;
@@ -36,6 +37,7 @@ interface PipelineProgressTabProps {
 export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
   pipelineState,
   focusedPhaseId,
+  isBenchmarkRunning,
   onOpenFile,
   onOpenExperimentForm,
   onRunPhase,
@@ -160,7 +162,8 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
                 type="button"
                 className="btn btn-success btn-xs"
                 onClick={onStartPipeline}
-                disabled={phases.length === 0}
+                disabled={phases.length === 0 || isBenchmarkRunning}
+                title={isBenchmarkRunning ? "AI Benchmark is actively running. Main pipeline execution is locked." : "Run / Resume Pipeline"}
               >
                 <Play size={12} /> Run / Resume Pipeline
               </button>
@@ -169,13 +172,32 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
               type="button"
               className="btn btn-secondary btn-xs"
               onClick={onResetPipeline}
-              disabled={anyRunning}
-              title="Reset all phases to pending"
+              disabled={anyRunning || isBenchmarkRunning}
+              title={isBenchmarkRunning ? "AI Benchmark is actively running. Reset is locked." : "Reset all phases to pending"}
             >
               <RotateCcw size={12} /> Reset
             </button>
           </div>
         </div>
+
+        {isBenchmarkRunning && (
+          <div
+            style={{
+              background: "rgba(245, 158, 11, 0.12)",
+              border: "1px solid rgba(245, 158, 11, 0.35)",
+              borderRadius: "6px",
+              padding: "8px 12px",
+              fontSize: "12px",
+              color: "#fbbf24",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+            }}
+          >
+            <AlertTriangle size={14} />
+            <span>AI Benchmark suite is actively executing in isolated sandboxes. Main pipeline [Run/Resume] and [Reset] controls are locked until benchmarking completes.</span>
+          </div>
+        )}
 
         {/* Full-Width Segmented Progress Bar with Legend */}
         <SegmentedProgressBar
@@ -228,7 +250,7 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
           </div>
         </div>
 
-        {/* Multi-Model Token Accounting Breakdown */}
+        {/* Token Accounting Breakdown */}
         {pipelineState?.modelTokens && Object.keys(pipelineState.modelTokens).length > 0 && (
           <div
             style={{
@@ -241,7 +263,7 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span style={{ fontSize: "10.5px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.4px", color: "var(--muted)", display: "flex", alignItems: "center", gap: "5px" }}>
-                <Cpu size={12} color="var(--primary)" /> Multi-Model Token Accounting
+                <Cpu size={12} color="var(--primary)" /> Token Accounting
               </span>
               <span style={{ fontSize: "10px", color: "var(--muted)" }}>
                 Aggregated per model &amp; operational tier
@@ -513,8 +535,8 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
                         <button
                           type="button"
                           className="btn btn-secondary btn-xs"
-                          disabled={anyRunning}
-                          title={`Run ${shortFileName} in isolation`}
+                          disabled={anyRunning || isBenchmarkRunning}
+                          title={isBenchmarkRunning ? "AI Benchmark is running" : `Run ${shortFileName} in isolation`}
                           onClick={() => onRunPhase(p.id)}
                         >
                           <Play size={11} />
@@ -619,7 +641,7 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
                                   <button
                                     type="button"
                                     className="btn btn-secondary btn-xs"
-                                    disabled={anyRunning}
+                                    disabled={anyRunning || isBenchmarkRunning}
                                     onClick={() => onRunPhase(p.id)}
                                   >
                                     <RotateCcw size={12} /> Retry Phase

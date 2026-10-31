@@ -6,7 +6,6 @@ import { PipelineProgressTab } from "./PipelineProgressTab";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { SettingsTab } from "./SettingsTab";
 import { AIEvaluationTab } from "./AIEvaluationTab";
-import { ThemeToggle } from "./ThemeToggle";
 
 interface CenterViewerPaneProps {
   tabs: ViewerTab[];
@@ -19,6 +18,7 @@ interface CenterViewerPaneProps {
   fileTree: FileTreeNode[];
   pipelineState?: PipelineState;
   focusedPhaseId?: string | null;
+  isBenchmarkRunning?: boolean;
   config?: AppConfig;
   mcpStatus?: McpStatus;
   literatureState?: LiteratureViewState;
@@ -52,6 +52,7 @@ export const CenterViewerPane: React.FC<CenterViewerPaneProps> = ({
   fileTree,
   pipelineState,
   focusedPhaseId,
+  isBenchmarkRunning,
   config,
   mcpStatus,
   literatureState,
@@ -149,9 +150,6 @@ export const CenterViewerPane: React.FC<CenterViewerPaneProps> = ({
             </div>
           );
         })}
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", paddingLeft: "12px", flexShrink: 0 }}>
-          <ThemeToggle />
-        </div>
       </div>
 
       {/* Tab Content Panes (Core workspace tabs preserved in DOM across switching) */}
@@ -170,6 +168,7 @@ export const CenterViewerPane: React.FC<CenterViewerPaneProps> = ({
           <PipelineProgressTab
             pipelineState={pipelineState}
             focusedPhaseId={focusedPhaseId}
+            isBenchmarkRunning={isBenchmarkRunning}
             onOpenFile={onOpenFile}
             onOpenExperimentForm={() => onSelectTab("experiment")}
             onRunPhase={onRunPhase}
@@ -182,7 +181,12 @@ export const CenterViewerPane: React.FC<CenterViewerPaneProps> = ({
           />
         </div>
         <div style={{ display: activeTab?.kind === "evaluation" ? "flex" : "none", height: "100%", width: "100%", flexDirection: "column", overflow: "hidden" }}>
-          <AIEvaluationTab onOpenFile={onOpenFile} />
+          <AIEvaluationTab
+            onOpenFile={onOpenFile}
+            onSelectTab={onSelectTab}
+            experimentSpec={experimentSpec}
+            pipelineState={pipelineState}
+          />
         </div>
         <div style={{ display: activeTab?.kind === "settings" ? "flex" : "none", height: "100%", width: "100%", flexDirection: "column", overflow: "hidden" }}>
           <SettingsTab

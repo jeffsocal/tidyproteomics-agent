@@ -52,6 +52,7 @@ export const App: React.FC = () => {
   // Core application state
   const [config, setConfig] = useState<AppConfig | undefined>(undefined);
   const [pipelineState, setPipelineState] = useState<PipelineState | undefined>(undefined);
+  const [isBenchmarkRunning, setIsBenchmarkRunning] = useState<boolean>(false);
   const [mcpStatus, setMcpStatus] = useState<McpStatus | undefined>(undefined);
   const [literatureState, setLiteratureState] = useState<LiteratureViewState | undefined>(undefined);
   const [fileTree, setFileTree] = useState<FileTreeNode[]>([]);
@@ -119,6 +120,9 @@ export const App: React.FC = () => {
       if (data.ok) {
         setConfig(data.config);
         setPipelineState(data.pipelineState);
+        if (typeof data.isBenchmarkRunning === "boolean") {
+          setIsBenchmarkRunning(data.isBenchmarkRunning);
+        }
         setMcpStatus(data.mcpStatus);
         if (data.literatureState) setLiteratureState(data.literatureState);
         setFileTree(data.fileTree || []);
@@ -194,6 +198,11 @@ export const App: React.FC = () => {
           switch (msg.type) {
             case "stateUpdate":
               if (msg.state) setPipelineState(msg.state);
+              break;
+            case "evaluationProgress":
+              if (msg.suite) {
+                setIsBenchmarkRunning(msg.suite.status === "running");
+              }
               break;
             case "mcpStatus":
               if (msg.status) setMcpStatus(msg.status);
@@ -555,6 +564,7 @@ export const App: React.FC = () => {
           fileTree={fileTree}
           pipelineState={pipelineState}
           focusedPhaseId={focusedPhaseId}
+          isBenchmarkRunning={isBenchmarkRunning}
           config={config}
           mcpStatus={mcpStatus}
           literatureState={literatureState}
@@ -587,6 +597,7 @@ export const App: React.FC = () => {
       <aside className="board-column pane-right" style={{ width: `${rightPct}%`, flex: `0 0 ${rightPct}%` }}>
         <RightChatPane
           pipelineState={pipelineState}
+          isBenchmarkRunning={isBenchmarkRunning}
           messages={messages}
           activeChatSessionId={activeChatSessionId}
           chatSessions={chatSessions}

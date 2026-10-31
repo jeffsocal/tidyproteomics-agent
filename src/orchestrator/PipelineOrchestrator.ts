@@ -151,6 +151,15 @@ export class PipelineOrchestrator {
       case "tpa_enrichment": {
         return `[MCP Enrichment] ${args?.comparison || ""} (${args?.term || ""})`;
       }
+      case "tpa_query_expression": {
+        return `[MCP Query Expression] ${args?.comparison || ""} (min_log2fc: ${args?.min_log2fc ?? 0}, max_adjp: ${args?.max_adjp ?? 1})`;
+      }
+      case "tpa_query_enrichment": {
+        return `[MCP Query Enrichment] ${args?.comparison || ""} (${args?.terms || "all"})`;
+      }
+      case "tpa_compile_summary": {
+        return `[MCP Compile Summary] target: ${args?.target_gene || "untargeted"}`;
+      }
       case "tpa_batch_analysis": {
         return `[MCP Batch Analysis] ${args?.type || "analysis"}`;
       }
@@ -237,6 +246,18 @@ export class PipelineOrchestrator {
       case "tpa_enrichment": {
         const term = args?.term || args?.terms || "pathways";
         return `Running functional enrichment analysis (${term}) ...`;
+      }
+      case "tpa_query_expression": {
+        const comp = args?.comparison ? ` (${args.comparison})` : "";
+        return `Querying differential expression candidates${comp} ...`;
+      }
+      case "tpa_query_enrichment": {
+        const term = args?.terms || "pathways";
+        return `Querying functional enrichment results (${term}) ...`;
+      }
+      case "tpa_compile_summary": {
+        const tgt = args?.target_gene ? ` for target ${args.target_gene}` : "";
+        return `Compiling primary observations summary and exporting code/06_observations.R${tgt} ...`;
       }
       case "tpa_batch_analysis": {
         const type = args?.type || "analysis";
@@ -1522,8 +1543,14 @@ Construct and execute code for this phase, capturing output to logs.
         () => this.shouldStop
       );
 
-      const maxTurns = configStore.get("maxTurns") || 30;
-      const result = await loop.run(maxTurns);
+      const baseMaxTurns = configStore.get("maxTurns") || 30;
+      let phaseMaxTurns = baseMaxTurns;
+      const phaseTagLower = phaseTag.toLowerCase();
+      // Dynamically balance turn allocations across phases
+      if (phaseTagLower.includes("normalize") || phaseTagLower.includes("synthesis")) {
+        phaseMaxTurns = Math.max(baseMaxTurns, 30);
+      }
+      const result = await loop.run(phaseMaxTurns);
       const durationSeconds = Math.max(1, Math.round((Date.now() - startTimeMs) / 1000));
       const currentPhase = getActivePhase();
 
@@ -1615,10 +1642,9 @@ Construct and execute code for this phase, capturing output to logs.
       addIfExists("docs/knowledge.md");
       addIfExists("data/de_novo_modules.tsv");
     } else if (phaseId === "08") {
-      addIfExists("docs/websearch.md");
-      addIfExists("data/actionable_synthesis.json");
-    } else if (phaseId === "09") {
       addIfExists("docs/literature.md");
+    } else if (phaseId === "09") {
+      addIfExists("docs/websearch.md");
       addIfExists("data/actionable_synthesis.json");
     } else if (phaseId === "10") {
       addIfExists("data/manuscript_digest.json");

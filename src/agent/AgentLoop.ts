@@ -1,3 +1,6 @@
+import * as fs from "fs/promises";
+import * as fsSync from "fs";
+import * as path from "path";
 import { ChatMessage, TokenUsage } from "../types";
 import { ContextBundle } from "./ContextBuilder";
 import { ToolRegistry } from "../tools/ToolRegistry";
@@ -80,6 +83,11 @@ export class AgentLoop {
     let consecutiveNoToolTurns = 0;
     let consecutiveCommandFailures = 0;
     let lastFailedCommand = "";
+    let consecutiveToolFailures = 0;
+    let lastFailedToolName = "";
+    let consecutiveIdenticalCalls = 0;
+    let lastToolCallSignature = "";
+    let totalSearchCalls = 0;
 
     while (turn < maxTurns) {
       if (this.isCancelled && this.isCancelled()) {
@@ -107,6 +115,18 @@ export class AgentLoop {
 
       turn++;
       this.onProgress({ type: "thought", data: `Starting Turn ${turn}/${maxTurns}...` });
+
+      // Low-turn alert when 5 turns remain to guide model to finalize deliverables
+      if (turn === maxTurns - 5) {
+        this.messages.push({
+          role: "user",
+          content: `⚠️ [SYSTEM NOTICE - TURN BUDGET]: 5 turns remaining in this phase (${turn}/${maxTurns}). Please cease open-ended exploration, finalize all required files, verify checkpoint gates, and call complete_phase.`,
+        });
+        this.onProgress({
+          type: "thought",
+          data: `[Turn Budget Notice]: 5 turns remaining in this phase (${turn}/${maxTurns}).`,
+        });
+      }
 
       // Call LLM with the persistent system prompt (which gets cached) and the local messages
       let response;
@@ -286,13 +306,108 @@ export class AgentLoop {
             toolMessageContent = `${head}\n\n... [Output truncated: ${omitted.toLocaleString()} characters omitted to preserve context economy. See complete output in workspace/logs/ or inspect with 'read_file'] ...\n\n${tail}`;
           }
 
+          // 1. Loop Detector: Catch identical tool calls repeated endlessly
+          const currentCallSig = `${tc.name}:${JSON.stringify(tc.args || {})}`;
+          if (currentCallSig === lastToolCallSignature) {
+            consecutiveIdenticalCalls++;
+            if (consecutiveIdenticalCalls >= 3) {
+              toolMessageContent += `\n\n⚠️ [LOOP DETECTOR ADVISORY]: Tool '${tc.name}' has been invoked ${consecutiveIdenticalCalls} consecutive times with identical parameters. DO NOT repeat identical tool calls without changing parameters or progressing the workflow. Advance to the next phase objective or call 'fail_phase' if blocked.`;
+            }
+            if (consecutiveIdenticalCalls >= 5) {
+              const autoFailReason = `Loop Detector Tripped: Tool '${tc.name}' invoked 5 consecutive times with identical parameters without progress. Execution halted to prevent runaway turn exhaustion.`;
+              const actionable = `Inspect tool parameters and phase instructions. Do not invoke the identical tool call in a loop.`;
+              const failSummary = `[Failed] ${autoFailReason}\n\nActionable Insights:\n${actionable}`;
+              const durationSeconds = Math.round((Date.now() - startTimeMs) / 1000);
+
+              if (this.chatLogger) {
+                await this.chatLogger.logPhaseEnd({
+                  phaseTitle: this.phaseTitle || this.phaseName,
+                  phaseFileName: this.phaseName,
+                  success: false,
+                  summary: failSummary,
+                  durationSeconds,
+                  tokensUsed: this.totalUsage,
+                  turnCount: turn,
+                });
+              }
+
+              return {
+                success: false,
+                summary: failSummary,
+                tokensUsed: this.totalUsage,
+                phaseName: this.phaseName,
+                turnCount: turn,
+              };
+            }
+          } else {
+            consecutiveIdenticalCalls = 1;
+            lastToolCallSignature = currentCallSig;
+          }
+
+          // Search budget notice to prevent runaway query loops
+          if (["web_search", "pubmed_search", "uniprot_search"].includes(tc.name)) {
+            totalSearchCalls++;
+            if (totalSearchCalls >= 6) {
+              toolMessageContent += `\n\n⚠️ [SEARCH BUDGET NOTICE]: ${totalSearchCalls} external search queries have been completed in this phase. You have acquired sufficient biological context. Please cease further search queries and proceed immediately to synthesize findings, generate deliverables ('data/actionable_synthesis.json' if in Phase 09), and author the phase documentation.`;
+            }
+          }
+
+          // 2. Generalized Circuit Breaker: Track failures across ANY tool (MCP, execute_command, web search, etc.)
+          const isToolFailed =
+            result.isError ||
+            /Command failed with exit code|Execution halted|Error executing tool|Error in [a-zA-Z0-9_]+:|Tool error:/i.test(
+              result.content
+            );
+
+          if (isToolFailed) {
+            consecutiveToolFailures++;
+            lastFailedToolName = tc.name;
+            if (consecutiveToolFailures >= 3) {
+              toolMessageContent += `\n\n⚠️ [CIRCUIT BREAKER ADVISORY]: Tool '${tc.name}' has failed ${consecutiveToolFailures} consecutive times.
+DO NOT repeat the identical failing command/tool call without structural fixes:
+1. Inspect the error message above carefully to verify arguments, contrast names, or file paths.
+2. If using MCP tools (e.g. tpa_export_table, tpa_expression), ensure valid arguments and contrast formatting (e.g. 'treatment/control').
+3. If the command or tool cannot succeed after inspection, halt cleanly via 'fail_phase' with actionable insights instead of exhausting turns.`;
+            }
+
+            if (consecutiveToolFailures >= 5) {
+              const autoFailReason = `Circuit Breaker Tripped: Tool '${lastFailedToolName}' failed 5 consecutive times. Execution halted to prevent runaway turns and token exhaustion.`;
+              const actionable = `Inspect logs/${this.phaseName}/console.log and chat.md for the exact error stack trace and parameters before retrying.`;
+              const failSummary = `[Failed] ${autoFailReason}\n\nActionable Insights:\n${actionable}`;
+              const durationSeconds = Math.round((Date.now() - startTimeMs) / 1000);
+
+              if (this.chatLogger) {
+                await this.chatLogger.logPhaseEnd({
+                  phaseTitle: this.phaseTitle || this.phaseName,
+                  phaseFileName: this.phaseName,
+                  success: false,
+                  summary: failSummary,
+                  durationSeconds,
+                  tokensUsed: this.totalUsage,
+                  turnCount: turn,
+                });
+              }
+
+              return {
+                success: false,
+                summary: failSummary,
+                tokensUsed: this.totalUsage,
+                phaseName: this.phaseName,
+                turnCount: turn,
+              };
+            }
+          } else {
+            consecutiveToolFailures = 0;
+            lastFailedToolName = "";
+          }
+
           // Circuit breaker: track consecutive execute_command failures
           if (tc.name === "execute_command") {
             const isFailed = result.isError || /Command failed with exit code|Execution halted|Error executing tool/i.test(result.content);
             if (isFailed) {
               consecutiveCommandFailures++;
               lastFailedCommand = String(tc.args?.command || tc.args?.cmd || "");
-              if (consecutiveCommandFailures >= 3) {
+              if (consecutiveCommandFailures >= 3 && consecutiveToolFailures < 3) {
                 toolMessageContent += `\n\n⚠️ [CIRCUIT BREAKER ADVISORY]: 'execute_command' has failed ${consecutiveCommandFailures} consecutive times.
 DO NOT repeat the identical failing command without structural fixes:
 1. If executing an R script, check loaded packages (e.g. ensure 'library(dplyr)' is present before using filter/arrange verbs to avoid base 'stats::filter' masking).
@@ -376,6 +491,21 @@ DO NOT repeat the identical failing command without structural fixes:
           }
 
           if (tc.name === "complete_phase") {
+            // Verify mandatory deliverables before allowing phase completion
+            const gateErrors = await this.verifyPhaseGateDeliverables(this.phaseName);
+            if (gateErrors.length > 0) {
+              const gateWarning = `❌ [CHECKPOINT GATE ERROR]: Cannot complete phase '${this.phaseName}'. Mandatory deliverables are missing or 0-byte:\n${gateErrors.map((e) => `• ${e}`).join("\n")}\nPlease execute the required tools to generate all required deliverables before invoking complete_phase.`;
+              this.messages.push({
+                role: "user",
+                content: gateWarning,
+              });
+              this.onProgress({
+                type: "thought",
+                data: `Checkpoint gate check failed for ${this.phaseName}: ${gateErrors.join(", ")}`,
+              });
+              continue;
+            }
+
             completedSummary = tc.args.summary || response.content;
             const durationSeconds = Math.round((Date.now() - startTimeMs) / 1000);
 
@@ -569,6 +699,86 @@ DO NOT repeat the identical failing command without structural fixes:
     }
 
     return false;
+  }
+
+  private async verifyPhaseGateDeliverables(phaseName: string): Promise<string[]> {
+    const root = this.tools.getWorkspaceRoot() || process.cwd();
+    if (!root) return [];
+
+    const normPhase = path.basename(phaseName).replace(/\.md$/i, "").toLowerCase();
+    const missing: string[] = [];
+
+    const checkFile = async (relPathPattern: string): Promise<boolean> => {
+      try {
+        if (relPathPattern.includes("*")) {
+          const dir = path.dirname(path.resolve(root, relPathPattern));
+          if (!fsSync.existsSync(dir)) return false;
+          const entries = await fs.readdir(dir);
+          const basePattern = path.basename(relPathPattern);
+          const regexStr = "^" + basePattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$";
+          const regex = new RegExp(regexStr);
+          const matches = entries.filter((e) => regex.test(e));
+          for (const m of matches) {
+            const stat = await fs.stat(path.join(dir, m));
+            if (stat.size > 0) return true;
+          }
+          return false;
+        } else {
+          const fullPath = path.resolve(root, relPathPattern);
+          if (!fsSync.existsSync(fullPath)) return false;
+          const stat = await fs.stat(fullPath);
+          return stat.size > 0;
+        }
+      } catch {
+        return false;
+      }
+    };
+
+    if (normPhase.includes("01_inspect")) {
+      const hasRds = await checkFile("data/tidyproteomics_data.rds");
+      const hasCounts = await checkFile("data/*counts*.png");
+      if (!hasRds && !hasCounts) missing.push("data/tidyproteomics_data.rds or data/*counts*.png");
+    } else if (normPhase.includes("02_normalize")) {
+      const hasRds = await checkFile("data/tidyproteomics_data.rds");
+      if (!hasRds) missing.push("data/tidyproteomics_data.rds");
+    } else if (normPhase.includes("03_impute")) {
+      const hasRds = await checkFile("data/tidyproteomics_data.rds");
+      if (!hasRds) missing.push("data/tidyproteomics_data.rds");
+    } else if (normPhase.includes("04_expression")) {
+      const hasRds = await checkFile("data/tidyproteomics_data.rds");
+      const hasExpr = (await checkFile("data/table_*expression_*.tsv")) || (await checkFile("data/table_*expression_*.csv"));
+      const hasVolcano = await checkFile("data/*volcano*.png");
+      if (!hasRds) missing.push("data/tidyproteomics_data.rds");
+      if (!hasExpr) missing.push("data/table_*expression_*.tsv or .csv");
+      if (!hasVolcano) missing.push("data/*volcano*.png");
+    } else if (normPhase.includes("05_enrichment")) {
+      const hasRds = await checkFile("data/tidyproteomics_data.rds");
+      const hasEnrich = (await checkFile("data/table_*enrichment_*.tsv")) || (await checkFile("data/table_*enrichment_*.csv"));
+      if (!hasRds) missing.push("data/tidyproteomics_data.rds");
+      if (!hasEnrich) missing.push("data/table_*enrichment_*.tsv or .csv");
+    } else if (normPhase.includes("06_observations")) {
+      const hasObs = await checkFile("docs/observations.md");
+      if (!hasObs) missing.push("docs/observations.md");
+    } else if (normPhase.includes("07_knowledge")) {
+      const hasKnowledge = await checkFile("docs/knowledge.md");
+      if (!hasKnowledge) missing.push("docs/knowledge.md");
+    } else if (normPhase.includes("08_literature") || normPhase.includes("literature")) {
+      const hasLit = await checkFile("docs/literature.md");
+      if (!hasLit) missing.push("docs/literature.md");
+    } else if (normPhase.includes("09_websearch") || normPhase.includes("websearch")) {
+      const hasWeb = await checkFile("docs/websearch.md");
+      const hasActionable = await checkFile("data/actionable_synthesis.json");
+      if (!hasWeb) missing.push("docs/websearch.md");
+      if (!hasActionable) missing.push("data/actionable_synthesis.json");
+    } else if (normPhase.includes("10_figures")) {
+      const hasFig = await checkFile("data/plot_*.png");
+      if (!hasFig) missing.push("data/plot_*.png (at least one discussion figure)");
+    } else if (normPhase.includes("11_synthesis")) {
+      const hasManuscript = (await checkFile("manuscript.md")) || (await checkFile("docs/manuscript.md"));
+      if (!hasManuscript) missing.push("manuscript.md or docs/manuscript.md");
+    }
+
+    return missing;
   }
 }
 

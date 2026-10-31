@@ -4,6 +4,7 @@ import * as path from "path";
 import { ProviderClient } from "../llm/ProviderClient";
 import { ConfigStore } from "../config/ConfigStore";
 import { PipelineOrchestrator } from "../orchestrator/PipelineOrchestrator";
+import { AgentService } from "../agent/AgentService";
 import {
   BenchmarkStartRequest,
   BenchmarkSuite,
@@ -19,6 +20,7 @@ export class EvaluationService {
   private activeSuite: BenchmarkSuite | null = null;
   private isCancelled = false;
   private onProgressCallback?: (suite: BenchmarkSuite) => void;
+  private pendingQueue: Array<{ model: string; maxTokens?: number }> = [];
 
   constructor(
     private client: ProviderClient,
@@ -32,6 +34,51 @@ export class EvaluationService {
 
   public getActiveSuite(): BenchmarkSuite | null {
     return this.activeSuite;
+  }
+
+  public enqueueModels(models: string[], modelMaxTokens?: Record<string, number>): { ok: boolean; queue: string[] } {
+    if (!this.activeSuite || this.activeSuite.status !== "running") {
+      throw new Error("No benchmark suite is actively running.");
+    }
+    const added: string[] = [];
+    for (const m of models) {
+      if (!m || typeof m !== "string") continue;
+      const clean = m.trim();
+      const customTokens = modelMaxTokens?.[clean];
+      this.pendingQueue.push({ model: clean, maxTokens: customTokens });
+      added.push(clean);
+    }
+    this.activeSuite.models = Array.from(new Set([...this.activeSuite.models, ...added]));
+    this.activeSuite.queue = this.pendingQueue.map((q) => q.model);
+    this.notifyProgress();
+    return { ok: true, queue: this.activeSuite.queue };
+  }
+
+  public dequeueModel(model: string): { ok: boolean; queue: string[] } {
+    if (!this.activeSuite || this.activeSuite.status !== "running") {
+      throw new Error("No benchmark suite is actively running.");
+    }
+    const idx = this.pendingQueue.findIndex((q) => q.model === model);
+    if (idx >= 0) {
+      this.pendingQueue.splice(idx, 1);
+      this.activeSuite.queue = this.pendingQueue.map((q) => q.model);
+      this.notifyProgress();
+    }
+    return { ok: true, queue: this.activeSuite.queue || [] };
+  }
+
+  public handlePhaseStarted(phase: { id: string; title: string; fileName?: string }) {
+    if (this.activeSuite && this.activeSuite.status === "running" && this.activeSuite.activeRun) {
+      this.activeSuite.activeRun.phaseTitle = phase.title || phase.fileName;
+      this.activeSuite.activeRun.phaseId = phase.id;
+      this.notifyProgress();
+    }
+  }
+
+  public handlePhaseCompleted(_phase: { id: string; title: string }) {
+    if (this.activeSuite && this.activeSuite.status === "running") {
+      this.notifyProgress();
+    }
   }
 
   /**
@@ -96,7 +143,7 @@ export class EvaluationService {
         isRecommended: true,
       },
       {
-        id: "anthropic/claude-3.5-sonnet",
+        id: "anthropic/claude-3.5-sonnet-20241022",
         name: "OpenRouter: Claude 3.5 Sonnet",
         provider: "openrouter",
         tier: "T2",
@@ -639,24 +686,37 @@ export class EvaluationService {
 
     const logsDir = path.join(workspaceRoot, "logs");
     if (!fsSync.existsSync(logsDir)) {
-      return { mcpCalls: 8, rawScriptCalls: 2, successRate: 0.9 };
+      return { mcpCalls: 0, rawScriptCalls: 0, successRate: 1.0 };
     }
 
     try {
       const entries = await fs.readdir(logsDir, { withFileTypes: true });
       for (const e of entries) {
         if (e.isDirectory() && e.name !== "agent") {
-          const consoleLog = path.join(logsDir, e.name, "console.log");
+          const phaseDir = path.join(logsDir, e.name);
+          const consoleLog = path.join(phaseDir, "console.log");
           if (fsSync.existsSync(consoleLog)) {
             const raw = await fs.readFile(consoleLog, "utf-8");
-            if (raw.includes("Error:") || raw.includes("Execution halted") || raw.includes("failed")) {
+            if (raw.includes("Error:") || raw.includes("Execution halted") || raw.includes("failed") || raw.includes("FAILED")) {
               failureCount++;
             }
+          }
+
+          const chatMd = path.join(phaseDir, "chat.md");
+          if (fsSync.existsSync(chatMd)) {
+            const content = await fs.readFile(chatMd, "utf-8");
+            const tpaMatches = content.match(/tpa_[a-zA-Z0-9_]+/g) || [];
+            const searchMatches = content.match(/(?:web_search|pubmed_search|uniprot_search)/g) || [];
+            const cmdMatches = content.match(/(?:execute_command|Rscript|python3)/g) || [];
+
+            mcpCalls += tpaMatches.length + searchMatches.length;
+            rawScriptCalls += cmdMatches.length;
+            totalAttempts += tpaMatches.length + searchMatches.length + cmdMatches.length;
           }
         }
       }
 
-      // Check agent logs for tool invocations
+      // Check agent logs for tool invocations if legacy agent directory exists
       const agentLogsDir = path.join(logsDir, "agent");
       if (fsSync.existsSync(agentLogsDir)) {
         const chatFiles = await fs.readdir(agentLogsDir);
@@ -675,13 +735,7 @@ export class EvaluationService {
       }
     } catch {}
 
-    if (totalAttempts === 0) {
-      mcpCalls = 12;
-      rawScriptCalls = 3;
-      totalAttempts = 15;
-    }
-
-    const successRate = totalAttempts > 0 ? Math.max(0.6, 1.0 - (failureCount / Math.max(1, totalAttempts * 0.5))) : 0.92;
+    const successRate = totalAttempts > 0 ? Math.max(0.0, 1.0 - (failureCount / Math.max(1, totalAttempts))) : 1.0;
     return {
       mcpCalls,
       rawScriptCalls,
@@ -1329,7 +1383,8 @@ ${manuscriptContent.slice(0, 12000)}`;
   public async startBenchmarkSuite(
     workspaceRoot: string,
     req: BenchmarkStartRequest,
-    orchestrator: PipelineOrchestrator
+    orchestrator: PipelineOrchestrator,
+    agentService?: AgentService
   ): Promise<BenchmarkSuite> {
     if (this.activeSuite && this.activeSuite.status === "running") {
       throw new Error("A benchmark suite is already actively running.");
@@ -1405,6 +1460,11 @@ ${manuscriptContent.slice(0, 12000)}`;
       }
     }
 
+    this.pendingQueue = req.models.map((m) => ({
+      model: m,
+      maxTokens: req.modelMaxTokens?.[m],
+    }));
+
     const suite: BenchmarkSuite = {
       id: "unified_evaluations",
       title: "Consolidated AI Model Evaluations",
@@ -1415,6 +1475,7 @@ ${manuscriptContent.slice(0, 12000)}`;
       experimentPath: path.relative(workspaceRoot, expFile),
       experimentTitle: expTitle,
       status: "running",
+      queue: this.pendingQueue.map((q) => q.model),
       runs: existingRuns,
       aggregated: this.aggregatePerformance(existingRuns),
     };
@@ -1446,11 +1507,23 @@ ${manuscriptContent.slice(0, 12000)}`;
     (async () => {
       const originalWorkspaceRoot = workspaceRoot;
       try {
-        // Abandon syncing with pipeline progress: suppress pipeline state broadcasts and agent activity
-        // so the main workspace's Pipeline Progress tab is untouched and decoupled from the benchmark suite
-        orchestrator.setSuppressNotifications(true);
+        agentService?.handleStageObservation(
+          { id: "00", fileName: "00_BENCHMARK.md", title: "Benchmark Suite" } as any,
+          `🚀 **Benchmark Suite Started**: Evaluating initial ${req.models.length} model(s) across ${req.iterations} iteration(s).\n• Provider: \`${req.provider}\`\n• Queue: ${req.models.map((m) => `\`${m}\``).join(", ")}`,
+          { badge: "Benchmark Suite" }
+        );
 
-        for (const model of req.models) {
+        while (this.pendingQueue.length > 0) {
+          if (this.isCancelled) {
+            suite.status = "cancelled";
+            break;
+          }
+
+          const currentQueueItem = this.pendingQueue.shift()!;
+          const model = currentQueueItem.model;
+          suite.queue = this.pendingQueue.map((q) => q.model);
+          this.notifyProgress();
+
           for (let iter = 1; iter <= req.iterations; iter++) {
             if (this.isCancelled) {
               suite.status = "cancelled";
@@ -1467,6 +1540,7 @@ ${manuscriptContent.slice(0, 12000)}`;
             suite.activeRun = {
               model,
               iteration: iter,
+              phaseTitle: "Initializing Sandbox...",
               elapsedSeconds: 0,
             };
             this.notifyProgress();
@@ -1478,23 +1552,24 @@ ${manuscriptContent.slice(0, 12000)}`;
             await orchestrator.setWorkingDirectory(runDir);
 
             // 3. Set model configuration for this benchmark run (supporting per-model maxTokens)
-            const customMaxTokens = req.modelMaxTokens?.[model];
-            const catalogEntry = this.getAvailableModels(req.provider).find((m) => m.id === model);
+            const customMaxTokens = currentQueueItem.maxTokens ?? req.modelMaxTokens?.[model];
+            const catalogEntry = this.getAvailableModels().find((m) => m.id === model);
             let effectiveMaxTokens = customMaxTokens || catalogEntry?.maxTokens || this.configStore.get("maxTokens") || 32768;
             // Guardrail: if max output tokens exceeds or saturates the model's total context window, clamp it
             if (catalogEntry?.contextWindow && effectiveMaxTokens >= catalogEntry.contextWindow) {
               effectiveMaxTokens = Math.min(32768, Math.floor(catalogEntry.contextWindow / 2));
             }
+            const modelProvider = catalogEntry?.provider || (model.includes("/") ? "openrouter" : req.provider);
 
             this.configStore.update({
               model,
-              provider: req.provider as any,
+              provider: modelProvider as any,
               maxTokens: effectiveMaxTokens,
               multiModelEnabled: false,
             });
             this.client.updateConfig({
               model,
-              provider: req.provider as any,
+              provider: modelProvider as any,
               maxTokens: effectiveMaxTokens,
               multiModelEnabled: false,
             });
@@ -1502,6 +1577,12 @@ ${manuscriptContent.slice(0, 12000)}`;
 
             // 4. Reset pipeline blackboard in sandbox
             await orchestrator.resetAllState();
+
+            agentService?.handleStageObservation(
+              { id: "00", fileName: "00_BENCHMARK.md", title: "Benchmark Run" } as any,
+              `🤖 **Benchmark Run [${prefix}] Target**: \`${model}\` (Iteration ${iter} of ${req.iterations})\n• Model ID: \`${model}\`\n• Max Output Tokens: \`${effectiveMaxTokens.toLocaleString()}\`\n• Sandbox: \`${path.relative(originalWorkspaceRoot, runDir)}\``,
+              { badge: `Run ${prefix} Start` }
+            );
 
             // 5. Run full multi-phase pipeline autonomously in sandbox (no HITL)
             try {
@@ -1565,6 +1646,12 @@ ${manuscriptContent.slice(0, 12000)}`;
             suite.models = Array.from(new Set(suite.runs.map((r) => r.model)));
             this.notifyProgress();
 
+            agentService?.handleStageObservation(
+              { id: "00", fileName: "00_BENCHMARK.md", title: "Benchmark Run" } as any,
+              `✓ **Benchmark Run [${prefix}] Complete**: \`${model}\` (Iteration ${iter})\n• Status: **${runStatus.toUpperCase()}**\n• Duration: **${telemetry.totalDurationSeconds}s** | Total Turns: **${telemetry.totalTurns}**\n• Tokens: **${telemetry.tokenUsage.totalTokens.toLocaleString()}** (Prompt: ${telemetry.tokenUsage.promptTokens.toLocaleString()}, Completion: ${telemetry.tokenUsage.completionTokens.toLocaleString()})\n• Benchmark Score: **${scores.overallBenchmarkScore}/100** (Tool Use: ${scores.mcpToolUseScore}/100, Intel: ${scores.bioinformaticsIntelligenceScore}/100)`,
+              { badge: `Run ${prefix} Done` }
+            );
+
             // Save intermediate unified suite state
             await fs.writeFile(
               unifiedMetaPath,
@@ -1579,10 +1666,19 @@ ${manuscriptContent.slice(0, 12000)}`;
         if (!this.isCancelled) {
           suite.status = "completed";
           suite.activeRun = undefined;
+          suite.queue = [];
+          this.pendingQueue = [];
+          agentService?.handleStageObservation(
+            { id: "00", fileName: "00_BENCHMARK.md", title: "Benchmark Suite" } as any,
+            `🏁 **Benchmark Suite Finished**: All queued model(s) completed evaluation (${suite.runs.length} runs recorded in \`evaluations/\`). View complete analytics and comparison charts in the **AI Evaluation** studio.`,
+            { badge: "Suite Complete" }
+          );
         }
       } catch (err: any) {
         suite.status = "failed";
         suite.error = err.message || String(err);
+        suite.queue = [];
+        this.pendingQueue = [];
       } finally {
         // ALWAYS restore the original workspace root and config when suite completes, errors, or cancels!
         try {
@@ -1621,12 +1717,14 @@ ${manuscriptContent.slice(0, 12000)}`;
 
   public cancelBenchmark(orchestrator?: PipelineOrchestrator) {
     this.isCancelled = true;
+    this.pendingQueue = [];
     if (orchestrator) {
       orchestrator.stop();
       orchestrator.setSuppressNotifications(false);
     }
     if (this.activeSuite) {
       this.activeSuite.status = "cancelled";
+      this.activeSuite.queue = [];
       this.notifyProgress();
     }
   }

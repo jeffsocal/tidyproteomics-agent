@@ -16,6 +16,7 @@ export class ExecutionManager {
 
   public setWorkspaceRoot(newRoot: string) {
     this.workspaceRoot = newRoot || "";
+    this.currentProvider.setWorkspaceRoot(this.workspaceRoot);
   }
 
   public async initialize(): Promise<void> {

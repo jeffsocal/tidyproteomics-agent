@@ -1,5 +1,5 @@
 ---
-tools: [tpa_load, tpa_inspect, tpa_summary, tpa_query_expression]
+tools: [tpa_load, tpa_inspect, tpa_summary, tpa_query_expression, tpa_query_enrichment]
 ---
 
 ### Phase 10: Generation of Hypothesis-Driven Discussion Figures & Statistical Digest
