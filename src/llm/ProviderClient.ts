@@ -172,7 +172,7 @@ export class ProviderClient {
     const url = "https://api.anthropic.com/v1/messages";
 
     // Format tools for Anthropic
-    const anthropicTools = params.tools.map((t) => ({
+    const anthropicTools = (params.tools || []).map((t) => ({
       name: t.name,
       description: t.description,
       input_schema: t.parameters,
@@ -349,7 +349,7 @@ export class ProviderClient {
     // Convert tools to Gemini function declarations
     const geminiTools = [
       {
-        functionDeclarations: params.tools.map((t) => ({
+        functionDeclarations: (params.tools || []).map((t) => ({
           name: t.name,
           description: t.description,
           parameters: t.parameters,
@@ -508,7 +508,7 @@ export class ProviderClient {
     const baseUrl = this.config.baseUrl || "https://api.openai.com/v1";
     const url = `${baseUrl}/chat/completions`;
 
-    const openAiTools = params.tools.map((t) => ({
+    const openAiTools = (params.tools || []).map((t) => ({
       type: "function",
       function: {
         name: t.name,
@@ -638,7 +638,7 @@ export class ProviderClient {
     const baseUrl = (this.config.baseUrl || "https://openrouter.ai/api/v1").replace(/\/+$/, "");
     const url = `${baseUrl}/chat/completions`;
 
-    const openAiTools = params.tools.map((t) => ({
+    const openAiTools = (params.tools || []).map((t) => ({
       type: "function",
       function: {
         name: t.name,
@@ -780,7 +780,7 @@ export class ProviderClient {
     }
     const url = `${baseUrl}/chat/completions`;
 
-    const openAiTools = params.tools.map((t) => ({
+    const openAiTools = (params.tools || []).map((t) => ({
       type: "function",
       function: {
         name: t.name,

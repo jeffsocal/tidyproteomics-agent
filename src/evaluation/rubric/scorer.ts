@@ -14,6 +14,7 @@ import { runAllVerifiers } from "./verifiers";
 import { analyzeToolUse } from "./toolUse";
 import {
   buildEvidencePacket,
+  getDefaultReviewers,
   MANUSCRIPT_DIMENSIONS,
   median,
   runReviewerPanel,
@@ -167,7 +168,13 @@ export async function scoreRunV2(params: {
   const toolBreakdown = analyzeToolUse(params.runRoot);
   const analyticalFidelityScore = manuscript.trim().length < 300 ? 0 : computeAnalyticalFidelityScore(verifiers);
 
-  const requestedReviewers = (params.reviewers || []).filter((r) => r && r.model && r.model.trim());
+  const requestedReviewers = (
+    params.reviewers && params.reviewers.length > 0
+      ? params.reviewers
+      : params.useLLM !== false
+      ? getDefaultReviewers(params.client.getConfig().provider)
+      : []
+  ).filter((r) => r && r.model && r.model.trim());
   const shouldRunPanel = params.useLLM !== false && requestedReviewers.length > 0 && manuscript.trim().length >= 500;
 
   let rawDims = deterministicDimensionFallback(verifiers);

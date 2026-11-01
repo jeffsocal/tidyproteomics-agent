@@ -45,12 +45,19 @@ The panel conducts an anchored qualitative evaluation using 25 sub-criteria scor
 - **1**: Partially met, generic, or asserted without supporting evidence.
 - **2**: Fully met with an exact quote citation ($\le 25$ words).
 
-The 3 models are configurable in the Benchmark tab or assigned directly from the AI Models catalog. By default:
-1. `anthropic/claude-3.7-sonnet` (Hybrid reasoning)
-2. `openai/gpt-4o` (Analytical rigor)
-3. `google/gemini-2.0-flash-001` (Independent verification)
+The 3 models are configurable in the Benchmark UI tab or assigned directly from the active provider catalog. By default:
+- **OpenRouter (Cross-vendor frontier panel)**:
+  1. `anthropic/claude-sonnet-4.5` (Hybrid reasoning & domain synthesis)
+  2. `openai/gpt-4o` (Analytical rigor & quantitative consistency)
+  3. `google/gemini-2.5-flash` (Independent cross-check & verification)
+- **Anthropic Native**: `claude-3-7-sonnet`, `claude-3-5-sonnet`, `claude-3-opus`
+- **OpenAI Native**: `o3-mini`, `gpt-4o`, `gpt-4o-mini`
+- **Gemini Native**: `gemini-1.5-pro`, `gemini-2.0-flash`, `gemini-1.5-flash`
 
 Consensus dimension score = $\text{median}(\text{Reviewer}_1, \text{Reviewer}_2, \text{Reviewer}_3)$.
+
+- **Robust JSON Escape Parsing**: Automatically repairs unescaped LaTeX symbols (`$|\log_2\text{FC}| \ge 1.0$`) and quote escapes in reviewer evidence passages.
+- **Deterministic Offline Fallback**: When LLM reviewers are disabled (`--no-llm`), dimension scores are derived from empirical verifier checks and capped at $\le 7.5$ so an unreviewed run cannot mimic an editor-approved 9–10 manuscript.
 
 ---
 
@@ -65,6 +72,7 @@ Comparison of initial scores vs. Rubric v2.0 rescored:
 | **anthropic/claude-haiku-5.5** | 91 | **83** | 92% | 97% | 6.7 / 10 | 98% (43/44) | 4 |
 | **x-ai/grok-4.7** | 91 | **82** | 90% | 96% | 6.7 / 10 | 100% (29/29) | 2 |
 | **openai/gpt-oss-120b** | 86 | **78** | 79% | 98% | 6.5 / 10 | 100% (30/30) | 0 |
+| **meta/muse-spark-1.3** | 86 | **78** | 81% | 96% | 6.5 / 10 | 83% (38/46) | 7 |
 | **google/gemini-3.1-flash-lite** | 89 | **75** | 81% | 95% | 5.7 / 10 | 100% (24/24) | 4 |
 
 *\* Baseline snapshot in 00_benchmark omitted execution logs, correctly reweighted.*
@@ -73,16 +81,38 @@ Comparison of initial scores vs. Rubric v2.0 rescored:
 
 ## CLI & Testing Utilities
 
-- **Rescore Suite**:
-  ```bash
-  npm run rescore testrun/evaluations
-  ```
-- **Run with Live 3-Model Reviewer Panel**:
-  ```bash
-  npm run rescore testrun/evaluations --use-llm
-  ```
-- **Run Adversarial & Verifier Unit Tests**:
-  ```bash
-  npm run test:rubric
-  ```
+> [!IMPORTANT]
+> Always execute commands from inside the repository directory (`cd tidyproteomics-agent`). Running from a parent directory will cause npm to report `ENOENT: could not read package.json`.
+
+### 1. Rescore Suite (Deterministic / Offline Mode)
+Fast data-grounded verification with deterministic verifiers (no LLM tokens spent):
+```bash
+# Rescore all runs in the suite directory:
+npm run rescore -- testrun/evaluations
+
+# Or rescore an individual run:
+npm run rescore -- testrun/evaluations/01_google_gemini-3_1-flash-lite_iter1
+```
+
+### 2. Live 3-Model Reviewer Panel (Frontier LLMs)
+Runs full qualitative evaluation across 25 rubric sub-criteria with evidence quote citations:
+```bash
+# Recommended shortcut:
+npm run rescore:llm -- testrun/evaluations
+
+# Using the standard npm flag syntax (note the required '--' separator):
+npm run rescore -- testrun/evaluations --use-llm
+
+# Rescore a single run with live reviewers:
+npm run rescore:llm -- testrun/evaluations/01_google_gemini-3_1-flash-lite_iter1
+
+# Override default reviewers with custom models:
+npm run rescore -- testrun/evaluations --use-llm --reviewers anthropic/claude-sonnet-4.5,openai/gpt-4o
+```
+
+### 3. Run Adversarial & Verifier Unit Tests
+Runs the 17 deterministic verifier tests (corrupted numbers, sign flips, significance overclaims, fake citations, missing figures):
+```bash
+npm run test:rubric
+```
 

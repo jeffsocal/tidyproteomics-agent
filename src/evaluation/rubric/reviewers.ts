@@ -27,6 +27,40 @@ export const MANUSCRIPT_DIMENSIONS: ManuscriptDimension[] = [
   "actionableInsights",
 ];
 
+/**
+ * Returns default panel of 3 distinct reviewer models based on the active provider.
+ * If openrouter, uses 3 frontier models from 3 separate leading labs (Anthropic, OpenAI, Google).
+ */
+export function getDefaultReviewers(provider?: string): ReviewerModelRef[] {
+  const p = (provider || "openrouter").toLowerCase();
+  if (p === "anthropic") {
+    return [
+      { model: "claude-3-7-sonnet-20250219", provider: "anthropic", label: "Claude 3.7 Sonnet" },
+      { model: "claude-3-5-sonnet-20241022", provider: "anthropic", label: "Claude 3.5 Sonnet" },
+      { model: "claude-3-opus-20240229", provider: "anthropic", label: "Claude 3 Opus" },
+    ];
+  } else if (p === "openai") {
+    return [
+      { model: "o3-mini", provider: "openai", label: "o3-mini" },
+      { model: "gpt-4o", provider: "openai", label: "GPT-4o" },
+      { model: "gpt-4o-mini", provider: "openai", label: "GPT-4o Mini" },
+    ];
+  } else if (p === "gemini") {
+    return [
+      { model: "gemini-1.5-pro", provider: "gemini", label: "Gemini 1.5 Pro" },
+      { model: "gemini-2.0-flash", provider: "gemini", label: "Gemini 2.0 Flash" },
+      { model: "gemini-1.5-flash", provider: "gemini", label: "Gemini 1.5 Flash" },
+    ];
+  } else {
+    // openrouter cross-vendor frontier panel (3 different models from 3 different frontier labs)
+    return [
+      { model: "anthropic/claude-sonnet-4.5", provider: "openrouter", label: "Claude Sonnet 4.5" },
+      { model: "openai/gpt-4o", provider: "openrouter", label: "GPT-4o" },
+      { model: "google/gemini-2.5-flash", provider: "openrouter", label: "Gemini 2.5 Flash" },
+    ];
+  }
+}
+
 export const RUBRIC_CRITERIA: Record<ManuscriptDimension, { id: string; text: string }[]> = {
   scientificEvaluation: [
     { id: "SE1", text: "Statistical framing is correct and consistent: test, multiple-testing correction and thresholds are stated AND applied consistently throughout." },
@@ -193,6 +227,86 @@ ${manuscript.length > 90000 ? manuscript.slice(0, 90000) + "\n…[truncated at 9
   return { system, user };
 }
 
+function repairJsonString(str: string): string {
+  let out = "";
+  let inString = false;
+  let i = 0;
+  while (i < str.length) {
+    const ch = str[i];
+    if (inString) {
+      if (ch === "\"") {
+        inString = false;
+        out += ch;
+        i++;
+        continue;
+      }
+      if (ch === "\\") {
+        const next = str[i + 1];
+        if (
+          next === "\"" ||
+          next === "\\" ||
+          next === "/" ||
+          next === "b" ||
+          next === "f" ||
+          next === "n" ||
+          next === "r" ||
+          next === "t"
+        ) {
+          out += "\\" + next;
+          i += 2;
+          continue;
+        }
+        if (next === "u") {
+          const hex = str.slice(i + 2, i + 6);
+          if (/^[0-9a-fA-F]{4}$/.test(hex)) {
+            out += "\\u" + hex;
+            i += 6;
+            continue;
+          }
+        }
+        // Invalid escape in string (e.g. \log, \alpha, \ge) -> escape backslash so JSON parses it as literal backslash
+        out += "\\\\";
+        i++;
+        continue;
+      }
+      if (ch === "\n") {
+        out += "\\n";
+        i++;
+        continue;
+      }
+      if (ch === "\r") {
+        out += "\\r";
+        i++;
+        continue;
+      }
+      if (ch === "\t") {
+        out += "\\t";
+        i++;
+        continue;
+      }
+      out += ch;
+      i++;
+    } else {
+      if (ch === "\"") {
+        inString = true;
+      }
+      out += ch;
+      i++;
+    }
+  }
+  return out;
+}
+
+function robustJsonParse(str: string): any {
+  try {
+    return JSON.parse(str);
+  } catch {
+    // Repair invalid escapes (\log, \alpha), unescaped quotes, or raw newlines inside strings
+    const repaired = repairJsonString(str);
+    return JSON.parse(repaired);
+  }
+}
+
 export function parseReviewerResponse(content: string): {
   dimensions: Record<ManuscriptDimension, number>;
   criteria: Record<ManuscriptDimension, ReviewerCriterionScore[]>;
@@ -204,7 +318,7 @@ export function parseReviewerResponse(content: string): {
   const start = cleaned.indexOf("{");
   const end = cleaned.lastIndexOf("}");
   if (start < 0 || end <= start) throw new Error("Reviewer response contained no JSON object.");
-  const parsed = JSON.parse(cleaned.slice(start, end + 1));
+  const parsed = robustJsonParse(cleaned.slice(start, end + 1));
   const dims = parsed.dimensions || {};
   const dimensions = {} as Record<ManuscriptDimension, number>;
   const criteria = {} as Record<ManuscriptDimension, ReviewerCriterionScore[]>;

@@ -10,6 +10,7 @@
     "build:server": "tsc -p tsconfig.server.json",
     "build": "npm run build:web && npm run build:server",
     "rescore": "tsx src/evaluation/rescore.ts",
+    "rescore:llm": "tsx src/evaluation/rescore.ts --use-llm",
     "test:rubric": "tsx src/evaluation/__tests__/rubric.test.ts",
     "stop": "lsof -ti tcp:3000 | xargs kill -9 2>/dev/null || true",
     "prestart": "lsof -ti tcp:3000 | xargs kill -9 2>/dev/null || true",

@@ -3,6 +3,7 @@ import * as path from "path";
 import { ConfigStore } from "../config/ConfigStore";
 import { ProviderClient } from "../llm/ProviderClient";
 import { scoreRunV2, RUBRIC_VERSION } from "./rubric/scorer";
+import { getDefaultReviewers } from "./rubric/reviewers";
 import type {
   EvaluationRunSummary,
   BenchmarkSuite,
@@ -76,10 +77,16 @@ async function main() {
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === "--use-llm") {
+    if (a === "--use-llm" || a === "--llm") {
       useLLM = true;
     } else if (a === "--no-llm") {
       useLLM = false;
+    } else if (a.startsWith("--reviewers=")) {
+      const models = a.slice("--reviewers=".length).split(",").map((s) => s.trim()).filter(Boolean);
+      customReviewers = models.map((m) => ({
+        model: m,
+        provider: m.includes("/") ? "openrouter" : "anthropic",
+      }));
     } else if (a === "--reviewers" && args[i + 1]) {
       const models = args[++i].split(",").map((s) => s.trim()).filter(Boolean);
       customReviewers = models.map((m) => ({
@@ -97,15 +104,6 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`\n============================================================`);
-  console.log(`  TidyProteomics Rubric v${RUBRIC_VERSION} Rescoring Engine`);
-  console.log(`============================================================`);
-  console.log(`Target Directory: ${absEvalDir}`);
-  console.log(`LLM Reviewer Panel: ${useLLM ? "ENABLED (3 models)" : "DISABLED (Deterministic Verifier Mode)"}`);
-  if (customReviewers) {
-    console.log(`Custom Reviewers: ${customReviewers.map((r) => r.model).join(", ")}`);
-  }
-
   const configStore = ConfigStore.getInstance();
   const baseClient = new ProviderClient({
     provider: (configStore.get("provider") as any) || "openrouter",
@@ -114,13 +112,45 @@ async function main() {
     baseUrl: configStore.get("baseUrl") || "",
   });
 
-  const entries = fsSync.readdirSync(absEvalDir, { withFileTypes: true });
-  const runDirs = entries
-    .filter((e) => e.isDirectory() && (e.name === "00_benchmark" || /^\d+_/.test(e.name)))
-    .map((e) => path.join(absEvalDir, e.name))
-    .sort();
+  const defaultReviewers = getDefaultReviewers(baseClient.getConfig().provider);
+  const activeReviewers =
+    customReviewers && customReviewers.length > 0
+      ? customReviewers
+      : useLLM
+      ? defaultReviewers
+      : undefined;
 
-  console.log(`Found ${runDirs.length} run directories to rescore.\n`);
+  console.log(`\n============================================================`);
+  console.log(`  TidyProteomics Rubric v${RUBRIC_VERSION} Rescoring Engine`);
+  console.log(`============================================================`);
+  console.log(`Target Directory: ${absEvalDir}`);
+  console.log(
+    `LLM Reviewer Panel: ${
+      useLLM
+        ? `ENABLED (${(activeReviewers || []).map((r) => r.model).join(", ")})`
+        : "DISABLED (Deterministic Verifier Mode)"
+    }`
+  );
+  if (customReviewers) {
+    console.log(`Custom Reviewers: ${customReviewers.map((r) => r.model).join(", ")}`);
+  }
+
+  let runDirs: string[] = [];
+  if (
+    fsSync.existsSync(path.join(absEvalDir, "summary.json")) ||
+    fsSync.existsSync(path.join(absEvalDir, "manuscript.md")) ||
+    fsSync.existsSync(path.join(absEvalDir, "docs", "manuscript.md"))
+  ) {
+    runDirs = [absEvalDir];
+  } else {
+    const entries = fsSync.readdirSync(absEvalDir, { withFileTypes: true });
+    runDirs = entries
+      .filter((e) => e.isDirectory() && (e.name === "00_benchmark" || /^\d+_/.test(e.name)))
+      .map((e) => path.join(absEvalDir, e.name))
+      .sort();
+  }
+
+  console.log(`Found ${runDirs.length} run ${runDirs.length === 1 ? "directory" : "directories"} to rescore.\n`);
 
   const updatedRuns: EvaluationRunSummary[] = [];
 
@@ -143,7 +173,7 @@ async function main() {
     const newScores = await scoreRunV2({
       runRoot: rDir,
       client: baseClient,
-      reviewers: customReviewers,
+      reviewers: activeReviewers,
       useLLM,
     });
 
@@ -167,6 +197,20 @@ async function main() {
 
     if (newScores.appliedCaps && newScores.appliedCaps.length > 0) {
       console.log(`       Caps Applied: ${newScores.appliedCaps.map((c) => `${c.dimension} -> <=${c.maxAllowed}`).join(", ")}`);
+    }
+
+    if (newScores.reviewerPanel && newScores.reviewerPanel.status !== "skipped") {
+      const rp = newScores.reviewerPanel;
+      console.log(
+        `       Reviewers  -> Panel: ${rp.status.toUpperCase()} (${rp.completedCount}/${rp.requestedModels.length} succeeded)`
+      );
+      for (const rev of rp.reviewers) {
+        if (rev.status === "ok") {
+          console.log(`         • ${rev.model}: OK (${rev.durationSeconds}s)`);
+        } else {
+          console.log(`         • ${rev.model}: FAILED -> ${rev.error || "unknown error"}`);
+        }
+      }
     }
 
     const updatedSummary: EvaluationRunSummary = existingSummary

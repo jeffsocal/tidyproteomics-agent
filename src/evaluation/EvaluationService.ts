@@ -17,6 +17,7 @@ import {
   ReviewerModelRef,
 } from "../types/evaluation";
 import { scoreRunV2, RUBRIC_VERSION } from "./rubric/scorer";
+import { getDefaultReviewers } from "./rubric/reviewers";
 
 export class EvaluationService {
   private activeSuite: BenchmarkSuite | null = null;
@@ -546,33 +547,7 @@ export class EvaluationService {
    * If openrouter, uses 3 frontier models from 3 separate leading labs (Anthropic, OpenAI, Google).
    */
   public getDefaultReviewers(provider?: string): ReviewerModelRef[] {
-    const p = provider || this.configStore.get("provider") || "openrouter";
-    if (p === "anthropic") {
-      return [
-        { model: "claude-3-7-sonnet-20250219", provider: "anthropic", label: "Claude 3.7 Sonnet" },
-        { model: "claude-3-5-sonnet-20241022", provider: "anthropic", label: "Claude 3.5 Sonnet" },
-        { model: "claude-3-opus-20240229", provider: "anthropic", label: "Claude 3 Opus" },
-      ];
-    } else if (p === "openai") {
-      return [
-        { model: "o3-mini", provider: "openai", label: "o3-mini" },
-        { model: "gpt-4o", provider: "openai", label: "GPT-4o" },
-        { model: "gpt-4o-mini", provider: "openai", label: "GPT-4o Mini" },
-      ];
-    } else if (p === "gemini") {
-      return [
-        { model: "gemini-1.5-pro", provider: "gemini", label: "Gemini 1.5 Pro" },
-        { model: "gemini-2.0-flash", provider: "gemini", label: "Gemini 2.0 Flash" },
-        { model: "gemini-1.5-flash", provider: "gemini", label: "Gemini 1.5 Flash" },
-      ];
-    } else {
-      // openrouter cross-vendor frontier panel (3 different models from 3 different frontier labs)
-      return [
-        { model: "anthropic/claude-3.7-sonnet", provider: "openrouter", label: "Claude 3.7 Sonnet" },
-        { model: "openai/gpt-4o", provider: "openrouter", label: "GPT-4o" },
-        { model: "google/gemini-2.0-flash-001", provider: "openrouter", label: "Gemini 2.0 Flash" },
-      ];
-    }
+    return getDefaultReviewers(provider || this.configStore.get("provider"));
   }
 
   public resolveReviewers(reviewerIds?: string[], provider?: string): ReviewerModelRef[] {
