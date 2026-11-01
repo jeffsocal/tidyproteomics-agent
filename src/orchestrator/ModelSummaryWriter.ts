@@ -71,6 +71,16 @@ ${
 `
     : ""
 }
+${
+  config.phaseModels && Object.keys(config.phaseModels).length > 0
+    ? `### Granular Phase Model Overrides
+
+| Phase Key | Explicitly Assigned Model |
+| :--- | :--- |
+${Object.entries(config.phaseModels).map(([k, m]) => `| \`${k}\` | \`${m}\` |`).join("\n")}
+`
+    : ""
+}
 ---
 
 ## Agent Document Header Standard

@@ -28,6 +28,7 @@ export interface AppConfig {
   tierUtility?: LLMTierConfig;
   tierToolRunner?: LLMTierConfig;
   tierReasoner?: LLMTierConfig;
+  phaseModels?: Record<string, string>;
 }
 
 export function getDefaultTiersForProvider(provider: LLMProviderType): {
@@ -94,6 +95,7 @@ const DEFAULT_CONFIG: AppConfig = {
   tierUtility: { model: "claude-3-5-haiku-20241022" },
   tierToolRunner: { model: "claude-3-5-sonnet-20241022" },
   tierReasoner: { model: "claude-3-7-sonnet-20250219" },
+  phaseModels: {},
 };
 
 export class ConfigStore {

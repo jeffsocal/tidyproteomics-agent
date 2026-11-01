@@ -77,6 +77,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   const [tierUtility, setTierUtility] = useState<LLMTierConfig>({ provider: "anthropic", model: "claude-3-5-haiku-20241022" });
   const [tierToolRunner, setTierToolRunner] = useState<LLMTierConfig>({ provider: "anthropic", model: "claude-3-5-sonnet-20241022" });
   const [tierReasoner, setTierReasoner] = useState<LLMTierConfig>({ provider: "anthropic", model: "claude-3-7-sonnet-20250219" });
+  const [phaseModels, setPhaseModels] = useState<Record<string, string>>({});
 
   // MCP & Tools inputs
   const [mcpMode, setMcpMode] = useState<"local" | "docker">("local");
@@ -126,6 +127,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       if (config.tierUtility) setTierUtility(config.tierUtility);
       if (config.tierToolRunner) setTierToolRunner(config.tierToolRunner);
       if (config.tierReasoner) setTierReasoner(config.tierReasoner);
+      setPhaseModels(config.phaseModels || {});
     }
   }, [config]);
 
@@ -214,6 +216,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       tierUtility,
       tierToolRunner,
       tierReasoner,
+      phaseModels,
     });
     setSavedNotice(true);
     setTimeout(() => setSavedNotice(false), 2500);
@@ -615,6 +618,18 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               onUpdateTierReasoner={(patch) => setTierReasoner((prev) => ({ ...prev, ...patch }))}
               primaryProvider={provider}
               onApplyPreset={handleApplyPreset}
+              phaseModels={phaseModels}
+              onUpdatePhaseModel={(phaseId, model) => {
+                setPhaseModels((prev) => {
+                  const copy = { ...prev };
+                  if (!model) {
+                    delete copy[phaseId];
+                  } else {
+                    copy[phaseId] = model;
+                  }
+                  return copy;
+                });
+              }}
             />
 
             {/* Advanced Tuning Grid */}

@@ -36,6 +36,7 @@ export interface AppConfig {
   tierUtility?: LLMTierConfig;
   tierToolRunner?: LLMTierConfig;
   tierReasoner?: LLMTierConfig;
+  phaseModels?: Record<string, string>;
 }
 
 export interface TokenUsage {
@@ -65,6 +66,7 @@ export interface PhaseInfo {
   model?: string;
   role?: LLMRole;
   provider?: string;
+  modelSource?: "phase" | "tier" | "default";
 }
 
 export interface ModelTokenUsage {
@@ -305,6 +307,13 @@ export interface PerformanceReviewResult {
   error?: string;
 }
 
+export type ManuscriptDimension =
+  | "scientificEvaluation"
+  | "bioinformaticsIntelligence"
+  | "insights"
+  | "clarity"
+  | "actionableInsights";
+
 export interface ManuscriptDimensionScores {
   insights: number;
   clarity: number;
@@ -314,14 +323,118 @@ export interface ManuscriptDimensionScores {
   overallManuscriptScore: number;
 }
 
+export interface VerifierResult {
+  score: number | null;
+  passed: boolean | null;
+  summary: string;
+  details: string[];
+  value?: number | null;
+}
+
+export interface VerifierReport {
+  numericFidelity: VerifierResult;
+  directionConsistency: VerifierResult;
+  significanceHonesty: VerifierResult;
+  countConsistency: VerifierResult;
+  figureIntegrity: VerifierResult;
+  citationIntegrity: VerifierResult;
+  sectionStructure: VerifierResult;
+  methodsReproducibility: VerifierResult;
+  repetition: VerifierResult;
+  stats: {
+    claimsExtracted: number;
+    claimsMatched: number;
+    claimsMismatched: number;
+    claimsNotFound: number;
+    directionErrors: number;
+    overclaims: number;
+    missingFigures: number;
+    repetitionRatio: number | null;
+    abstractWords: number | null;
+    expressionRows: number;
+    enrichmentRows: number;
+    wordCount: number;
+  };
+}
+
+export interface ToolUseBreakdown {
+  score: number;
+  coverage: number;
+  perCallSuccess: number;
+  efficiency: number;
+  appropriateness: number;
+  totalCalls: number;
+  failedCalls: number;
+  redundantCalls: number;
+  tpaCalls: number;
+  searchCalls: number;
+  rawExecCalls: number;
+  missingToolGroups: string[];
+  phasesParsed: number;
+}
+
+export interface ReviewerModelRef {
+  model: string;
+  provider?: string;
+  label?: string;
+}
+
+export interface ReviewerCriterionScore {
+  id: string;
+  score: number;
+  evidence: string;
+}
+
+export interface ReviewerResult {
+  model: string;
+  provider: string;
+  status: "ok" | "failed";
+  dimensions?: Record<ManuscriptDimension, number>;
+  criteria?: Record<ManuscriptDimension, ReviewerCriterionScore[]>;
+  weaknesses?: string[];
+  summary?: string;
+  missingCriteria?: number;
+  error?: string;
+  tokenUsage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+  durationSeconds: number;
+}
+
+export interface ReviewerPanelSummary {
+  status: "complete" | "partial" | "failed" | "skipped";
+  requestedModels: string[];
+  completedCount: number;
+  reviewers: ReviewerResult[];
+  dimensionSpread?: Record<ManuscriptDimension, number>;
+  consensusWeaknesses?: string[];
+}
+
+export interface AppliedCap {
+  dimension: ManuscriptDimension | "overall";
+  before: number;
+  after: number;
+  maxAllowed: number;
+  reason: string;
+}
+
 export interface EvaluationScoreBreakdown extends ManuscriptDimensionScores {
   mcpToolUseScore: number;
   bioinformaticsIntelligenceScore: number;
+  analyticalFidelityScore?: number;
   overallBenchmarkScore: number;
+  rubricVersion?: string;
   rubricNotes?: string;
   mcpToolCallsCount: number;
   rawScriptCallsCount: number;
   toolSuccessRate: number;
+  verifiers?: VerifierReport;
+  toolUseBreakdown?: ToolUseBreakdown;
+  appliedCaps?: AppliedCap[];
+  reviewerPanel?: ReviewerPanelSummary;
+  rawManuscriptDimensions?: Record<ManuscriptDimension, number>;
 }
 
 export interface PhaseTelemetryMetric {
@@ -397,6 +510,7 @@ export interface BenchmarkSuite {
   createdAt: string;
   provider: string;
   models: string[];
+  reviewerModels?: string[];
   iterations: number;
   experimentPath: string;
   experimentTitle: string;
@@ -412,6 +526,17 @@ export interface BenchmarkSuite {
   runs: EvaluationRunSummary[];
   aggregated: ModelAggregatedPerformance[];
   error?: string;
+}
+
+export interface BenchmarkStartRequest {
+  provider: string;
+  models: string[];
+  modelMaxTokens?: Record<string, number>;
+  iterations: number;
+  experimentPath?: string;
+  predefinedExperimentId?: string;
+  reviewerModels?: string[];
+  reviewers?: ReviewerModelRef[];
 }
 
 export interface PredefinedExperimentEntry {

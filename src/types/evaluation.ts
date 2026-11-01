@@ -1,5 +1,12 @@
 import { LLMRole, PhaseStatus, TokenUsage } from "./index";
 
+export type ManuscriptDimension =
+  | "scientificEvaluation"
+  | "bioinformaticsIntelligence"
+  | "insights"
+  | "clarity"
+  | "actionableInsights";
+
 export interface ManuscriptDimensionScores {
   insights: number;                  // 1-10: novelty & biological relevance of deduced mechanisms
   clarity: number;                   // 1-10: structure, readability, clarity of scientific narrative
@@ -9,14 +16,118 @@ export interface ManuscriptDimensionScores {
   overallManuscriptScore: number;    // 1-10: composite average
 }
 
+export interface VerifierResult {
+  score: number | null;
+  passed: boolean | null;
+  summary: string;
+  details: string[];
+  value?: number | null;
+}
+
+export interface VerifierReport {
+  numericFidelity: VerifierResult;
+  directionConsistency: VerifierResult;
+  significanceHonesty: VerifierResult;
+  countConsistency: VerifierResult;
+  figureIntegrity: VerifierResult;
+  citationIntegrity: VerifierResult;
+  sectionStructure: VerifierResult;
+  methodsReproducibility: VerifierResult;
+  repetition: VerifierResult;
+  stats: {
+    claimsExtracted: number;
+    claimsMatched: number;
+    claimsMismatched: number;
+    claimsNotFound: number;
+    directionErrors: number;
+    overclaims: number;
+    missingFigures: number;
+    repetitionRatio: number | null;
+    abstractWords: number | null;
+    expressionRows: number;
+    enrichmentRows: number;
+    wordCount: number;
+  };
+}
+
+export interface ToolUseBreakdown {
+  score: number;
+  coverage: number;
+  perCallSuccess: number;
+  efficiency: number;
+  appropriateness: number;
+  totalCalls: number;
+  failedCalls: number;
+  redundantCalls: number;
+  tpaCalls: number;
+  searchCalls: number;
+  rawExecCalls: number;
+  missingToolGroups: string[];
+  phasesParsed: number;
+}
+
+export interface ReviewerModelRef {
+  model: string;
+  provider?: string;
+  label?: string;
+}
+
+export interface ReviewerCriterionScore {
+  id: string;
+  score: number;
+  evidence: string;
+}
+
+export interface ReviewerResult {
+  model: string;
+  provider: string;
+  status: "ok" | "failed";
+  dimensions?: Record<ManuscriptDimension, number>;
+  criteria?: Record<ManuscriptDimension, ReviewerCriterionScore[]>;
+  weaknesses?: string[];
+  summary?: string;
+  missingCriteria?: number;
+  error?: string;
+  tokenUsage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+  durationSeconds: number;
+}
+
+export interface ReviewerPanelSummary {
+  status: "complete" | "partial" | "failed" | "skipped";
+  requestedModels: string[];
+  completedCount: number;
+  reviewers: ReviewerResult[];
+  dimensionSpread?: Record<ManuscriptDimension, number>;
+  consensusWeaknesses?: string[];
+}
+
+export interface AppliedCap {
+  dimension: ManuscriptDimension | "overall";
+  before: number;
+  after: number;
+  maxAllowed: number;
+  reason: string;
+}
+
 export interface EvaluationScoreBreakdown extends ManuscriptDimensionScores {
   mcpToolUseScore: number;           // 0-100%: usage of high-level MCP tools vs raw scripts + success rate
-  bioinformaticsIntelligenceScore: number; // 0-100%: domain intelligence metric
+  bioinformaticsIntelligenceScore: number; // 0-100%: domain intelligence metric (or analyticalFidelityScore)
+  analyticalFidelityScore?: number;  // 0-100%: verifier-grounded empirical fidelity
   overallBenchmarkScore: number;     // 0-100%: master performance composite
+  rubricVersion?: string;            // e.g. "2.0"
   rubricNotes?: string;              // Detailed rationale and evaluator commentary
   mcpToolCallsCount: number;
   rawScriptCallsCount: number;
   toolSuccessRate: number;           // 0-1.0
+  verifiers?: VerifierReport;
+  toolUseBreakdown?: ToolUseBreakdown;
+  appliedCaps?: AppliedCap[];
+  reviewerPanel?: ReviewerPanelSummary;
+  rawManuscriptDimensions?: Record<ManuscriptDimension, number>;
 }
 
 export interface PhaseTelemetryMetric {
@@ -92,6 +203,7 @@ export interface BenchmarkSuite {
   createdAt: string;
   provider: string;
   models: string[];
+  reviewerModels?: string[];
   iterations: number;
   experimentPath: string;
   experimentTitle: string;
@@ -116,6 +228,8 @@ export interface BenchmarkStartRequest {
   iterations: number;
   experimentPath?: string;
   predefinedExperimentId?: string;
+  reviewerModels?: string[];
+  reviewers?: ReviewerModelRef[];
 }
 
 export interface PredefinedExperimentEntry {

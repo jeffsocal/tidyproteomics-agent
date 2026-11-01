@@ -83,6 +83,7 @@ async function startServer() {
     tierUtility: cfg.tierUtility,
     tierToolRunner: cfg.tierToolRunner,
     tierReasoner: cfg.tierReasoner,
+    phaseModels: cfg.phaseModels,
   };
 
   const client = new ProviderClient(llmConfig);
@@ -511,6 +512,7 @@ async function startServer() {
         tierUtility: updated.tierUtility,
         tierToolRunner: updated.tierToolRunner,
         tierReasoner: updated.tierReasoner,
+        phaseModels: updated.phaseModels,
       });
 
       if (patch.workspaceRoot && patch.workspaceRoot !== workspaceRoot) {
@@ -1000,7 +1002,8 @@ async function startServer() {
     try {
       const provider = req.query.provider ? String(req.query.provider) : undefined;
       const models = evaluationService.getAvailableModels(provider);
-      res.json({ ok: true, models });
+      const defaultReviewers = evaluationService.getDefaultReviewers(provider);
+      res.json({ ok: true, models, defaultReviewers });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err.message });
     }
@@ -1053,7 +1056,7 @@ async function startServer() {
 
   app.post("/api/evaluation/start", async (req, res) => {
     try {
-      const { provider, models, modelMaxTokens, iterations, experimentPath, predefinedExperimentId } = req.body || {};
+      const { provider, models, modelMaxTokens, iterations, experimentPath, predefinedExperimentId, reviewerModels, reviewers } = req.body || {};
       if (!provider || !models || !Array.isArray(models) || models.length === 0) {
         return res.status(400).json({ ok: false, error: "Provider and at least one model are required." });
       }
@@ -1068,6 +1071,8 @@ async function startServer() {
           iterations: Number(iterations) || 1,
           experimentPath,
           predefinedExperimentId,
+          reviewerModels,
+          reviewers,
         },
         orchestrator,
         agentService
@@ -1143,10 +1148,20 @@ async function startServer() {
     }
   });
 
-  app.post("/api/evaluation/score-current", async (_req, res) => {
+  app.post("/api/evaluation/score-current", async (req, res) => {
     try {
+      const { reviewerModels, useLLM } = req.body || {};
       appendLog(`[AI Evaluation] Scoring current workspace outputs (manuscript + MCP tool usage)...`);
-      const baseline = await evaluationService.scoreCurrentWorkspaceRun(workspaceRoot, orchestrator);
+      const resolvedReviewers = reviewerModels && Array.isArray(reviewerModels) && reviewerModels.length > 0
+        ? evaluationService.resolveReviewers(reviewerModels)
+        : undefined;
+      const baseline = await evaluationService.scoreCurrentWorkspaceRun(
+        workspaceRoot,
+        orchestrator,
+        undefined,
+        resolvedReviewers,
+        useLLM !== false
+      );
       res.json({ ok: true, scores: baseline.scores, telemetry: { totalDurationSeconds: baseline.totalDurationSeconds, totalTurns: baseline.totalTurns, tokenUsage: baseline.tokenUsage, phaseMetrics: baseline.phaseMetrics }, baseline });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err.message });

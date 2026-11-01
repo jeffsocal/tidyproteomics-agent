@@ -15,11 +15,11 @@ Proceed deterministically in 3 concise turns using the MCP toolset:
 > In this phase, do NOT write massive R scripts from scratch or burn turns guessing column headers. Proceed deterministically:
 > 1. **Turn 1 (Deterministic Compilation)**: Invoke `tpa_compile_summary(target_gene = "<TARGET>")` (e.g. `target_gene = "VCP"` or omit if untargeted).
 >    - This tool automatically extracts dataset dimensions, quality checkpoint status, target perturbation efficacy, strict/relaxed threshold counts, top 10 upregulated and top 10 downregulated candidates with imputation-risk classification (`imputation_bias`, `candidate_reliability`, `imputation_delta`), and multi-category pathway enrichments with resolved Reactome names.
->    - It saves pre-formatted markdown tables directly to `data/observations_summary.md`.
+>    - It saves pre-formatted markdown tables directly to `docs/observations_summary.md`.
 >    - It automatically exports the authoritative, reproducible R script `code/06_observations.R`.
 >    - *(Optional query)*: If specific biomarker candidates or functional pathways require deeper inspection, query them directly via `tpa_query_expression` or `tpa_query_enrichment`.
-> 2. **Turn 2 (Assemble `docs/observations.md`)**: Inspect `data/observations_summary.md` via `read_file(filePath = "data/observations_summary.md")` and construct `docs/observations.md` in a single pass following the document structure below.
-> 3. **Turn 3 (Phase Gate Verification)**: Verify checkpoint artifacts (`code/06_observations.R`, `data/observations_summary.md`, `docs/observations.md`), verify `Rscript code/06_observations.R` passes with `PHASE_6_EXTRACTION_CHECKPOINT_PASS`, and invoke `complete_phase`.
+> 2. **Turn 2 (Assemble `docs/observations.md`)**: Inspect `docs/observations_summary.md` via `read_file(filePath = "docs/observations_summary.md")` and construct `docs/observations.md` in a single pass following the document structure below.
+> 3. **Turn 3 (Phase Gate Verification)**: Verify checkpoint artifacts (`code/06_observations.R`, `docs/observations_summary.md`, `docs/observations.md`), verify `Rscript code/06_observations.R` passes with `PHASE_6_EXTRACTION_CHECKPOINT_PASS`, and invoke `complete_phase`.
 
 ---
 
@@ -44,11 +44,11 @@ Organize the document strictly into the following structured sections:
    - Quantitative breakdown of the primary target (if targeted) or leading master regulator / key functional hub (if untargeted screening): Gene Symbol / Accession, $\log_2\text{FC}$, fold change, $p$-value, $q$-value, imputation risk tag, and percent change.
    - Comparison with experimental expectations stated in `docs/experiment.md`.
 3. **Top Significantly Upregulated Proteins**:
-   - Structured markdown table: Rank, Identifier (Gene Symbol / Accession), Description, $\log_2\text{FC}$, $q$-value, Imputation Risk (`imputation_bias`: HIGH, MODERATE, LOW), Candidate Reliability (`candidate_reliability`: ROBUST_QUANTITATIVE, DETECTION_LIMITED_ON_OFF, HIGH_UNCERTAINTY), and $\Delta$ (`imputation_delta`). (Directly copy pre-formatted markdown table from `data/observations_summary.md`). Prominently tag candidates so detection/missingness-driven shifts are distinguished from continuous shifts.
+   - Structured markdown table: Rank, Identifier (Gene Symbol / Accession), Description, $\log_2\text{FC}$, $q$-value, Imputation Risk (`imputation_bias`: HIGH, MODERATE, LOW), Candidate Reliability (`candidate_reliability`: ROBUST_QUANTITATIVE, DETECTION_LIMITED_ON_OFF, HIGH_UNCERTAINTY), and $\Delta$ (`imputation_delta`). (Directly copy pre-formatted markdown table from `docs/observations_summary.md`). Prominently tag candidates so detection/missingness-driven shifts are distinguished from continuous shifts.
 4. **Top Significantly Downregulated Proteins**:
-   - Structured markdown table: Rank, Identifier (Gene Symbol / Accession), Description, $\log_2\text{FC}$, $q$-value, Imputation Risk (`imputation_bias`: HIGH, MODERATE, LOW), Candidate Reliability (`candidate_reliability`: ROBUST_QUANTITATIVE, DETECTION_LIMITED_ON_OFF, HIGH_UNCERTAINTY), and $\Delta$ (`imputation_delta`). (Directly copy pre-formatted markdown table from `data/observations_summary.md`).
+   - Structured markdown table: Rank, Identifier (Gene Symbol / Accession), Description, $\log_2\text{FC}$, $q$-value, Imputation Risk (`imputation_bias`: HIGH, MODERATE, LOW), Candidate Reliability (`candidate_reliability`: ROBUST_QUANTITATIVE, DETECTION_LIMITED_ON_OFF, HIGH_UNCERTAINTY), and $\Delta$ (`imputation_delta`). (Directly copy pre-formatted markdown table from `docs/observations_summary.md`).
 5. **Top Significant Pathway Enrichments**:
-   - Summary table of significant terms across analyzed annotation categories (Category/Term, Annotation Name, Direction / Enrichment Score, $q$-value, Leading Driver Genes [top 3–5 member gene symbols from `member_genes`, falling back to `member_proteins` if symbols are absent], Leading-Edge Count). (Directly copy pre-formatted markdown table from `data/observations_summary.md`).
+   - Summary table of significant terms across analyzed annotation categories (Category/Term, Annotation Name, Direction / Enrichment Score, $q$-value, Leading Driver Genes [top 3–5 member gene symbols from `member_genes`, falling back to `member_proteins` if symbols are absent], Leading-Edge Count). (Directly copy pre-formatted markdown table from `docs/observations_summary.md`).
    - Primary biological themes identified across contrasts based directly on statistical enrichment and driven by specific leading-edge member genes. Note that in tidyproteomics, Wilcoxon score sign indicates direction relative to background: positive (+) = shifted higher in treatment; negative (-) = shifted lower in treatment.
 6. **Primary Empirical Data Summary**:
    - Objective, factual synthesis of data-derived observations directly grounded in the quantitative tables and figures.
@@ -58,7 +58,7 @@ Organize the document strictly into the following structured sections:
 ---
 
 #### 3. Critical Constraints
-- **Absolute Data Grounding**: Every numerical value ($\log_2\text{FC}$, $p$-value, $q$-value, feature count, pathway score) MUST strictly match `data/observations_summary.md` and the exported CSV/TSV tables. Never fabricate or extrapolate numbers.
+- **Absolute Data Grounding**: Every numerical value ($\log_2\text{FC}$, $p$-value, $q$-value, feature count, pathway score) MUST strictly match `docs/observations_summary.md` and the exported CSV/TSV tables. Never fabricate or extrapolate numbers.
 - **Scientific Precision Formatting (No Exact Zeros)**: Format all statistical significance columns ($p$-value, $q$-value) smaller than $1 \times 10^{-4}$ using scientific notation (e.g., `3.99e-10` rather than `0.0000000` or `0.0e+00`). Tables must never report misleading "exact zero" values.
 - **Human-Readable Pathway Resolution**: Resolve bare Reactome accession IDs (e.g., `R-HSA-977606`, `R-HSA-166663`) to human-readable biological pathway names (e.g., `Regulation of Complement cascade`, `Initial triggering of complement`) via `resolve_reactome_ids()`. Never report `"identifier unresolved in export"`.
 - **Sanitized Delimiters & Missing Identifier Fallback**: Strip redundant delimiter characters (avoid `;;` or trailing semicolons) and provide sensible fallbacks for unmapped gene symbols (e.g., fallback to the first word of the protein description or canonical accession rather than `NA`).
@@ -70,7 +70,7 @@ Organize the document strictly into the following structured sections:
 - [ ] **Checkpoint Gate**:
   1. `code/06_observations.R` executed with status code 0 and output logged to `logs/06_observations/console.log`.
   2. `logs/06_observations/console.log` ends with `PHASE_6_EXTRACTION_CHECKPOINT_PASS`.
-  3. `data/observations_summary.md` exists on disk with non-zero size containing formatted tables.
+  3. `docs/observations_summary.md` exists on disk with non-zero size containing formatted tables.
   4. `docs/observations.md` exists on disk with non-zero size and conforms to the structure above.
 - [ ] **Complete Phase**:
   - Invoke `complete_phase(phaseName = "06_OBSERVATIONS", summary = "Primary data-derived observations extracted and compiled in docs/observations.md with verified biomarker metrics, markdown tables, and pathway enrichment summaries.")`

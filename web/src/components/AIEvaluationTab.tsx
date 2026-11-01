@@ -71,6 +71,32 @@ const STORAGE_CUSTOM_MODELS = "tpa_eval_custom_models_v2";
 const STORAGE_SELECTED_PROVIDER = "tpa_eval_provider_v2";
 const STORAGE_SELECTED_MODELS_PREFIX = "tpa_eval_selected_models_v2_";
 const STORAGE_ITERATIONS = "tpa_eval_iterations_v2";
+const STORAGE_BENCHMARK_REVIEWERS = "tpa_eval_benchmark_reviewers_v2";
+
+const DEFAULT_REVIEWER_IDS = [
+  "anthropic/claude-3.7-sonnet",
+  "openai/gpt-4o",
+  "google/gemini-2.0-flash-001",
+];
+
+function loadStoredReviewers(): string[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_BENCHMARK_REVIEWERS);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length === 3 && parsed.every((s) => typeof s === "string" && s.trim())) {
+        return parsed;
+      }
+    }
+  } catch (_) {}
+  return DEFAULT_REVIEWER_IDS;
+}
+
+function saveStoredReviewers(reviewers: string[]): void {
+  try {
+    localStorage.setItem(STORAGE_BENCHMARK_REVIEWERS, JSON.stringify(reviewers));
+  } catch (_) {}
+}
 
 export type AIEvaluationSubTab = "review" | "runs" | "analytics" | "benchmark";
 
@@ -201,6 +227,48 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
   const [selectedExpPath, setSelectedExpPath] = useState<string>("docs/experiment.md");
   const [isImportingExp, setIsImportingExp] = useState<boolean>(false);
   const [importSuccessMsg, setImportSuccessMsg] = useState<string | null>(null);
+  const [localExperimentSpec, setLocalExperimentSpec] = useState<ExperimentSpec | null>(null);
+  const [selectedReviewerIds, setSelectedReviewerIds] = useState<string[]>(loadStoredReviewers);
+
+  const handleSetReviewerSlot = (slotIdx: number, modelId: string) => {
+    setSelectedReviewerIds((prev) => {
+      const next = [...prev];
+      while (next.length < 3) next.push("");
+      next[slotIdx] = modelId;
+      saveStoredReviewers(next);
+      return next;
+    });
+  };
+
+  const handleResetDefaultReviewers = () => {
+    setSelectedReviewerIds(DEFAULT_REVIEWER_IDS);
+    saveStoredReviewers(DEFAULT_REVIEWER_IDS);
+  };
+
+  const handleToggleReviewerInCatalog = (modelId: string) => {
+    setSelectedReviewerIds((prev) => {
+      const idx = prev.indexOf(modelId);
+      if (idx >= 0) {
+        const next = [...prev];
+        next.splice(idx, 1);
+        while (next.length < 3) {
+          const fallback = DEFAULT_REVIEWER_IDS.find((f) => !next.includes(f)) || "anthropic/claude-3.7-sonnet";
+          next.push(fallback);
+        }
+        saveStoredReviewers(next);
+        return next;
+      } else {
+        const next = [...prev];
+        if (next.length < 3) {
+          next.push(modelId);
+        } else {
+          next[2] = modelId;
+        }
+        saveStoredReviewers(next);
+        return next;
+      }
+    });
+  };
 
   // Reference baseline run from current workspace
   const [baselineRun, setBaselineRun] = useState<EvaluationRunSummary | null>(null);
@@ -480,6 +548,14 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
         }
       })
       .catch((err) => console.error("Error fetching experiments:", err));
+
+    fetchApiJson("/api/experiment")
+      .then((data) => {
+        if (data && data.ok && data.spec) {
+          setLocalExperimentSpec(data.spec);
+        }
+      })
+      .catch(() => {});
   };
 
   useEffect(() => {
@@ -707,6 +783,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
           ),
           iterations,
           experimentPath: selectedExpPath || "docs/experiment.md",
+          reviewerModels: selectedReviewerIds,
         }),
       });
       if (!data.ok) {
@@ -735,7 +812,14 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
     setIsScoringCurrent(true);
     setErrorMsg(null);
     try {
-      const data = await fetchApiJson("/api/evaluation/score-current", { method: "POST" });
+      const data = await fetchApiJson("/api/evaluation/score-current", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reviewerModels: selectedReviewerIds,
+          useLLM: true,
+        }),
+      });
       if (data.ok) {
         setCurrentScoreResult({
           scores: data.scores,
@@ -1632,21 +1716,26 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
       predefinedExperiments.find((e) => e.isCurrentWorkspace) ||
       predefinedExperiments[0];
 
+    const effectiveSpec = experimentSpec || localExperimentSpec;
+
     const isExperimentReady: boolean = (() => {
-      if (experimentSpec) {
-        const hasMissing =
-          (experimentSpec.missingInitialFields && experimentSpec.missingInitialFields.length > 0) ||
-          !experimentSpec.exists ||
-          !experimentSpec.pathToDataFile?.trim() ||
-          !experimentSpec.platform?.trim() ||
-          !experimentSpec.analyte?.trim() ||
-          !experimentSpec.description?.trim();
-        if (hasMissing) return false;
+      if (effectiveSpec) {
+        if (!effectiveSpec.exists) return false;
+        if (effectiveSpec.missingInitialFields && effectiveSpec.missingInitialFields.length > 0) return false;
+        const dataFile = effectiveSpec.pathToDataFile?.trim();
+        if (!dataFile || dataFile.includes("[REQUIRED") || dataFile.startsWith("<") || dataFile.includes("Enter URL")) return false;
+        const platform = effectiveSpec.platform?.trim();
+        if (!platform || platform.includes("[REQUIRED") || platform.startsWith("<") || platform.includes("Enter search platform")) return false;
+        const analyte = effectiveSpec.analyte?.trim();
+        if (!analyte || analyte.includes("[REQUIRED") || analyte.startsWith("<") || analyte.includes("proteins or peptides")) return false;
+        const desc = effectiveSpec.description?.trim();
+        if (!desc || desc.includes("[REQUIRED") || desc.length < 10) return false;
+        return true;
       }
-      if (currentExp && currentExp.isHitlFreeReady === false) {
-        return false;
+      if (currentExp && typeof currentExp.isHitlFreeReady === "boolean") {
+        return currentExp.isHitlFreeReady;
       }
-      return true;
+      return false;
     })();
 
     // Calculate pipeline progress metrics
@@ -1663,14 +1752,21 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
     const totalPhaseCount = enabledPhases.length || 7;
     const completedPhaseCount = enabledPhases.filter((p) => p.status === "completed").length;
     const runningPhaseIdx = enabledPhases.findIndex((p) => p.status === "running");
-    const effectivePhaseIdx =
-      runningPhaseIdx >= 0 ? runningPhaseIdx + 1 : (completedPhaseCount > 0 ? completedPhaseCount : 0);
-    const phaseProgressPct = isRunning
-      ? Math.min(100, Math.max(10, Math.round((effectivePhaseIdx / totalPhaseCount) * 100)))
-      : (activeSuite?.status === "completed" ? 100 : 0);
 
-    const filledTicks = Math.round((phaseProgressPct / 100) * 10);
-    const asciiBar = "=".repeat(filledTicks) + "-".repeat(10 - filledTicks);
+    // Only show full 100% progress when completely finished with the task (not while running the last phase)
+    const isTaskCompleted = !isRunning && (activeSuite?.status === "completed" || (completedPhaseCount === totalPhaseCount && totalPhaseCount > 0));
+
+    let phaseProgressPct = 0;
+    if (isTaskCompleted) {
+      phaseProgressPct = 100;
+    } else if (isRunning) {
+      const activeIdx = runningPhaseIdx >= 0 ? runningPhaseIdx : completedPhaseCount;
+      const progressFraction = (activeIdx + 0.3) / totalPhaseCount;
+      // Cap at 95% while in-progress so it never shows 100% until the task completes
+      phaseProgressPct = Math.min(95, Math.max(5, Math.round(progressFraction * 100)));
+    } else if (completedPhaseCount > 0) {
+      phaseProgressPct = Math.min(95, Math.round((completedPhaseCount / totalPhaseCount) * 100));
+    }
 
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
@@ -1711,6 +1807,32 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                 >
                   <CheckCircle2 size={14} color="#4ade80" />
                   <span>Ready</span>
+                  <span style={{ fontSize: "11px", color: "rgba(74, 222, 128, 0.7)", fontWeight: 400 }}>
+                    (docs/experiment.md)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (onSelectTab) onSelectTab("experiment");
+                      else if (onOpenFile) onOpenFile("docs/experiment.md");
+                    }}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      color: "#4ade80",
+                      padding: "0 2px",
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "3px",
+                      fontSize: "11px",
+                      textDecoration: "underline",
+                      marginLeft: "4px",
+                    }}
+                    title="View or edit experiment design"
+                  >
+                    View <ExternalLink size={10} />
+                  </button>
                 </div>
               ) : (
                 <div
@@ -1961,10 +2083,6 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                 >
                   [ {currentPhase} ]
                 </span>
-
-                <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg-bright)", fontSize: "11px" }}>
-                  pipeline:[ <span style={{ color: isRunning ? "#4ade80" : "var(--muted)" }}>{asciiBar}</span> ] {phaseProgressPct}%
-                </span>
               </div>
 
               {/* Progress Bar track */}
@@ -1981,11 +2099,120 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
             </div>
           </div>
 
-          {/* 3. AI Models */}
+          {/* 3. Reviewer Panel (3 Reviewers Required for Multi-Model Panel) */}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "10px",
+              background: "rgba(168, 85, 247, 0.05)",
+              border: "1px solid rgba(168, 85, 247, 0.3)",
+              borderRadius: "8px",
+              padding: "14px 16px",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <Award size={15} color="#c084fc" />
+                <span style={{ fontSize: "11.5px", fontWeight: 700, color: "#c084fc", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                  LLM Reviewer Panel (3 Distinct Reviewer Models)
+                </span>
+                <span
+                  style={{
+                    fontSize: "9.5px",
+                    fontWeight: 700,
+                    padding: "1px 6px",
+                    borderRadius: "3px",
+                    background: "rgba(168, 85, 247, 0.2)",
+                    color: "#e9d5ff",
+                  }}
+                >
+                  RUNS 1x PER MODEL ON EVERY BENCHMARK
+                </span>
+              </div>
+
+              <button
+                type="button"
+                className="btn btn-secondary btn-xs"
+                onClick={handleResetDefaultReviewers}
+                style={{ fontSize: "10.5px", padding: "2px 8px" }}
+                title="Reset to recommended cross-vendor frontier reviewer models"
+              >
+                Reset to Defaults
+              </button>
+            </div>
+
+            <div style={{ fontSize: "11px", color: "var(--muted)", lineHeight: 1.4 }}>
+              Instead of running one reviewer 3x, each evaluated manuscript is independently audited 1x by these 3 separate models
+              across 25 rubric sub-criteria with exact quote citations. Select 3 models below or assign directly from the AI Models table.
+            </div>
+
+            {/* 3 Reviewer Model Slots */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "10px" }}>
+              {[0, 1, 2].map((slotIdx) => {
+                const currentReviewerId = selectedReviewerIds[slotIdx] || "";
+                const entry = allCatalog.find((m) => m.id === currentReviewerId);
+                const slotLabel = `Reviewer ${slotIdx + 1}`;
+
+                return (
+                  <div
+                    key={slotIdx}
+                    style={{
+                      background: "rgba(0, 0, 0, 0.35)",
+                      border: "1px solid rgba(168, 85, 247, 0.25)",
+                      borderRadius: "6px",
+                      padding: "8px 10px",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "4px",
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ fontSize: "10px", fontWeight: 700, color: "#c084fc", textTransform: "uppercase" }}>
+                        {slotLabel}
+                      </span>
+                      {entry && (
+                        <span style={{ fontSize: "9px", color: "var(--muted)", textTransform: "uppercase" }}>
+                          {entry.provider}
+                        </span>
+                      )}
+                    </div>
+
+                    <select
+                      value={currentReviewerId}
+                      onChange={(e) => handleSetReviewerSlot(slotIdx, e.target.value)}
+                      className="select"
+                      style={{
+                        fontSize: "11.5px",
+                        padding: "4px 8px",
+                        background: "rgba(15, 23, 42, 0.8)",
+                        borderColor: currentReviewerId ? "rgba(168, 85, 247, 0.4)" : "var(--border)",
+                        color: "var(--fg-bright)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <option value="">-- Select Reviewer Model --</option>
+                      {allCatalog.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name} ({m.provider})
+                        </option>
+                      ))}
+                    </select>
+
+                    <span style={{ fontSize: "10px", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
+                      {currentReviewerId || "No model assigned"}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 4. AI Models */}
           <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
               <label style={{ fontSize: "11px", fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
-                3. AI Models ({displayedModels.length} models available)
+                4. AI Models ({displayedModels.length} models available)
               </label>
               <div style={{ display: "flex", gap: "8px" }}>
                 <button
@@ -2126,6 +2353,21 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                         >
                           {m.provider}
                         </span>
+                        {selectedReviewerIds.includes(m.id) && (
+                          <span
+                            style={{
+                              fontSize: "9px",
+                              fontWeight: 700,
+                              padding: "1px 6px",
+                              borderRadius: "3px",
+                              background: "rgba(168, 85, 247, 0.25)",
+                              border: "1px solid rgba(168, 85, 247, 0.5)",
+                              color: "#e9d5ff",
+                            }}
+                          >
+                            REVIEWER {selectedReviewerIds.indexOf(m.id) + 1}
+                          </span>
+                        )}
                         <span style={{ fontSize: "10.5px", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
                           {m.id}
                         </span>
@@ -2193,6 +2435,41 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                         {isQueued ? <Check size={11} color="var(--primary)" /> : <Plus size={11} />}
                         {isQueued ? "In Queue" : "Add to Queue"}
                       </button>
+
+                      {/* Reviewer toggle */}
+                      {selectedReviewerIds.includes(m.id) ? (
+                        <button
+                          type="button"
+                          className="btn btn-xs"
+                          onClick={() => handleToggleReviewerInCatalog(m.id)}
+                          style={{
+                            padding: "4px 8px",
+                            fontSize: "11px",
+                            background: "rgba(168, 85, 247, 0.25)",
+                            border: "1px solid rgba(168, 85, 247, 0.6)",
+                            color: "#c084fc",
+                            fontWeight: 700,
+                            gap: "3px",
+                          }}
+                          title={`Assigned to Reviewer slot ${selectedReviewerIds.indexOf(m.id) + 1}. Click to unassign.`}
+                        >
+                          <Award size={11} /> Rev {selectedReviewerIds.indexOf(m.id) + 1}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-xs"
+                          onClick={() => handleToggleReviewerInCatalog(m.id)}
+                          style={{
+                            padding: "4px 8px",
+                            fontSize: "11px",
+                            color: "var(--muted)",
+                          }}
+                          title="Assign this model to the 3-model reviewer panel"
+                        >
+                          + Reviewer
+                        </button>
+                      )}
 
                       {m.isCustom && (
                         <button
@@ -2404,14 +2681,21 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                         </span>
                       </div>
 
-                      {r.scores?.bioinformaticsIntelligenceScore !== undefined && (
+                      {r.scores?.analyticalFidelityScore !== undefined ? (
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                          <span style={{ fontSize: "9px", color: "var(--muted)", textTransform: "uppercase" }}>Fidelity</span>
+                          <span style={{ fontSize: "12px", fontWeight: 700, color: (r.scores.analyticalFidelityScore ?? 0) >= 80 ? "#4ade80" : "#fbbf24" }}>
+                            {r.scores.analyticalFidelityScore}%
+                          </span>
+                        </div>
+                      ) : r.scores?.bioinformaticsIntelligenceScore !== undefined ? (
                         <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
                           <span style={{ fontSize: "9px", color: "var(--muted)", textTransform: "uppercase" }}>Bioinfo</span>
                           <span style={{ fontSize: "12px", fontWeight: 700, color: (r.scores.bioinformaticsIntelligenceScore ?? 0) >= 80 ? "#4ade80" : "#fbbf24" }}>
                             {r.scores.bioinformaticsIntelligenceScore}%
                           </span>
                         </div>
-                      )}
+                      ) : null}
 
                       <span
                         style={{
@@ -2545,6 +2829,68 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                           })}
                         </tbody>
                       </table>
+
+                      {/* Rigor & Deterministic Verifiers (Rubric v2) */}
+                      {r.scores?.verifiers && (
+                        <div style={{ display: "flex", flexDirection: "column", gap: "6px", background: "rgba(0,0,0,0.25)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <span style={{ fontSize: "10.5px", fontWeight: 700, color: "var(--fg-bright)", textTransform: "uppercase" }}>
+                              Analytical Rigor & Deterministic Verifiers (v{r.scores.rubricVersion || "2.0"})
+                            </span>
+                            <span style={{ fontSize: "11px", fontWeight: 800, color: (r.scores.analyticalFidelityScore ?? 0) >= 80 ? "#4ade80" : "#fbbf24" }}>
+                              Fidelity Score: {r.scores.analyticalFidelityScore ?? r.scores.bioinformaticsIntelligenceScore}/100
+                            </span>
+                          </div>
+
+                          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", fontSize: "11px" }}>
+                            <span style={{ background: "rgba(255,255,255,0.06)", padding: "2px 6px", borderRadius: "3px" }}>
+                              Numeric Fidelity: <b>{r.scores.verifiers.numericFidelity.score !== null ? `${(r.scores.verifiers.numericFidelity.score * 100).toFixed(0)}%` : "N/A"}</b> ({r.scores.verifiers.stats.claimsMatched}/{r.scores.verifiers.stats.claimsExtracted} claims)
+                            </span>
+                            <span style={{ background: r.scores.verifiers.stats.directionErrors > 0 ? "rgba(239, 68, 68, 0.2)" : "rgba(34, 197, 94, 0.15)", padding: "2px 6px", borderRadius: "3px", color: r.scores.verifiers.stats.directionErrors > 0 ? "#f87171" : "#4ade80" }}>
+                              Direction Errors: <b>{r.scores.verifiers.stats.directionErrors}</b>
+                            </span>
+                            <span style={{ background: r.scores.verifiers.stats.overclaims > 0 ? "rgba(245, 158, 11, 0.2)" : "rgba(255,255,255,0.06)", padding: "2px 6px", borderRadius: "3px", color: r.scores.verifiers.stats.overclaims > 0 ? "#fbbf24" : "var(--fg)" }}>
+                              Overclaims (q&gt;0.05): <b>{r.scores.verifiers.stats.overclaims}</b>
+                            </span>
+                            <span style={{ background: "rgba(255,255,255,0.06)", padding: "2px 6px", borderRadius: "3px" }}>
+                              Figures Verified: <b>{r.scores.verifiers.stats.missingFigures === 0 ? "100%" : `${r.scores.verifiers.stats.missingFigures} missing`}</b>
+                            </span>
+                          </div>
+
+                          {/* Applied Caps */}
+                          {r.scores.appliedCaps && r.scores.appliedCaps.length > 0 && (
+                            <div style={{ marginTop: "4px", fontSize: "10.5px", color: "#fbbf24", display: "flex", flexDirection: "column", gap: "2px" }}>
+                              <span style={{ fontWeight: 700 }}>Caps Triggered:</span>
+                              {r.scores.appliedCaps.map((c, i) => (
+                                <div key={i} style={{ paddingLeft: "8px" }}>
+                                  &bull; <b>{c.dimension}</b> capped at &le;{c.maxAllowed} ({c.reason})
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Reviewer Panel (if present) */}
+                      {r.scores?.reviewerPanel && r.scores.reviewerPanel.reviewers?.length > 0 && (
+                        <div style={{ display: "flex", flexDirection: "column", gap: "6px", background: "rgba(168, 85, 247, 0.08)", border: "1px solid rgba(168, 85, 247, 0.25)", borderRadius: "6px", padding: "10px 12px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <span style={{ fontSize: "10.5px", fontWeight: 700, color: "#c084fc", textTransform: "uppercase" }}>
+                              LLM Reviewer Panel ({r.scores.reviewerPanel.completedCount}/{r.scores.reviewerPanel.requestedModels.length} Completed)
+                            </span>
+                          </div>
+                          {r.scores.reviewerPanel.consensusWeaknesses && r.scores.reviewerPanel.consensusWeaknesses.length > 0 && (
+                            <div style={{ fontSize: "11px", color: "var(--fg-bright)" }}>
+                              <b>Consensus Weaknesses:</b>
+                              <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
+                                {r.scores.reviewerPanel.consensusWeaknesses.map((w, idx) => (
+                                  <li key={idx}>{w}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {/* Evaluator Notes */}
                       {r.scores?.rubricNotes && (
@@ -3335,58 +3681,261 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
       </div>
 
       {/* Active Benchmark Live Running Progress Bar (Persistent across all sub-tabs) */}
-      {/* Active Benchmark Live Running Progress Bar */}
-      {activeSuite && activeSuite.status === "running" && (
-        <div
-          style={{
-            background: "linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(15, 23, 42, 0.5))",
-            border: "1px solid rgba(245, 158, 11, 0.4)",
-            borderRadius: "8px",
-            padding: "14px 18px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "10px",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <span className="spinner" style={{ width: "14px", height: "14px", border: "2px solid #f59e0b", borderTopColor: "transparent", borderRadius: "50%" }} />
-              <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--fg-bright)" }}>
-                Benchmark In Progress &bull; <span style={{ color: "#60a5fa" }}>{activeSuite.activeRun?.model || "Evaluating..."}</span> (Run {activeSuite.runs.length + 1} of {activeSuite.models.length * activeSuite.iterations})
-              </span>
+      {activeSuite && activeSuite.status === "running" && (() => {
+        const totalRuns = Math.max(1, activeSuite.models.length * activeSuite.iterations);
+        const completedRuns = activeSuite.runs.length;
+        const currentRunNumber = Math.min(totalRuns, completedRuns + 1);
+        const suiteProgressPct = Math.round((completedRuns / totalRuns) * 100);
+        const activeModelId = activeSuite.activeRun?.model || "";
+        const allCatalog = [...availableModels, ...customModels];
+        const activeCatalogEntry = allCatalog.find((m) => m.id === activeModelId);
+        const activeModelName =
+          activeCatalogEntry?.name ||
+          (activeModelId.includes("/") ? activeModelId.split("/")[1] : activeModelId) ||
+          "Evaluating...";
+
+        const runningPhaseObj = pipelineState?.phases?.find((p) => p.status === "running");
+        const activePhaseName =
+          activeSuite.activeRun?.phaseTitle ||
+          runningPhaseObj?.title ||
+          runningPhaseObj?.fileName ||
+          "Running pipeline";
+
+        return (
+          <div
+            style={{
+              margin: "12px 20px 0 20px",
+              background: "linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(24, 33, 56, 0.88) 100%)",
+              border: "1px solid rgba(59, 130, 246, 0.35)",
+              boxShadow: "0 6px 24px rgba(0, 0, 0, 0.4), 0 0 1px rgba(59, 130, 246, 0.3)",
+              borderRadius: "10px",
+              padding: "16px 20px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "14px",
+            }}
+          >
+            {/* Top row: Status Badge, Run Counter & Actions */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "7px",
+                    background: "rgba(59, 130, 246, 0.15)",
+                    border: "1px solid rgba(59, 130, 246, 0.4)",
+                    borderRadius: "20px",
+                    padding: "3px 12px",
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    color: "#60a5fa",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.6px",
+                  }}
+                >
+                  <span
+                    className="spinner"
+                    style={{
+                      width: "10px",
+                      height: "10px",
+                      border: "2px solid #60a5fa",
+                      borderTopColor: "transparent",
+                      borderRadius: "50%",
+                    }}
+                  />
+                  Benchmark In Progress
+                </span>
+
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "3px 10px",
+                    borderRadius: "6px",
+                    background: "rgba(255, 255, 255, 0.05)",
+                    border: "1px solid rgba(255, 255, 255, 0.1)",
+                    fontSize: "11.5px",
+                    color: "var(--fg-bright)",
+                  }}
+                >
+                  <Layers size={13} color="#94a3b8" />
+                  <span>
+                    Run <strong style={{ color: "#60a5fa" }}>{currentRunNumber}</strong> of {totalRuns}
+                  </span>
+                </span>
+              </div>
+
+              <button
+                type="button"
+                className="btn btn-danger btn-xs"
+                onClick={handleCancelBenchmark}
+                style={{
+                  gap: "5px",
+                  padding: "5px 12px",
+                  fontSize: "11.5px",
+                  fontWeight: 600,
+                  background: "rgba(239, 68, 68, 0.15)",
+                  border: "1px solid rgba(239, 68, 68, 0.4)",
+                  color: "#fca5a5",
+                }}
+                title="Halt active benchmark suite safely"
+              >
+                <StopCircle size={13} /> Cancel Benchmark
+              </button>
             </div>
-            <button
-              type="button"
-              className="btn btn-danger btn-xs"
-              onClick={handleCancelBenchmark}
-              style={{ gap: "4px" }}
-            >
-              <StopCircle size={12} /> Cancel Suite
-            </button>
-          </div>
 
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", color: "var(--muted)" }}>
-            <span>
-              Current Target: <b style={{ color: "var(--fg-bright)" }}>{activeSuite.activeRun?.model}</b> (Iteration {activeSuite.activeRun?.iteration} of {activeSuite.iterations})
-            </span>
-            <span>
-              Completed Runs: <b style={{ color: "#34d399" }}>{activeSuite.runs.length}</b> / {activeSuite.models.length * activeSuite.iterations}
-            </span>
-          </div>
-
-          {/* Progress fill */}
-          <div style={{ width: "100%", height: "6px", background: "rgba(255,255,255,0.1)", borderRadius: "3px", overflow: "hidden" }}>
+            {/* Metrics cards grid */}
             <div
               style={{
-                width: `${Math.round((activeSuite.runs.length / Math.max(1, activeSuite.models.length * activeSuite.iterations)) * 100)}%`,
-                height: "100%",
-                background: "linear-gradient(90deg, #f59e0b, #10b981)",
-                transition: "width 0.3s ease",
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                gap: "10px",
               }}
-            />
+            >
+              {/* Card 1: Active Target Model */}
+              <div
+                style={{
+                  background: "rgba(0, 0, 0, 0.25)",
+                  border: "1px solid rgba(255, 255, 255, 0.07)",
+                  borderRadius: "6px",
+                  padding: "10px 12px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "4px",
+                }}
+              >
+                <div style={{ fontSize: "10px", fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                  Active Model
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <Cpu size={14} color="#60a5fa" style={{ flexShrink: 0 }} />
+                  <span
+                    style={{
+                      fontFamily: "var(--font-mono)",
+                      fontSize: "12px",
+                      fontWeight: 700,
+                      color: "var(--fg-bright)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                    title={activeModelId}
+                  >
+                    {activeModelName}
+                  </span>
+                </div>
+                {activeCatalogEntry?.provider && (
+                  <div style={{ fontSize: "10px", color: "var(--muted)", textTransform: "capitalize" }}>
+                    Provider: {activeCatalogEntry.provider}
+                  </div>
+                )}
+              </div>
+
+              {/* Card 2: Current Pipeline Stage */}
+              <div
+                style={{
+                  background: "rgba(0, 0, 0, 0.25)",
+                  border: "1px solid rgba(255, 255, 255, 0.07)",
+                  borderRadius: "6px",
+                  padding: "10px 12px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "4px",
+                }}
+              >
+                <div style={{ fontSize: "10px", fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                  Current Phase
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                  <span
+                    style={{
+                      display: "inline-block",
+                      width: "8px",
+                      height: "8px",
+                      borderRadius: "50%",
+                      background: "#c084fc",
+                      boxShadow: "0 0 6px #c084fc",
+                    }}
+                  />
+                  <span
+                    style={{
+                      fontSize: "12px",
+                      fontWeight: 600,
+                      color: "#c084fc",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {activePhaseName}
+                  </span>
+                </div>
+                <div style={{ fontSize: "10px", color: "var(--muted)" }}>
+                  Iteration {activeSuite.activeRun?.iteration || 1} of {activeSuite.iterations}
+                </div>
+              </div>
+
+              {/* Card 3: Suite Queue & Completed Runs */}
+              <div
+                style={{
+                  background: "rgba(0, 0, 0, 0.25)",
+                  border: "1px solid rgba(255, 255, 255, 0.07)",
+                  borderRadius: "6px",
+                  padding: "10px 12px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "4px",
+                }}
+              >
+                <div style={{ fontSize: "10px", fontWeight: 700, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                  Suite Queue
+                </div>
+                <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--fg-bright)" }}>
+                  <strong style={{ color: "#34d399" }}>{completedRuns}</strong> / {totalRuns} Runs Complete
+                </div>
+                <div style={{ fontSize: "10px", color: "var(--muted)" }}>
+                  {activeSuite.queue && activeSuite.queue.length > 0
+                    ? `${activeSuite.queue.length} model(s) waiting in queue`
+                    : "Final model in progress"}
+                </div>
+              </div>
+            </div>
+
+            {/* Overall Suite Progress Bar */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "11px" }}>
+                <span style={{ color: "var(--muted)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                  Overall Suite Completion
+                </span>
+                <span style={{ color: "var(--fg-bright)", fontFamily: "var(--font-mono)", fontWeight: 700 }}>
+                  {suiteProgressPct}%
+                </span>
+              </div>
+              <div
+                style={{
+                  width: "100%",
+                  height: "7px",
+                  background: "rgba(255, 255, 255, 0.08)",
+                  borderRadius: "4px",
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    width: `${suiteProgressPct}%`,
+                    height: "100%",
+                    background: "linear-gradient(90deg, #3b82f6, #10b981)",
+                    borderRadius: "4px",
+                    transition: "width 0.4s ease",
+                  }}
+                />
+              </div>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Feedback Alerts */}
       {importSuccessMsg && (

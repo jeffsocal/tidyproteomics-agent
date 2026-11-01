@@ -2031,7 +2031,7 @@ handle_request <- function(req) {
           stop("No analysis results found in dataset. Please run tpa_expression first.")
         }
 
-        summary_path <- if (!is.null(params$output_summary) && nzchar(params$output_summary)) params$output_summary else file.path(STATE$output_dir, "data", "observations_summary.md")
+        summary_path <- if (!is.null(params$output_summary) && nzchar(params$output_summary)) params$output_summary else file.path(STATE$output_dir, "docs", "observations_summary.md")
         script_path <- if (!is.null(params$output_script) && nzchar(params$output_script)) params$output_script else file.path(STATE$output_dir, "code", "06_observations.R")
 
         dir.create(dirname(summary_path), recursive = TRUE, showWarnings = FALSE)
@@ -2336,7 +2336,7 @@ handle_request <- function(req) {
           emit(sprintf("- **Discordantly Regulated Across Contrasts (%d)**: %s\n", length(discordant), if (length(discordant) > 0) paste(head(discordant, 10), collapse = ", ") else "None"))
         }
 
-        # Write data/observations_summary.md
+        # Write docs/observations_summary.md
         writeLines(out_md, con = summary_path)
 
         # Generate reproducible standalone code/06_observations.R script
@@ -2358,7 +2358,7 @@ handle_request <- function(req) {
           "# Checkpoints",
           "cat('=== CHECKPOINTS ===\\n')",
           "cat('Artifact tidyproteomics_data.rds exists:', file.exists(rds_file), '\\n')",
-          "cat('Observations summary file exists:', file.exists('data/observations_summary.md'), '\\n')",
+          "cat('Observations summary file exists:', file.exists('docs/observations_summary.md'), '\\n')",
           "cat('PHASE_6_EXTRACTION_CHECKPOINT_PASS\\n')"
         )
         writeLines(standalone_r, con = script_path)

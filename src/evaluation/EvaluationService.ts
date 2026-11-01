@@ -14,7 +14,9 @@ import {
   ModelCatalogEntry,
   PhaseTelemetryMetric,
   PredefinedExperimentEntry,
+  ReviewerModelRef,
 } from "../types/evaluation";
+import { scoreRunV2, RUBRIC_VERSION } from "./rubric/scorer";
 
 export class EvaluationService {
   private activeSuite: BenchmarkSuite | null = null;
@@ -333,10 +335,38 @@ export class EvaluationService {
         .filter((l) => l.trim() && !l.startsWith("#") && !l.startsWith("<!--"))[0] ||
       "Study design definition";
 
-    const hasUnconfirmed =
-      /Confirm.*:\s*FALSE/i.test(raw) ||
-      /\(Pending Phase/i.test(raw) ||
-      /\[USER ACTION REQUIRED/i.test(raw);
+    const pathMatch = raw.match(/-\s*\*\*PATH_TO_DATA_FILE\*\*:\s*([^\n\r]+)/i);
+    const platMatch = raw.match(/-\s*\*\*PLATFORM\*\*:\s*([^\n\r]+)/i);
+    const analyteMatch = raw.match(/-\s*\*\*ANALYTE\*\*:\s*([^\n\r]+)/i);
+
+    const validDataFile = Boolean(
+      pathMatch &&
+      pathMatch[1].trim() &&
+      !pathMatch[1].includes("[REQUIRED") &&
+      !pathMatch[1].startsWith("<") &&
+      !pathMatch[1].includes("Enter URL")
+    );
+    const validPlatform = Boolean(
+      platMatch &&
+      platMatch[1].trim() &&
+      !platMatch[1].includes("[REQUIRED") &&
+      !platMatch[1].startsWith("<") &&
+      !platMatch[1].includes("Enter search platform")
+    );
+    const validAnalyte = Boolean(
+      analyteMatch &&
+      analyteMatch[1].trim() &&
+      !analyteMatch[1].includes("[REQUIRED") &&
+      !analyteMatch[1].startsWith("<") &&
+      !analyteMatch[1].includes("proteins or peptides")
+    );
+    const validHypothesis = Boolean(
+      hypothesis &&
+      hypothesis.length >= 10 &&
+      !hypothesis.includes("[REQUIRED")
+    );
+
+    const isReady = validDataFile && validPlatform && validAnalyte && validHypothesis;
 
     return {
       id,
@@ -348,7 +378,7 @@ export class EvaluationService {
       isCurrentWorkspace,
       rawDataFile: extra?.rawDataFile,
       hasRawDataDownloaded: extra?.hasRawDataDownloaded ?? false,
-      isHitlFreeReady: extra?.isHitlFreeReady ?? !hasUnconfirmed,
+      isHitlFreeReady: extra?.isHitlFreeReady ?? isReady,
     };
   }
 
@@ -389,15 +419,9 @@ export class EvaluationService {
     if (fsSync.existsSync(defaultExp)) {
       try {
         const raw = await fs.readFile(defaultExp, "utf-8");
-        const hasUnconfirmed =
-          /Confirm.*:\s*FALSE/i.test(raw) ||
-          /\(Pending Phase/i.test(raw) ||
-          /\[USER ACTION REQUIRED/i.test(raw);
-
         const entry = this.parseExperimentDoc(raw, "docs/experiment.md", "current_workspace", true, {
           rawDataFile: localRawDataFile,
           hasRawDataDownloaded: Boolean(localRawDataFile),
-          isHitlFreeReady: !hasUnconfirmed,
         });
         results.push(entry);
         seenPaths.add("docs/experiment.md");
@@ -518,331 +542,79 @@ export class EvaluationService {
   }
 
   /**
-   * Devised scoring engine evaluating:
-   * 1. 5-Dimension Manuscript Quality (Insights, Clarity, Scientific Evaluation, Bioinformatics Intelligence, Actionable Insights)
-   * 2. TidyProteomics-MCP Tool Use Score (MCP vs. raw script ratio and error success rates)
-   * 3. Bioinformatics Intelligence Metric
-   * 4. Overall Master Benchmark Score (0-100)
+   * Returns default panel of 3 distinct reviewer models based on the active provider.
+   * If openrouter, uses 3 frontier models from 3 separate leading labs (Anthropic, OpenAI, Google).
+   */
+  public getDefaultReviewers(provider?: string): ReviewerModelRef[] {
+    const p = provider || this.configStore.get("provider") || "openrouter";
+    if (p === "anthropic") {
+      return [
+        { model: "claude-3-7-sonnet-20250219", provider: "anthropic", label: "Claude 3.7 Sonnet" },
+        { model: "claude-3-5-sonnet-20241022", provider: "anthropic", label: "Claude 3.5 Sonnet" },
+        { model: "claude-3-opus-20240229", provider: "anthropic", label: "Claude 3 Opus" },
+      ];
+    } else if (p === "openai") {
+      return [
+        { model: "o3-mini", provider: "openai", label: "o3-mini" },
+        { model: "gpt-4o", provider: "openai", label: "GPT-4o" },
+        { model: "gpt-4o-mini", provider: "openai", label: "GPT-4o Mini" },
+      ];
+    } else if (p === "gemini") {
+      return [
+        { model: "gemini-1.5-pro", provider: "gemini", label: "Gemini 1.5 Pro" },
+        { model: "gemini-2.0-flash", provider: "gemini", label: "Gemini 2.0 Flash" },
+        { model: "gemini-1.5-flash", provider: "gemini", label: "Gemini 1.5 Flash" },
+      ];
+    } else {
+      // openrouter cross-vendor frontier panel (3 different models from 3 different frontier labs)
+      return [
+        { model: "anthropic/claude-3.7-sonnet", provider: "openrouter", label: "Claude 3.7 Sonnet" },
+        { model: "openai/gpt-4o", provider: "openrouter", label: "GPT-4o" },
+        { model: "google/gemini-2.0-flash-001", provider: "openrouter", label: "Gemini 2.0 Flash" },
+      ];
+    }
+  }
+
+  public resolveReviewers(reviewerIds?: string[], provider?: string): ReviewerModelRef[] {
+    if (!reviewerIds || reviewerIds.length === 0) {
+      return this.getDefaultReviewers(provider);
+    }
+    const catalog = this.getAvailableModels();
+    return reviewerIds.map((id) => {
+      const entry = catalog.find((m) => m.id === id);
+      return {
+        model: id,
+        provider: entry?.provider || (id.includes("/") ? "openrouter" : provider || "openrouter"),
+        label: entry?.name || id,
+      };
+    });
+  }
+
+  /**
+   * Rigorous scoring engine (v2.0):
+   * 1. Deterministic data-grounded verification (numeric fidelity, fold-change directions,
+   *    significance honesty, count consistency, figure integrity, citations, reproducibility)
+   * 2. Multi-reviewer LLM panel (3 distinct models evaluate 25 sub-criteria with quotes)
+   * 3. Hard verifier caps preventing hallucinated or inconsistent manuscripts from scoring high
+   * 4. Structured tool use evaluation across transcript logs
+   * 5. Composite benchmark score: 40% Manuscript, 35% Analytical Fidelity, 25% Tool Use
    */
   public async scoreRun(
     workspaceRoot: string,
     manuscriptPath?: string,
-    options?: { useLLM?: boolean }
+    options?: {
+      useLLM?: boolean;
+      reviewers?: ReviewerModelRef[];
+    }
   ): Promise<EvaluationScoreBreakdown> {
-    const docPath = manuscriptPath || path.join(workspaceRoot, "docs", "manuscript.md");
-    let manuscriptContent = "";
-    if (fsSync.existsSync(docPath)) {
-      try {
-        manuscriptContent = await fs.readFile(docPath, "utf-8");
-      } catch {}
-    }
-
-    // 1. Analyze Tool Usage Telemetry across logs
-    const toolStats = await this.analyzeToolUsage(workspaceRoot);
-
-    // 2. Perform Quantitative Text & Heuristic Rubric Analysis
-    const textAnalysis = this.analyzeManuscriptStructure(manuscriptContent);
-
-    // 3. Score Manuscript Dimensions
-    let insights = 7.0;
-    let clarity = 7.0;
-    let scientificEvaluation = 7.0;
-    let bioinformaticsIntelligence = 7.0;
-    let actionableInsights = 7.0;
-    let evaluatorFeedback = "Evaluated via TidyProteomics Automated Benchmark Rubric.";
-
-    // Baseline calculation grounded in empirical data points:
-    if (manuscriptContent.length > 500) {
-      // Clarity (1-10): Structure, presence of standard academic sections, figures, citations
-      let cScore = 5.0;
-      if (textAnalysis.hasAbstract) cScore += 1.0;
-      if (textAnalysis.hasResults) cScore += 1.0;
-      if (textAnalysis.hasDiscussion) cScore += 1.0;
-      if (textAnalysis.hasMethods) cScore += 1.0;
-      if (textAnalysis.figureCitations > 2) cScore += 1.0;
-      clarity = Math.min(10, Math.max(1, Math.round(cScore * 10) / 10));
-
-      // Scientific Evaluation (1-10): Grounding in p-values, FDR, log2FC, sample counts
-      let seScore = 4.0;
-      if (textAnalysis.statMentions > 5) seScore += 2.0;
-      if (textAnalysis.hasFdr) seScore += 1.5;
-      if (textAnalysis.hasPValues) seScore += 1.5;
-      if (textAnalysis.quantProteins > 5) seScore += 1.0;
-      scientificEvaluation = Math.min(10, Math.max(1, Math.round(seScore * 10) / 10));
-
-      // Bioinformatics Intelligence (1-10): Pathway terms, functional modules, UniProt accessions, GO/Reactome
-      let biScore = 4.0;
-      if (textAnalysis.pathwayMentions > 3) biScore += 2.5;
-      if (textAnalysis.hasGeneSymbols) biScore += 2.0;
-      if (textAnalysis.hasDeNovoModules) biScore += 1.5;
-      bioinformaticsIntelligence = Math.min(10, Math.max(1, Math.round(biScore * 10) / 10));
-
-      // Insights (1-10): Biological mechanisms, opposing regulation, phenotypic inferences
-      let inScore = 4.5;
-      if (textAnalysis.mechanisticTerms > 5) inScore += 2.5;
-      if (textAnalysis.hasContrastingPrograms) inScore += 2.0;
-      if (textAnalysis.wordCount > 1500) inScore += 1.0;
-      insights = Math.min(10, Math.max(1, Math.round(inScore * 10) / 10));
-
-      // Actionable Insights (1-10): Target classification, biomarker/druggability tag, next experiments roadmap
-      let aiScore = 4.0;
-      if (textAnalysis.hasActionableTargets) aiScore += 2.5;
-      if (textAnalysis.hasExperimentalRoadmap) aiScore += 2.0;
-      if (textAnalysis.hasTranslationalArchetype) aiScore += 1.5;
-      actionableInsights = Math.min(10, Math.max(1, Math.round(aiScore * 10) / 10));
-    } else {
-      insights = 3.0;
-      clarity = 3.0;
-      scientificEvaluation = 3.0;
-      bioinformaticsIntelligence = 3.0;
-      actionableInsights = 3.0;
-      evaluatorFeedback = "Manuscript content is incomplete, truncated, or absent.";
-    }
-
-    // Optional LLM deep qualitative audit if enabled and Reasoner is accessible
-    if (options?.useLLM && manuscriptContent.length > 800) {
-      try {
-        const llmScores = await this.queryLlmEvaluator(manuscriptContent);
-        if (llmScores) {
-          insights = llmScores.insights;
-          clarity = llmScores.clarity;
-          scientificEvaluation = llmScores.scientificEvaluation;
-          bioinformaticsIntelligence = llmScores.bioinformaticsIntelligence;
-          actionableInsights = llmScores.actionableInsights;
-          evaluatorFeedback = llmScores.feedback;
-        }
-      } catch (err) {
-        console.warn("[EvaluationService] LLM evaluation fallback to heuristic:", err);
-      }
-    }
-
-    const overallManuscriptScore = Math.round(((insights + clarity + scientificEvaluation + bioinformaticsIntelligence + actionableInsights) / 5) * 10) / 10;
-
-    // 4. Calculate TidyProteomics-MCP Tool Use Score (0-100%)
-    // High-level MCP tools (tpa_*, search) vs. raw script trials, weighted by tool success rate
-    const totalCalls = toolStats.mcpCalls + toolStats.rawScriptCalls;
-    const mcpRatio = totalCalls > 0 ? toolStats.mcpCalls / totalCalls : 0.8;
-    const mcpToolUseScore = Math.min(
-      100,
-      Math.max(
-        0,
-        Math.round((mcpRatio * 0.65 + toolStats.successRate * 0.35) * 100)
-      )
-    );
-
-    // 5. Calculate Domain Bioinformatics Intelligence Score (0-100)
-    const bioinformaticsIntelligenceScore = Math.min(
-      100,
-      Math.max(
-        0,
-        Math.round(
-          (bioinformaticsIntelligence * 0.5 +
-            scientificEvaluation * 0.3 +
-            (textAnalysis.statMentions > 4 ? 2.0 : 1.0)) *
-            10
-        )
-      )
-    );
-
-    // 6. Master Overall Benchmark Score (0-100)
-    // 45% Manuscript Quality (0-100), 30% MCP Tool Rigor (0-100), 25% Bioinformatics Intelligence (0-100)
-    const overallBenchmarkScore = Math.min(
-      100,
-      Math.max(
-        0,
-        Math.round(
-          (overallManuscriptScore * 10) * 0.45 +
-            mcpToolUseScore * 0.30 +
-            bioinformaticsIntelligenceScore * 0.25
-        )
-      )
-    );
-
-    return {
-      insights,
-      clarity,
-      scientificEvaluation,
-      bioinformaticsIntelligence,
-      actionableInsights,
-      overallManuscriptScore,
-      mcpToolUseScore,
-      bioinformaticsIntelligenceScore,
-      overallBenchmarkScore,
-      rubricNotes: evaluatorFeedback,
-      mcpToolCallsCount: toolStats.mcpCalls,
-      rawScriptCallsCount: toolStats.rawScriptCalls,
-      toolSuccessRate: toolStats.successRate,
-    };
-  }
-
-  /**
-   * Parses logs across all phases to quantify MCP tool calls vs raw script attempts and success rate.
-   */
-  private async analyzeToolUsage(workspaceRoot: string): Promise<{ mcpCalls: number; rawScriptCalls: number; successRate: number }> {
-    let mcpCalls = 0;
-    let rawScriptCalls = 0;
-    let totalAttempts = 0;
-    let failureCount = 0;
-
-    const logsDir = path.join(workspaceRoot, "logs");
-    if (!fsSync.existsSync(logsDir)) {
-      return { mcpCalls: 0, rawScriptCalls: 0, successRate: 1.0 };
-    }
-
-    try {
-      const entries = await fs.readdir(logsDir, { withFileTypes: true });
-      for (const e of entries) {
-        if (e.isDirectory() && e.name !== "agent") {
-          const phaseDir = path.join(logsDir, e.name);
-          const consoleLog = path.join(phaseDir, "console.log");
-          if (fsSync.existsSync(consoleLog)) {
-            const raw = await fs.readFile(consoleLog, "utf-8");
-            if (raw.includes("Error:") || raw.includes("Execution halted") || raw.includes("failed") || raw.includes("FAILED")) {
-              failureCount++;
-            }
-          }
-
-          const chatMd = path.join(phaseDir, "chat.md");
-          if (fsSync.existsSync(chatMd)) {
-            const content = await fs.readFile(chatMd, "utf-8");
-            const tpaMatches = content.match(/tpa_[a-zA-Z0-9_]+/g) || [];
-            const searchMatches = content.match(/(?:web_search|pubmed_search|uniprot_search)/g) || [];
-            const cmdMatches = content.match(/(?:execute_command|Rscript|python3)/g) || [];
-
-            mcpCalls += tpaMatches.length + searchMatches.length;
-            rawScriptCalls += cmdMatches.length;
-            totalAttempts += tpaMatches.length + searchMatches.length + cmdMatches.length;
-          }
-        }
-      }
-
-      // Check agent logs for tool invocations if legacy agent directory exists
-      const agentLogsDir = path.join(logsDir, "agent");
-      if (fsSync.existsSync(agentLogsDir)) {
-        const chatFiles = await fs.readdir(agentLogsDir);
-        for (const cf of chatFiles) {
-          if (cf.endsWith(".md") || cf.endsWith(".json")) {
-            const content = await fs.readFile(path.join(agentLogsDir, cf), "utf-8");
-            const tpaMatches = content.match(/tpa_[a-zA-Z0-9_]+/g) || [];
-            const searchMatches = content.match(/(?:web_search|pubmed_search|uniprot_search)/g) || [];
-            const cmdMatches = content.match(/(?:execute_command|Rscript|python3)/g) || [];
-
-            mcpCalls += tpaMatches.length + searchMatches.length;
-            rawScriptCalls += cmdMatches.length;
-            totalAttempts += tpaMatches.length + searchMatches.length + cmdMatches.length;
-          }
-        }
-      }
-    } catch {}
-
-    const successRate = totalAttempts > 0 ? Math.max(0.0, 1.0 - (failureCount / Math.max(1, totalAttempts))) : 1.0;
-    return {
-      mcpCalls,
-      rawScriptCalls,
-      successRate: Math.min(1.0, Math.round(successRate * 100) / 100),
-    };
-  }
-
-  /**
-   * Structural feature extraction of generated scientific manuscript.
-   */
-  private analyzeManuscriptStructure(content: string) {
-    const lower = content.toLowerCase();
-    const wordCount = content.split(/\s+/).filter(Boolean).length;
-
-    const hasAbstract = /abstract/i.test(lower);
-    const hasResults = /results/i.test(lower);
-    const hasDiscussion = /discussion/i.test(lower);
-    const hasMethods = /methods|materials and methods/i.test(lower);
-
-    const statMatches = content.match(/(?:p[\s_-]?(?:value|val)?\s*[<>=]|fdr\s*[<>=]|log2(?:fc)?|fold[\s_-]?change)/gi) || [];
-    const pathwayMatches = content.match(/(?:pathway|reactome|gene ontology|go:\d+|enrichment|hallmark|kegg)/gi) || [];
-    const geneSymbolMatches = content.match(/\b[A-Z][A-Z0-9]{2,8}\b/g) || [];
-    const figureMatches = content.match(/(?:figure\s+\d+|fig\.\s*\d+|fig_\d+)/gi) || [];
-
-    const hasPValues = /p[\s_-]?value/i.test(lower);
-    const hasFdr = /fdr|adj[\s_.]?p/i.test(lower);
-    const hasActionableTargets = /(?:predictive biomarker|druggable target|mechanistic dependency|compensatory buffer)/i.test(lower);
-    const hasExperimentalRoadmap = /(?:experimental roadmap|what to do next|follow-on validation|orthogonal validation)/i.test(lower);
-    const hasTranslationalArchetype = /translational archetype|therapeutic|clinical/i.test(lower);
-    const hasDeNovoModules = /de novo module|module \d+|cluster \d+/i.test(lower);
-    const hasContrastingPrograms = /opposing|induced vs|upregulated vs|repressed/i.test(lower);
-
-    const mechanisticMatches = content.match(/(?:inhibit|activate|phosphorylat|downregulat|upregulat|translocat|repress|promot|complex)/gi) || [];
-
-    return {
-      wordCount,
-      hasAbstract,
-      hasResults,
-      hasDiscussion,
-      hasMethods,
-      statMentions: statMatches.length,
-      pathwayMentions: pathwayMatches.length,
-      quantProteins: Math.min(30, geneSymbolMatches.length),
-      figureCitations: figureMatches.length,
-      hasPValues,
-      hasFdr,
-      hasActionableTargets,
-      hasExperimentalRoadmap,
-      hasTranslationalArchetype,
-      hasDeNovoModules,
-      hasContrastingPrograms,
-      mechanisticTerms: mechanisticMatches.length,
-      hasGeneSymbols: geneSymbolMatches.length > 5,
-    };
-  }
-
-  /**
-   * Prompts the Reasoner model to conduct a multi-dimensional manuscript review.
-   */
-  private async queryLlmEvaluator(manuscriptContent: string): Promise<{
-    insights: number;
-    clarity: number;
-    scientificEvaluation: number;
-    bioinformaticsIntelligence: number;
-    actionableInsights: number;
-    feedback: string;
-  } | null> {
-    const reasoner = this.client.forRole("reasoner");
-    const prompt = `You are a Senior Editor and Lead Bioinformatics Reviewer for Nature Biotechnology.
-Evaluate the following TidyProteomics-generated scientific manuscript excerpt on a strict 1.0 to 10.0 scale across 5 dimensions:
-
-1. "insights": Novelty, biological plausibility, and depth of mechanistic deductions.
-2. "clarity": Academic prose structure, narrative coherence, clarity, and readability.
-3. "scientificEvaluation": Rigor of empirical evidence, statistical grounding (p-values, FDR, fold-changes), absence of hallucinations.
-4. "bioinformaticsIntelligence": Domain correctness (appropriate normalization, pathway cross-talk, cluster interpretation).
-5. "actionableInsights": Clarity of translational archetype, target classification, and experimental validation roadmap.
-
-Respond ONLY with valid JSON in this exact structure:
-{
-  "insights": 8.5,
-  "clarity": 8.0,
-  "scientificEvaluation": 8.5,
-  "bioinformaticsIntelligence": 9.0,
-  "actionableInsights": 8.0,
-  "feedback": "2-3 concise sentences summarizing evaluation strengths and areas for improvement."
-}
-
-MANUSCRIPT EXCERPT:
-${manuscriptContent.slice(0, 12000)}`;
-
-    const resp = await reasoner.chat({
-      system: "You evaluate scientific manuscripts with calibrated rigor. Output JSON only.",
-      messages: [{ role: "user", content: prompt }],
-      tools: [],
+    const reviewers = options?.reviewers || this.getDefaultReviewers();
+    return scoreRunV2({
+      runRoot: workspaceRoot,
+      manuscriptPath,
+      client: this.client,
+      reviewers,
+      useLLM: options?.useLLM ?? true,
     });
-
-    const jsonMatch = resp.content.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
-    const parsed = JSON.parse(jsonMatch[0]);
-    return {
-      insights: Number(parsed.insights) || 7.0,
-      clarity: Number(parsed.clarity) || 7.0,
-      scientificEvaluation: Number(parsed.scientificEvaluation) || 7.0,
-      bioinformaticsIntelligence: Number(parsed.bioinformaticsIntelligence) || 7.0,
-      actionableInsights: Number(parsed.actionableInsights) || 7.0,
-      feedback: String(parsed.feedback || ""),
-    };
   }
 
   /**
@@ -1181,7 +953,9 @@ ${manuscriptContent.slice(0, 12000)}`;
   public async scoreCurrentWorkspaceRun(
     workspaceRoot: string,
     orchestrator: PipelineOrchestrator,
-    suiteId?: string
+    suiteId?: string,
+    reviewers?: ReviewerModelRef[],
+    useLLM: boolean = true
   ): Promise<EvaluationRunSummary> {
     try {
       await orchestrator.rescanPhases(true);
@@ -1215,8 +989,9 @@ ${manuscriptContent.slice(0, 12000)}`;
       } catch (_) {}
     }
 
+    const reviewerList = reviewers || this.getDefaultReviewers(currentProvider);
     const telemetry = await this.collectTelemetry(workspaceRoot, orchestrator);
-    const scores = await this.scoreRun(workspaceRoot);
+    const scores = await this.scoreRun(workspaceRoot, undefined, { useLLM, reviewers: reviewerList });
 
     let wordCount = 0;
     const manuscriptPath = path.join(workspaceRoot, "docs", "manuscript.md");
@@ -1417,11 +1192,17 @@ ${manuscriptContent.slice(0, 12000)}`;
     const baselineMaxTokens = this.configStore.get("maxTokens") || 32768;
     const baselineMultiModel = this.configStore.get("multiModelEnabled") ?? false;
 
+    // Resolve 3 reviewer models for this benchmark suite (custom user selection or provider default)
+    const reviewerList = this.resolveReviewers(
+      req.reviewerModels || (req.reviewers ? req.reviewers.map((r) => r.model) : undefined),
+      req.provider
+    );
+
     // Check if baseline run already exists; if not, score and record baseline into 00_benchmark
     const hasBaseline = existingRuns.some((r) => r.isBaseline || r.id === "00_benchmark" || r.id.startsWith("00_"));
     if (!hasBaseline) {
       try {
-        const baselineRun = await this.scoreCurrentWorkspaceRun(workspaceRoot, orchestrator, "unified_evaluations");
+        const baselineRun = await this.scoreCurrentWorkspaceRun(workspaceRoot, orchestrator, "unified_evaluations", reviewerList, true);
         const benchmarkDir = path.join(evalDir, "00_benchmark");
         await fs.mkdir(benchmarkDir, { recursive: true });
         baselineRun.id = "00_benchmark";
@@ -1471,6 +1252,7 @@ ${manuscriptContent.slice(0, 12000)}`;
       createdAt: existingSuite?.createdAt || new Date().toISOString(),
       provider: req.provider,
       models: Array.from(new Set([...existingRuns.map((r) => r.model), ...req.models])),
+      reviewerModels: reviewerList.map((r) => r.model),
       iterations: req.iterations,
       experimentPath: path.relative(workspaceRoot, expFile),
       experimentTitle: expTitle,
@@ -1594,8 +1376,8 @@ ${manuscriptContent.slice(0, 12000)}`;
             // 6. Collect execution telemetry from the sandbox
             const telemetry = await this.collectTelemetry(runDir, orchestrator);
 
-            // 7. Score outputs directly from the sandbox
-            const scores = await this.scoreRun(runDir);
+            // 7. Score outputs directly from the sandbox using the 3 reviewer models
+            const scores = await this.scoreRun(runDir, undefined, { useLLM: true, reviewers: reviewerList });
 
             // 8. Capture manuscript from sandbox
             const manuscriptSource = path.join(runDir, "docs", "manuscript.md");
@@ -1648,7 +1430,7 @@ ${manuscriptContent.slice(0, 12000)}`;
 
             agentService?.handleStageObservation(
               { id: "00", fileName: "00_BENCHMARK.md", title: "Benchmark Run" } as any,
-              `✓ **Benchmark Run [${prefix}] Complete**: \`${model}\` (Iteration ${iter})\n• Status: **${runStatus.toUpperCase()}**\n• Duration: **${telemetry.totalDurationSeconds}s** | Total Turns: **${telemetry.totalTurns}**\n• Tokens: **${telemetry.tokenUsage.totalTokens.toLocaleString()}** (Prompt: ${telemetry.tokenUsage.promptTokens.toLocaleString()}, Completion: ${telemetry.tokenUsage.completionTokens.toLocaleString()})\n• Benchmark Score: **${scores.overallBenchmarkScore}/100** (Tool Use: ${scores.mcpToolUseScore}/100, Intel: ${scores.bioinformaticsIntelligenceScore}/100)`,
+              `✓ **Benchmark Run [${prefix}] Complete**: \`${model}\` (Iteration ${iter})\n• Status: **${runStatus.toUpperCase()}**\n• Duration: **${telemetry.totalDurationSeconds}s** | Total Turns: **${telemetry.totalTurns}**\n• Tokens: **${telemetry.tokenUsage.totalTokens.toLocaleString()}** (Prompt: ${telemetry.tokenUsage.promptTokens.toLocaleString()}, Completion: ${telemetry.tokenUsage.completionTokens.toLocaleString()})\n• Benchmark Score: **${scores.overallBenchmarkScore}/100** (Fidelity: ${scores.analyticalFidelityScore ?? scores.bioinformaticsIntelligenceScore}/100, Tool Use: ${scores.mcpToolUseScore}/100, Manuscript: ${scores.overallManuscriptScore}/10)\n• Reviewers (1x each): ${reviewerList.map((r) => `\`${r.model}\``).join(", ")}`,
               { badge: `Run ${prefix} Done` }
             );
 

@@ -2,6 +2,7 @@ import { ChatMessage, LLMConfig, LLMProviderType, LLMRole, LLMResponse, LLMTierC
 
 export class ProviderClient {
   private roleClients = new Map<LLMRole, ProviderClient>();
+  private modelClients = new Map<string, ProviderClient>();
 
   constructor(
     private config: LLMConfig,
@@ -11,6 +12,7 @@ export class ProviderClient {
   public updateConfig(config: Partial<LLMConfig>) {
     this.config = { ...this.config, ...config };
     this.roleClients.clear();
+    this.modelClients.clear();
   }
 
   public forRole(role: LLMRole): ProviderClient {
@@ -64,6 +66,63 @@ export class ProviderClient {
     const clientInstance = new ProviderClient(resolvedConfig, true);
     this.roleClients.set(role, clientInstance);
     return clientInstance;
+  }
+
+  public forModel(model: string, provider?: LLMProviderType): ProviderClient {
+    if (this.isTierInstance) return this;
+    const cleanModel = model.trim();
+    if (!cleanModel || cleanModel === this.config.model) return this;
+    if (this.modelClients.has(cleanModel)) return this.modelClients.get(cleanModel)!;
+
+    let effectiveProvider: LLMProviderType = provider || this.config.provider;
+    if (cleanModel.includes("/") && (this.config.apiKey.startsWith("sk-or-v1") || this.config.provider === "openrouter")) {
+      effectiveProvider = "openrouter";
+    }
+
+    const resolvedConfig: LLMConfig = {
+      ...this.config,
+      provider: effectiveProvider,
+      model: cleanModel,
+    };
+    const clientInstance = new ProviderClient(resolvedConfig, true);
+    this.modelClients.set(cleanModel, clientInstance);
+    return clientInstance;
+  }
+
+  public forPhase(
+    phaseId: string,
+    fileName?: string,
+    defaultRole?: LLMRole
+  ): { client: ProviderClient; source: "phase" | "tier" | "default" } {
+    if (this.config.multiModelEnabled === false) {
+      return { client: this, source: "default" };
+    }
+
+    // 1. Check phase-specific override in phaseModels
+    const phaseModels = this.config.phaseModels || {};
+    const cleanId = phaseId.toLowerCase().trim();
+    const cleanFile = (fileName || "").toLowerCase().trim();
+    const baseFile = (fileName || "").replace(/\.md$/i, "").toLowerCase().trim();
+
+    const customModel =
+      phaseModels[phaseId] ||
+      phaseModels[cleanId] ||
+      (fileName ? phaseModels[fileName] || phaseModels[cleanFile] || phaseModels[baseFile] : undefined);
+
+    if (customModel && typeof customModel === "string" && customModel.trim() && customModel.trim().toLowerCase() !== "default") {
+      const client = this.forModel(customModel.trim());
+      return { client, source: "phase" };
+    }
+
+    // 2. Check role tier
+    if (defaultRole) {
+      const tierClient = this.forRole(defaultRole);
+      if (tierClient !== this) {
+        return { client: tierClient, source: "tier" };
+      }
+    }
+
+    return { client: this, source: "default" };
   }
 
   public getConfig(): LLMConfig {

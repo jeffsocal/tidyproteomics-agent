@@ -61,6 +61,7 @@ export interface LLMConfig {
   tierUtility?: LLMTierConfig;
   tierToolRunner?: LLMTierConfig;
   tierReasoner?: LLMTierConfig;
+  phaseModels?: Record<string, string>;
 }
 
 export type PhaseStatus = "pending" | "running" | "completed" | "failed";
@@ -83,6 +84,7 @@ export interface PhaseInfo {
   model?: string;
   role?: LLMRole;
   provider?: string;
+  modelSource?: "phase" | "tier" | "default";
 }
 
 export interface ModelTokenUsage {

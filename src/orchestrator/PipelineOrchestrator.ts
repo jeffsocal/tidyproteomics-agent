@@ -758,8 +758,8 @@ export class PipelineOrchestrator {
         const summaryText = prev?.summary || noteRec?.summary;
 
         const defaultRole: LLMRole = this.resolvePhaseRole(id, fileName);
-        const clientForRole = this.client.forRole(defaultRole);
-        const roleCfg = clientForRole.getConfig();
+        const { client: phaseClient, source: modelSource } = this.client.forPhase(id, fileName, defaultRole);
+        const phaseCfg = phaseClient.getConfig();
 
         newPhases.push({
           id,
@@ -776,9 +776,10 @@ export class PipelineOrchestrator {
           summary: summaryText,
           error: prev?.error || (resolvedStatus === "failed" ? noteRec?.summary : undefined),
           associatedFiles: this.resolveAssociatedFiles(fileName, id, summaryText),
-          model: prev?.model || noteRec?.model || roleCfg.model,
+          model: prev?.model || noteRec?.model || phaseCfg.model,
           role: prev?.role || noteRec?.role || defaultRole,
-          provider: prev?.provider || noteRec?.provider || roleCfg.provider,
+          provider: prev?.provider || noteRec?.provider || phaseCfg.provider,
+          modelSource: prev?.modelSource || modelSource,
         });
       }
     } catch (e) {
@@ -957,10 +958,10 @@ Construct and execute code for this phase, capturing output to logs.
 
     for (const p of this.phases) {
       const role: LLMRole = p.role || this.resolvePhaseRole(p.id, p.fileName);
-      const clientForRole = this.client.forRole(role);
-      const roleCfg = clientForRole.getConfig();
-      const modelName = p.model || roleCfg.model;
-      const providerName = p.provider || roleCfg.provider;
+      const { client: clientForPhase } = this.client.forPhase(p.id, p.fileName, role);
+      const phaseCfg = clientForPhase.getConfig();
+      const modelName = p.model || phaseCfg.model;
+      const providerName = p.provider || phaseCfg.provider;
 
       if (!modelTokens[modelName]) {
         modelTokens[modelName] = {
@@ -1435,21 +1436,26 @@ Construct and execute code for this phase, capturing output to logs.
       let lastToolPendingText = "";
 
       const phaseRole: LLMRole = phase.role || this.resolvePhaseRole(phase.id, phase.fileName);
-      const phaseClient = this.client.forRole(phaseRole);
+      const { client: phaseClient, source: modelSource } = this.client.forPhase(phase.id, phase.fileName, phaseRole);
 
       const phaseModelCfg = phaseClient.getConfig();
       phase.role = phaseRole;
       phase.model = phaseModelCfg.model;
       phase.provider = phaseModelCfg.provider;
+      phase.modelSource = modelSource;
       const roleLabel =
-        phaseRole === "reasoner"
-          ? "Tier 3 (Scientific Reasoner)"
-          : phaseRole === "utility"
-            ? "Tier 1 (Fast Utility & Ingestion)"
-            : "Tier 2 (Tool Runner)";
+        modelSource === "phase"
+          ? `Phase Assignment: ${phaseModelCfg.model}`
+          : modelSource === "tier"
+            ? (phaseRole === "reasoner"
+                ? "Tier 3 (Scientific Reasoner)"
+                : phaseRole === "utility"
+                  ? "Tier 1 (Fast Utility & Ingestion)"
+                  : "Tier 2 (Tool Runner)")
+            : "Primary Default";
       this.logPhase(
         phaseTag,
-        `Allocated ${roleLabel}: ${phaseModelCfg.model} (${phaseModelCfg.provider})`
+        `Allocated ${roleLabel} (${phaseModelCfg.provider})`
       );
 
       loop = new AgentLoop(
@@ -1637,6 +1643,7 @@ Construct and execute code for this phase, capturing output to logs.
       addIfExists("data/tidyproteomics_data.rds");
     } else if (phaseId === "06") {
       addIfExists("docs/observations.md");
+      addIfExists("docs/observations_summary.md");
       addIfExists("data/observations_summary.md");
     } else if (phaseId === "07") {
       addIfExists("docs/knowledge.md");

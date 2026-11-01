@@ -463,15 +463,25 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
                               <span
                                 style={{
                                   fontSize: "9.5px",
-                                  color: "var(--muted)",
+                                  color: p.modelSource === "phase" ? "#60a5fa" : p.modelSource === "tier" ? "#c084fc" : "var(--muted)",
                                   fontFamily: "var(--font-mono)",
-                                  background: "rgba(255, 255, 255, 0.05)",
+                                  background: p.modelSource === "phase" ? "rgba(59, 130, 246, 0.12)" : p.modelSource === "tier" ? "rgba(168, 85, 247, 0.1)" : "rgba(255, 255, 255, 0.05)",
                                   padding: "1px 5px",
                                   borderRadius: "3px",
-                                  border: "1px solid var(--border)",
+                                  border: `1px solid ${p.modelSource === "phase" ? "rgba(59, 130, 246, 0.35)" : p.modelSource === "tier" ? "rgba(168, 85, 247, 0.3)" : "var(--border)"}`,
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "3px",
                                 }}
-                                title={`Executed with ${p.model} (${p.role || "standard"})`}
+                                title={
+                                  p.modelSource === "phase"
+                                    ? `Custom Phase Assignment: ${p.model}`
+                                    : p.modelSource === "tier"
+                                    ? `Role Tier Assignment (${p.role}): ${p.model}`
+                                    : `Default Model: ${p.model}`
+                                }
                               >
+                                {p.modelSource === "phase" && <span style={{ fontSize: "8.5px", color: "#60a5fa" }}>★</span>}
                                 {p.model.includes("/") ? p.model.split("/")[1] : p.model}
                               </span>
                             )}

@@ -984,7 +984,7 @@ TOOLS = [
     },
     {
         "name": "tpa_compile_summary",
-        "description": "Compiles the authoritative primary observations summary (data/observations_summary.md) from the active tidyproteomics dataset, extracting quality metrics, target perturbation efficacy, top upregulated/downregulated candidates with statistical precision and imputation risk scoring, multi-category pathway enrichments, and cross-contrast concordances. Automatically writes the reproducible code/06_observations.R script and verifies checkpoints.",
+        "description": "Compiles the authoritative primary observations summary (docs/observations_summary.md) from the active tidyproteomics dataset, extracting quality metrics, target perturbation efficacy, top upregulated/downregulated candidates with statistical precision and imputation risk scoring, multi-category pathway enrichments, and cross-contrast concordances. Automatically writes the reproducible code/06_observations.R script and verifies checkpoints.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -994,7 +994,7 @@ TOOLS = [
                 },
                 "output_summary": {
                     "type": "string",
-                    "description": "Optional output path for markdown summary. Defaults to 'data/observations_summary.md'."
+                    "description": "Optional output path for markdown summary. Defaults to 'docs/observations_summary.md'."
                 },
                 "output_script": {
                     "type": "string",
