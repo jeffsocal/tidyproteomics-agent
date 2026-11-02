@@ -13,6 +13,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { LLMProviderType, LLMTierConfig } from "../types";
+import { TierSuggestionModal } from "./TierSuggestionModal";
 
 export interface PhaseDefinitionInfo {
   id: string;
@@ -110,6 +111,7 @@ export const MultiModelSettingsSection: React.FC<MultiModelSettingsSectionProps>
 }) => {
   const [expandedTier, setExpandedTier] = useState<"utility" | "toolRunner" | "reasoner" | null>(null);
   const [showPhaseOverrides, setShowPhaseOverrides] = useState<boolean>(false);
+  const [showSuggestModal, setShowSuggestModal] = useState<boolean>(false);
 
   const toggleExpand = (tier: "utility" | "toolRunner" | "reasoner") => {
     setExpandedTier((prev) => (prev === tier ? null : tier));
@@ -161,21 +163,102 @@ export const MultiModelSettingsSection: React.FC<MultiModelSettingsSectionProps>
           </div>
         </div>
 
-        <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
-          <input
-            type="checkbox"
-            checked={multiModelEnabled}
-            onChange={(e) => onToggleMultiModel(e.target.checked)}
-            style={{ width: "16px", height: "16px", cursor: "pointer" }}
-          />
-          <span style={{ fontSize: "12px", fontWeight: 600, color: multiModelEnabled ? "var(--fg-bright)" : "var(--muted)" }}>
-            {multiModelEnabled ? "Multi-Model Active" : "Disabled (Single Model)"}
-          </span>
-        </label>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <button
+            type="button"
+            className="btn btn-secondary btn-xs"
+            onClick={() => setShowSuggestModal(true)}
+            style={{
+              fontSize: "11px",
+              fontWeight: 600,
+              display: "flex",
+              alignItems: "center",
+              gap: "5px",
+              borderColor: "rgba(59, 130, 246, 0.4)",
+              color: "#93c5fd",
+              background: "rgba(59, 130, 246, 0.08)",
+            }}
+            title="Suggest optimal T1, T2, T3 configuration based on benchmark runs"
+          >
+            <Sparkles size={12} color="#60a5fa" />
+            Auto-Suggest Tiers
+          </button>
+
+          <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={multiModelEnabled}
+              onChange={(e) => onToggleMultiModel(e.target.checked)}
+              style={{ width: "16px", height: "16px", cursor: "pointer" }}
+            />
+            <span style={{ fontSize: "12px", fontWeight: 600, color: multiModelEnabled ? "var(--fg-bright)" : "var(--muted)" }}>
+              {multiModelEnabled ? "Multi-Model Active" : "Disabled (Single Model)"}
+            </span>
+          </label>
+        </div>
       </div>
 
       {multiModelEnabled && (
         <>
+          {/* Empirical Benchmark Optimizer Banner */}
+          <div
+            style={{
+              background: "linear-gradient(135deg, rgba(37, 99, 235, 0.12) 0%, rgba(124, 58, 237, 0.12) 100%)",
+              border: "1px solid rgba(59, 130, 246, 0.35)",
+              borderRadius: "8px",
+              padding: "12px 14px",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              flexWrap: "wrap",
+              gap: "10px",
+            }}
+          >
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <Sparkles size={14} color="#60a5fa" />
+                <span style={{ fontSize: "12.5px", fontWeight: 700, color: "var(--fg-bright)" }}>
+                  Benchmark-Driven Tier Suggestions
+                </span>
+                <span
+                  style={{
+                    fontSize: "10px",
+                    fontWeight: 700,
+                    background: "rgba(59, 130, 246, 0.25)",
+                    color: "#93c5fd",
+                    padding: "1px 6px",
+                    borderRadius: "4px",
+                  }}
+                >
+                  Empirical
+                </span>
+              </div>
+              <div style={{ fontSize: "11.5px", color: "var(--muted)", marginTop: "2px" }}>
+                Compute optimal T1, T2, T3 allocations based on 10+ benchmark runs, verified fidelity, and OpenRouter pricing.
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => setShowSuggestModal(true)}
+              style={{
+                fontSize: "11.5px",
+                fontWeight: 700,
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                background: "linear-gradient(135deg, #2563eb 0%, #7c3aed 100%)",
+                border: "none",
+                boxShadow: "0 2px 8px rgba(37, 99, 235, 0.35)",
+                cursor: "pointer",
+              }}
+            >
+              <Zap size={13} />
+              Suggest Optimal T1/T2/T3
+            </button>
+          </div>
+
           {/* Quick 1-Click Presets */}
           <div style={{ background: "#15151a", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
             <div style={{ fontSize: "10.5px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--muted)", marginBottom: "8px" }}>
@@ -702,6 +785,20 @@ export const MultiModelSettingsSection: React.FC<MultiModelSettingsSectionProps>
           </div>
         </>
       )}
+
+      {/* Suggestion Modal */}
+      <TierSuggestionModal
+        isOpen={showSuggestModal}
+        onClose={() => setShowSuggestModal(false)}
+        onApplyConfig={(cfg) => {
+          onUpdateTierUtility(cfg.tierUtility);
+          onUpdateTierToolRunner(cfg.tierToolRunner);
+          onUpdateTierReasoner(cfg.tierReasoner);
+          if (!multiModelEnabled) {
+            onToggleMultiModel(true);
+          }
+        }}
+      />
     </div>
   );
 };

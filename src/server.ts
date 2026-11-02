@@ -18,6 +18,7 @@ import { IngestionRunner } from "./literature/IngestionRunner";
 import { FollowonPhaseService } from "./agent/FollowonPhaseService";
 import { PerformanceReviewService } from "./agent/PerformanceReviewService";
 import { EvaluationService } from "./evaluation/EvaluationService";
+import { TierOptimizer } from "./evaluation/TierOptimizer";
 import { LLMConfig, PipelineState } from "./types";
 
 export interface FileTreeNode {
@@ -964,7 +965,7 @@ async function startServer() {
       }
 
       if (result.ok) {
-        appendLog(`[Performance Review] Successfully generated audit report -> docs/performance_review.md`);
+        appendLog(`[Performance Review] Successfully generated audit report -> docs/report_performance_review.md`);
       } else {
         appendLog(`[Performance Review Error] ${result.error || "Generation failed"}`);
       }
@@ -984,14 +985,14 @@ async function startServer() {
       if (!content) {
         return res.status(400).json({ ok: false, error: "Content is required" });
       }
-      const docsTarget = path.join(workspaceRoot, "docs", "performance_review.md");
-      const logsTarget = path.join(workspaceRoot, "logs", "performance_review.md");
+      const docsTarget = path.join(workspaceRoot, "docs", "report_performance_review.md");
+      const logsTarget = path.join(workspaceRoot, "logs", "report_performance_review.md");
       await fsPromises.mkdir(path.dirname(docsTarget), { recursive: true });
       await fsPromises.writeFile(docsTarget, content, "utf-8");
       await fsPromises.mkdir(path.dirname(logsTarget), { recursive: true });
       await fsPromises.writeFile(logsTarget, content, "utf-8");
       broadcastFileTree().catch(() => { });
-      res.json({ ok: true, filePath: "docs/performance_review.md" });
+      res.json({ ok: true, filePath: "docs/report_performance_review.md" });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err.message });
     }
@@ -1163,6 +1164,37 @@ async function startServer() {
         useLLM !== false
       );
       res.json({ ok: true, scores: baseline.scores, telemetry: { totalDurationSeconds: baseline.totalDurationSeconds, totalTurns: baseline.totalTurns, tokenUsage: baseline.tokenUsage, phaseMetrics: baseline.phaseMetrics }, baseline });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  app.get("/api/evaluation/suggest-tiers", async (req, res) => {
+    try {
+      const evalPath = req.query.evalDir ? String(req.query.evalDir) : path.join(APP_ROOT, "testrun", "evaluations");
+      const optimizer = new TierOptimizer(evalPath);
+      const suggestions = await optimizer.suggestTiers();
+      res.json(suggestions);
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  app.post("/api/evaluation/explain-tiers", async (req, res) => {
+    try {
+      const { profileId, tierUtilityModel, tierToolRunnerModel, tierReasonerModel } = req.body || {};
+      const evalPath = path.join(APP_ROOT, "testrun", "evaluations");
+      const optimizer = new TierOptimizer(evalPath);
+      const explanation = await optimizer.explainTierConfiguration(
+        {
+          profileId: profileId || "balanced",
+          tierUtilityModel,
+          tierToolRunnerModel,
+          tierReasonerModel,
+        },
+        client
+      );
+      res.json(explanation);
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err.message });
     }

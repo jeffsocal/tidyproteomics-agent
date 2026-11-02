@@ -72,4 +72,4 @@ Before calling `complete_phase`, confirm:
 1. `docs/report_integrity.md` exists and is non-empty (>500 characters).
 2. `docs/manuscript_rev_00.md` exists on disk (preserving baseline Phase 11 synthesis).
 3. `docs/manuscript_rev_01.md` exists on disk and has identical content to `docs/manuscript.md`.
-4. Zero unresolved direction errors remain.
+4. Zero unaddressed direction errors remain. All confirmed defects have been corrected in `docs/manuscript_rev_01.md` and `docs/manuscript.md`. Any false-positive matcher artifacts (e.g. proximity across clauses or prospective experiment mentions) must be explicitly listed and biologically justified under 'Dismissed Flags' in `docs/report_integrity.md`.

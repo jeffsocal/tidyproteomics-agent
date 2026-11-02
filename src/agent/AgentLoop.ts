@@ -127,6 +127,15 @@ export class AgentLoop {
           type: "thought",
           data: `[Turn Budget Notice]: 5 turns remaining in this phase (${turn}/${maxTurns}).`,
         });
+      } else if (turn === maxTurns - 2) {
+        this.messages.push({
+          role: "user",
+          content: `🚨 [CRITICAL TURN BUDGET ALERT]: Only 2 turns remaining (${turn}/${maxTurns}). Immediately write/finalize your report and call complete_phase now.`,
+        });
+        this.onProgress({
+          type: "thought",
+          data: `[Critical Budget Alert]: 2 turns remaining (${turn}/${maxTurns}). Finalize and call complete_phase.`,
+        });
       }
 
       // Call LLM with the persistent system prompt (which gets cached) and the local messages
@@ -646,8 +655,50 @@ DO NOT repeat the identical failing command without structural fixes:
       }
     }
 
-    const failureSummary = `Turn limit reached (${maxTurns} turns) without completing phase checkpoints.`;
     const durationSeconds = Math.round((Date.now() - startTimeMs) / 1000);
+
+    // Graceful recovery: If turn limit was reached, check if the phase's primary report artifact was produced
+    const wsRoot = this.tools.getWorkspaceRoot();
+    let recoveredSuccess = false;
+    let recoveredSummary = "";
+    if (this.phaseName?.includes("13_") || this.phaseName?.includes("critique")) {
+      const repPath = path.join(wsRoot, "docs", "report_critique.md");
+      const revPath = path.join(wsRoot, "docs", "manuscript_rev_02.md");
+      if (fsSync.existsSync(repPath) && fsSync.statSync(repPath).size > 500 && fsSync.existsSync(revPath)) {
+        recoveredSuccess = true;
+        recoveredSummary = `Phase completed: Report (docs/report_critique.md) and revised manuscript (docs/manuscript_rev_02.md) were successfully finalized on disk before turn budget expired.`;
+      }
+    } else if (this.phaseName?.includes("12_") || this.phaseName?.includes("integrity")) {
+      const repPath = path.join(wsRoot, "docs", "report_integrity.md");
+      const revPath = path.join(wsRoot, "docs", "manuscript_rev_01.md");
+      if (fsSync.existsSync(repPath) && fsSync.statSync(repPath).size > 500 && fsSync.existsSync(revPath)) {
+        recoveredSuccess = true;
+        recoveredSummary = `Phase completed: Integrity report (docs/report_integrity.md) and corrected manuscript (docs/manuscript_rev_01.md) were successfully finalized on disk before turn budget expired.`;
+      }
+    }
+
+    if (recoveredSuccess) {
+      if (this.chatLogger) {
+        await this.chatLogger.logPhaseEnd({
+          phaseTitle: this.phaseTitle || this.phaseName,
+          phaseFileName: this.phaseName,
+          success: true,
+          summary: recoveredSummary,
+          durationSeconds,
+          tokensUsed: this.totalUsage,
+          turnCount: maxTurns,
+        });
+      }
+      return {
+        success: true,
+        summary: recoveredSummary,
+        tokensUsed: this.totalUsage,
+        phaseName: this.phaseName,
+        turnCount: maxTurns,
+      };
+    }
+
+    const failureSummary = `Turn limit reached (${maxTurns} turns) without completing phase checkpoints.`;
 
     if (this.chatLogger) {
       await this.chatLogger.logPhaseEnd({

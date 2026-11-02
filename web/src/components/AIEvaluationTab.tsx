@@ -47,6 +47,7 @@ import {
   PredefinedExperimentEntry,
 } from "../types";
 import { EvaluationBarChart, EvaluationSeries, MODEL_PALETTE } from "./EvaluationBarChart";
+import { TierSuggestionModal } from "./TierSuggestionModal";
 
 /**
  * Safe JSON fetch utility that prevents unhandled HTML 404/500 parser crashes.
@@ -229,6 +230,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
   const [importSuccessMsg, setImportSuccessMsg] = useState<string | null>(null);
   const [localExperimentSpec, setLocalExperimentSpec] = useState<ExperimentSpec | null>(null);
   const [selectedReviewerIds, setSelectedReviewerIds] = useState<string[]>(loadStoredReviewers);
+  const [showTierSuggestModal, setShowTierSuggestModal] = useState<boolean>(false);
 
   const handleSetReviewerSlot = (slotIdx: number, modelId: string) => {
     setSelectedReviewerIds((prev) => {
@@ -1199,11 +1201,11 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
               <button
                 type="button"
                 className="btn btn-secondary btn-xs"
-                onClick={() => onOpenFile("docs/performance_review.md")}
+                onClick={() => onOpenFile(auditStatus?.reviewRelPath || "docs/report_performance_review.md")}
                 style={{ gap: "4px" }}
-                title="Open docs/performance_review.md in editor"
+                title={`Open ${auditStatus?.reviewRelPath || "docs/report_performance_review.md"} in editor`}
               >
-                <FileText size={11} /> View docs/performance_review.md
+                <FileText size={11} /> View {auditStatus?.reviewRelPath || "docs/report_performance_review.md"}
               </button>
             )}
 
@@ -2562,6 +2564,21 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
             </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-xs"
+                onClick={() => setShowTierSuggestModal(true)}
+                style={{
+                  gap: "5px",
+                  background: "linear-gradient(135deg, rgba(37, 99, 235, 0.15) 0%, rgba(124, 58, 237, 0.15) 100%)",
+                  borderColor: "rgba(59, 130, 246, 0.4)",
+                  color: "#93c5fd",
+                  fontWeight: 600,
+                }}
+                title="Suggest optimal 3-tier model configuration based on evaluation benchmark results"
+              >
+                <Sparkles size={11} color="#60a5fa" /> Suggest T1/T2/T3
+              </button>
               <button
                 type="button"
                 className="btn btn-secondary btn-xs"
@@ -4068,6 +4085,30 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
         {activeSubTab === "analytics" && renderAnalyticsSubTab()}
         {activeSubTab === "benchmark" && renderBenchmarkSubTab()}
       </div>
+
+      {/* 3-Tier Suggestion Modal */}
+      <TierSuggestionModal
+        isOpen={showTierSuggestModal}
+        onClose={() => setShowTierSuggestModal(false)}
+        onApplyConfig={async (cfg) => {
+          try {
+            await fetchApiJson("/api/config", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                multiModelEnabled: true,
+                tierUtility: cfg.tierUtility,
+                tierToolRunner: cfg.tierToolRunner,
+                tierReasoner: cfg.tierReasoner,
+              }),
+            });
+            setModelActionFeedback("✓ Applied optimal 3-Tier Multi-LLM configuration!");
+            setTimeout(() => setModelActionFeedback(null), 4000);
+          } catch (e: any) {
+            setErrorMsg(`Failed to apply config: ${e.message}`);
+          }
+        }}
+      />
     </div>
   );
 };

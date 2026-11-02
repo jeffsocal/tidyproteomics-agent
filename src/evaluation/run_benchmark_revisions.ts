@@ -36,6 +36,7 @@ interface CLIOptions {
   useLLM: boolean;
   force: boolean;
   dryRun: boolean;
+  rescoreOnly: boolean;
   customReviewers?: ReviewerModelRef[];
 }
 
@@ -46,6 +47,7 @@ function parseArgs(): CLIOptions {
   let useLLM = true;
   let force = false;
   let dryRun = false;
+  let rescoreOnly = false;
   let customReviewers: ReviewerModelRef[] | undefined = undefined;
 
   for (let i = 0; i < args.length; i++) {
@@ -58,6 +60,8 @@ function parseArgs(): CLIOptions {
       force = true;
     } else if (a === "--dry-run") {
       dryRun = true;
+    } else if (a === "--rescore-only" || a === "--rescore") {
+      rescoreOnly = true;
     } else if (a.startsWith("--model=")) {
       modelFilter = a.slice("--model=".length).trim();
     } else if (a === "--model" && args[i + 1]) {
@@ -79,7 +83,7 @@ function parseArgs(): CLIOptions {
     }
   }
 
-  return { evalDir, modelFilter, useLLM, force, dryRun, customReviewers };
+  return { evalDir, modelFilter, useLLM, force, dryRun, rescoreOnly, customReviewers };
 }
 
 async function main() {
@@ -212,8 +216,10 @@ async function main() {
     const reportCritique = path.join(rDir, "docs", "report_critique.md");
     const alreadyCompleted = fsSync.existsSync(reportIntegrity) && fsSync.existsSync(reportCritique);
 
-    if (alreadyCompleted && !opts.force) {
-      console.log(`  ℹ Phase 12 & 13 reports already exist. Skipping execution. (Use --force to re-execute).`);
+    if (opts.rescoreOnly) {
+      console.log(`  ▶ Rescore-only mode: Evaluating current outputs on disk.`);
+    } else if (alreadyCompleted && !opts.force) {
+      console.log(`  ℹ Phase 12 & 13 reports already exist. Skipping execution. (Use --force to re-execute, or --rescore-only to re-evaluate).`);
       continue;
     }
 
@@ -319,31 +325,36 @@ async function main() {
       }
     }
 
-    console.log(`  ▶ Resuming pipeline from Phase 12 (Integrity)...`);
-    const startTimeMs = Date.now();
+    let elapsedSec = 0;
+    if (!opts.rescoreOnly) {
+      console.log(`  ▶ Resuming pipeline from Phase 12 (Integrity)...`);
+      const startTimeMs = Date.now();
 
-    try {
-      await orchestrator.resumePipeline("12");
-    } catch (execErr: any) {
-      console.error(`  ❌ Pipeline execution error: ${execErr.message}`);
+      try {
+        await orchestrator.resumePipeline("12");
+      } catch (execErr: any) {
+        console.error(`  ❌ Pipeline execution error: ${execErr.message}`);
+      }
+
+      elapsedSec = Math.round((Date.now() - startTimeMs) / 1000);
+
+      // Verify whether Phase 12 and 13 actually succeeded
+      const activePhases = orchestrator.getPhases();
+      const phase12 = activePhases.find((p) => p.id === "12");
+      const phase13 = activePhases.find((p) => p.id === "13");
+
+      if (phase12?.status === "failed" || phase13?.status === "failed") {
+        console.error(`  ❌ Pipeline did not complete revision phases: Phase 12=${phase12?.status}, Phase 13=${phase13?.status}`);
+        if (phase12?.error) console.error(`     Phase 12 error: ${phase12.error}`);
+        if (phase13?.error) console.error(`     Phase 13 error: ${phase13.error}`);
+        console.log(`  Skipping rescoring for incomplete run ${runId}.`);
+        continue;
+      }
+
+      console.log(`  ✓ Phase 12 & 13 execution finished in ${elapsedSec}s.`);
+    } else {
+      console.log(`  ✓ Skipping pipeline execution (evaluating existing artifacts on disk).`);
     }
-
-    const elapsedSec = Math.round((Date.now() - startTimeMs) / 1000);
-
-    // Verify whether Phase 12 and 13 actually succeeded
-    const activePhases = orchestrator.getPhases();
-    const phase12 = activePhases.find((p) => p.id === "12");
-    const phase13 = activePhases.find((p) => p.id === "13");
-
-    if (phase12?.status === "failed" || phase13?.status === "failed") {
-      console.error(`  ❌ Pipeline did not complete revision phases: Phase 12=${phase12?.status}, Phase 13=${phase13?.status}`);
-      if (phase12?.error) console.error(`     Phase 12 error: ${phase12.error}`);
-      if (phase13?.error) console.error(`     Phase 13 error: ${phase13.error}`);
-      console.log(`  Skipping rescoring for incomplete run ${runId}.`);
-      continue;
-    }
-
-    console.log(`  ✓ Phase 12 & 13 execution finished in ${elapsedSec}s.`);
 
     // Step 4: Ensure canonical manuscript synchronization
     const rev02Path = path.join(rDir, "docs", "manuscript_rev_02.md");

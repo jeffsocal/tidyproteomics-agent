@@ -201,12 +201,12 @@ export function extractClaims(manuscript: string, tables: RunTables): Manuscript
       const window = line.slice(m.index, proseFc.lastIndex);
       const syms = (window.match(/\b[A-Z][A-Z0-9-]{1,11}\b/g) || []).filter((s) => tables.bySymbol.has(s));
       const sym = syms.length ? syms[syms.length - 1] : null;
-      if (sym) pushClaim(sym, m[2], line.slice(proseFc.lastIndex, proseFc.lastIndex + 60));
+      if (sym) pushClaim(sym, m[2], line.slice(proseFc.lastIndex, Math.min(line.length, proseFc.lastIndex + 150)));
     }
     signed.lastIndex = 0;
     while ((m = signed.exec(line))) {
       if (!tables.bySymbol.has(m[1])) continue;
-      pushClaim(m[1], m[2], line.slice(signed.lastIndex, signed.lastIndex + 60));
+      pushClaim(m[1], m[2], line.slice(signed.lastIndex, Math.min(line.length, signed.lastIndex + 150)));
     }
   });
 
@@ -303,8 +303,8 @@ export function verifyNumericFidelity(claims: ManuscriptClaim[], tables: RunTabl
   };
 }
 
-const UP_WORDS = /(increas|elevat|up-?regulat|higher|accumulat|\brose\b|\brise[sn]?\b|induc|gain|enrich(?:ed)? in)/i;
-const DOWN_WORDS = /(decreas|reduc|down-?regulat|lower|deplet|\bfell\b|\bfall[s]?\b|loss|declin|suppress|repress)/i;
+const UP_WORDS = /\b(increas(?:ed?|ing)?|elevat(?:ed?|ing)?|up-?regulat(?:ed?|ing)?|higher|accumulat(?:ed?|ing)?|rose|ris(?:es?|ing)|induc(?:ed?|ing)?|gain(?:ed)?|enrich(?:ed)? in|\bup\b)\b/i;
+const DOWN_WORDS = /\b(decreas(?:ed?|ing)?|reduc(?:ed?|ing)?|down-?regulat(?:ed?|ing)?|lower(?:ed)?|deplet(?:ed?|ing)?|fell|fall(?:en|ing|s)?|declin(?:ed?|ing)?|suppress(?:ed?|ing)?|repress(?:ed?|ing)?|\bdown\b)\b/i;
 
 export function verifyDirectionConsistency(
   manuscript: string,
@@ -329,8 +329,14 @@ export function verifyDirectionConsistency(
       if (tables.bySymbol.has(m[1])) hits.push({ sym: m[1], start: m.index, end: re.lastIndex });
     }
     hits.forEach((h, k) => {
-      const stop = Math.min(h.end + 60, k + 1 < hits.length ? hits[k + 1].start : line.length);
-      const window = line.slice(h.end, stop);
+      const rawSlice = line.slice(h.end, Math.min(h.end + 80, k + 1 < hits.length ? hits[k + 1].start : line.length));
+      // Ignore future/prospective perturbations (e.g. "NFE2L1 knockdown to test...")
+      if (/^\s*(?:knockdown|knockout|depletion|siRNA|shRNA|CRISPR|inhibition|treatment)\b/i.test(rawSlice)) return;
+      // Truncate at clause or list boundary
+      const clauseEndMatch = rawSlice.match(/[),;.]\s*(?:and|but|while|whereas|although|however)\b|[;.]/i);
+      let window = clauseEndMatch ? rawSlice.slice(0, clauseEndMatch.index) : rawSlice;
+      // Strip hyphenated condition adjectives (e.g. "p97-depleted cells" does not mean the subject was depleted)
+      window = window.replace(/\b[A-Za-z0-9-]+-(?:depleted|treated|deficient|knockout)\b/gi, "");
       // Ignore enumerations ("PSMC1, PSMC4 and ...") which have no own predicate
       if (/^[\s,;:()]*$/.test(window)) return;
       const up = UP_WORDS.test(window);

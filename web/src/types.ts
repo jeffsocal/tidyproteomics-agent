@@ -566,4 +566,75 @@ export interface ModelCatalogEntry {
   isCustom?: boolean;
 }
 
+export interface TierRecommendation {
+  role: "utility" | "toolRunner" | "reasoner";
+  tierName: "Tier 1: Fast Utility & Ingestion" | "Tier 2: Tool Runner & Code Orchestrator" | "Tier 3: Frontier Scientific Reasoner";
+  phases: string[];
+  recommendedModel: string;
+  provider: string;
+  score: number;
+  estimatedCostUsd: number;
+  rationale: string;
+  metrics: {
+    completionRate: number;
+    avgTurns: number;
+    tokensUsed: number;
+    fidelityOrSuccessRate: number;
+    directionErrors?: number;
+  };
+}
+
+export interface TierOptimizationProfile {
+  id: "quality" | "balanced" | "budget";
+  title: string;
+  badge: string;
+  description: string;
+  tierUtility: { model: string; provider?: string };
+  tierToolRunner: { model: string; provider?: string };
+  tierReasoner: { model: string; provider?: string };
+  projectedBenchmarkScore: number;
+  projectedCostUsd: number;
+  projectedDurationMinutes: number;
+  costSavingsPercentVsFrontier: number;
+  recommendations: {
+    utility: TierRecommendation;
+    toolRunner: TierRecommendation;
+    reasoner: TierRecommendation;
+  };
+}
+
+export interface TierSuggestionResult {
+  ok: boolean;
+  timestamp: string;
+  profiles: {
+    quality: TierOptimizationProfile;
+    balanced: TierOptimizationProfile;
+    budget: TierOptimizationProfile;
+  };
+  modelRankings: {
+    tier1: Array<{ model: string; score: number; costUsd: number; note: string }>;
+    tier2: Array<{ model: string; score: number; costUsd: number; note: string }>;
+    tier3: Array<{ model: string; score: number; costUsd: number; note: string }>;
+  };
+  totalRunsAnalyzed: number;
+  pricingSource: "openrouter_live" | "openrouter_cache";
+}
+
+export interface ExplainTierRequest {
+  profileId: "quality" | "balanced" | "budget";
+  tierUtilityModel?: string;
+  tierToolRunnerModel?: string;
+  tierReasonerModel?: string;
+}
+
+export interface ExplainTierResponse {
+  ok: boolean;
+  explanation: string;
+  profileId: string;
+  generatedBy: string;
+  tokensUsed?: number;
+  error?: string;
+}
+
+
 

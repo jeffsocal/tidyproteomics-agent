@@ -326,7 +326,7 @@ export const PerformanceReviewModal: React.FC<PerformanceReviewModalProps> = ({
                   type="button"
                   className="btn btn-secondary btn-xs"
                   onClick={() => {
-                    onOpenFile("docs/performance_review.md");
+                    onOpenFile(status?.reviewRelPath || "docs/report_performance_review.md");
                     onClose();
                   }}
                   title="Open in center markdown viewer"

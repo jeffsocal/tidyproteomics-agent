@@ -35,23 +35,41 @@ export class PerformanceReviewService {
    * Checks whether performance review exists and how many phase logs are present.
    */
   public async getReviewStatus(workspaceRoot: string): Promise<PerformanceReviewStatus> {
-    const docsPath = path.join(workspaceRoot, "docs", "performance_review.md");
-    const logsPath = path.join(workspaceRoot, "logs", "performance_review.md");
-    const relPath = "docs/performance_review.md";
+    const reportDocsPath = path.join(workspaceRoot, "docs", "report_performance_review.md");
+    const reportLogsPath = path.join(workspaceRoot, "logs", "report_performance_review.md");
+    const legacyDocsPath = path.join(workspaceRoot, "docs", "performance_review.md");
+    const legacyLogsPath = path.join(workspaceRoot, "logs", "performance_review.md");
+    let relPath = "docs/report_performance_review.md";
 
     let hasReview = false;
     let lastGenerated: string | undefined = undefined;
 
-    if (fsSync.existsSync(docsPath)) {
+    if (fsSync.existsSync(reportDocsPath)) {
       hasReview = true;
+      relPath = "docs/report_performance_review.md";
       try {
-        const stat = await fs.stat(docsPath);
+        const stat = await fs.stat(reportDocsPath);
         lastGenerated = stat.mtime.toISOString();
       } catch {}
-    } else if (fsSync.existsSync(logsPath)) {
+    } else if (fsSync.existsSync(reportLogsPath)) {
       hasReview = true;
+      relPath = "logs/report_performance_review.md";
       try {
-        const stat = await fs.stat(logsPath);
+        const stat = await fs.stat(reportLogsPath);
+        lastGenerated = stat.mtime.toISOString();
+      } catch {}
+    } else if (fsSync.existsSync(legacyDocsPath)) {
+      hasReview = true;
+      relPath = "docs/performance_review.md";
+      try {
+        const stat = await fs.stat(legacyDocsPath);
+        lastGenerated = stat.mtime.toISOString();
+      } catch {}
+    } else if (fsSync.existsSync(legacyLogsPath)) {
+      hasReview = true;
+      relPath = "logs/performance_review.md";
+      try {
+        const stat = await fs.stat(legacyLogsPath);
         lastGenerated = stat.mtime.toISOString();
       } catch {}
     }
@@ -84,13 +102,21 @@ export class PerformanceReviewService {
    * Reads existing performance review content if available.
    */
   public async getExistingReview(workspaceRoot: string): Promise<string | null> {
-    const docsPath = path.join(workspaceRoot, "docs", "performance_review.md");
-    if (fsSync.existsSync(docsPath)) {
-      return await fs.readFile(docsPath, "utf-8");
+    const reportDocsPath = path.join(workspaceRoot, "docs", "report_performance_review.md");
+    if (fsSync.existsSync(reportDocsPath)) {
+      return await fs.readFile(reportDocsPath, "utf-8");
     }
-    const logsPath = path.join(workspaceRoot, "logs", "performance_review.md");
-    if (fsSync.existsSync(logsPath)) {
-      return await fs.readFile(logsPath, "utf-8");
+    const reportLogsPath = path.join(workspaceRoot, "logs", "report_performance_review.md");
+    if (fsSync.existsSync(reportLogsPath)) {
+      return await fs.readFile(reportLogsPath, "utf-8");
+    }
+    const legacyDocsPath = path.join(workspaceRoot, "docs", "performance_review.md");
+    if (fsSync.existsSync(legacyDocsPath)) {
+      return await fs.readFile(legacyDocsPath, "utf-8");
+    }
+    const legacyLogsPath = path.join(workspaceRoot, "logs", "performance_review.md");
+    if (fsSync.existsSync(legacyLogsPath)) {
+      return await fs.readFile(legacyLogsPath, "utf-8");
     }
     return null;
   }
@@ -319,7 +345,7 @@ export class PerformanceReviewService {
       return {
         ok: false,
         reviewMarkdown: "",
-        filePath: "docs/performance_review.md",
+        filePath: "docs/report_performance_review.md",
         lastGenerated: new Date().toISOString(),
         error: "No execution logs or pipeline traces found in this workspace.",
       };
@@ -428,15 +454,15 @@ ${logsDigest}`;
 
       const reviewMarkdown = response.content || "# Autonomous Agent Performance Review\n\nNo content returned.";
 
-      // Write to docs/performance_review.md
+      // Write to docs/report_performance_review.md
       const docsDir = path.join(workspaceRoot, "docs");
-      const docsTarget = path.join(docsDir, "performance_review.md");
-      const logsTarget = path.join(workspaceRoot, "logs", "performance_review.md");
+      const docsTarget = path.join(docsDir, "report_performance_review.md");
+      const logsTarget = path.join(workspaceRoot, "logs", "report_performance_review.md");
 
       await fs.mkdir(docsDir, { recursive: true });
       await fs.writeFile(docsTarget, reviewMarkdown, "utf-8");
 
-      // Also mirror in logs/performance_review.md
+      // Also mirror in logs/report_performance_review.md
       const logsDir = path.join(workspaceRoot, "logs");
       await fs.mkdir(logsDir, { recursive: true });
       await fs.writeFile(logsTarget, reviewMarkdown, "utf-8");
@@ -444,7 +470,7 @@ ${logsDigest}`;
       return {
         ok: true,
         reviewMarkdown,
-        filePath: "docs/performance_review.md",
+        filePath: "docs/report_performance_review.md",
         lastGenerated: new Date().toISOString(),
         model: roleConfig.model,
         role: "reasoner",
@@ -455,7 +481,7 @@ ${logsDigest}`;
       return {
         ok: false,
         reviewMarkdown: "",
-        filePath: "docs/performance_review.md",
+        filePath: "docs/report_performance_review.md",
         lastGenerated: new Date().toISOString(),
         error: err.message || "Failed to generate performance review",
       };

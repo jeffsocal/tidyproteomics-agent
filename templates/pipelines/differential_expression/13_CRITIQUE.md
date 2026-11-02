@@ -55,10 +55,9 @@ To ensure seamless version provenance across the pipeline:
    - Refine **Limitations** to explicitly address study-specific constraints (e.g. $n=3$ replicates, whole-cell lysate vs. subcellular fractions, steady-state vs. dynamic flux).
    - Strengthen **Translational Recommendations** by providing specific experimental validation schemes (e.g., cycloheximide chase assays for protein stability, ubiquitination immunoprecipitation, or CRISPR target knockout).
    - Ensure the **Abstract** and **Conclusions** align with these strengthened qualifications.
-3. Re-verify that no new numeric or direction errors were introduced:
-   ```bash
-   npm run verify:integrity -- .
-   ```
+3. Apply targeted refinements directly via `replace_file_content`. Do NOT execute python scripts or temporary shell wrappers to count words or format text.
+4. Re-verify that no new numeric or direction errors were introduced:
+   - Call `check_integrity(manuscriptPath = "docs/manuscript_rev_02.md")` to confirm 0 direction errors or regressions.
 
 #### **Turn 3: Formal Peer-Review Report Generation (`docs/report_critique.md`)**
 1. Author `docs/report_critique.md` using `write_file` structured as follows:
