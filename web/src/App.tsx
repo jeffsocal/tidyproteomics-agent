@@ -337,6 +337,7 @@ export const App: React.FC = () => {
     if (data.ok) {
       setConfig(data.config);
       if (data.mcpStatus) setMcpStatus(data.mcpStatus);
+      if (data.state) setPipelineState(data.state);
     }
   };
 

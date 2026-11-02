@@ -226,6 +226,8 @@ export interface ToolDefinition {
       description: string;
       enum?: string[];
       items?: any;
+      properties?: Record<string, any>;
+      required?: string[];
     }>;
     required: string[];
   };

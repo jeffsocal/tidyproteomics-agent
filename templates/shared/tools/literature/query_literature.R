@@ -34,7 +34,7 @@ fail <- function(msg) {
 
 parse_list <- function(val) {
   if (is.null(val) || !nzchar(trimws(val))) return(character(0))
-  trimws(strsplit(val, "[,;\\s]+")[[1]])
+  trimws(strsplit(val, "[,;[:space:]]+")[[1]])
 }
 
 open_db_readonly <- function(db_path, max_attempts = 5, base_delay_ms = 250) {

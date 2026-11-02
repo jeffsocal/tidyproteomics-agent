@@ -8,8 +8,10 @@ ehthumbs.db
 Thumbs.db
 
 # Project-specific ignores
-testrun
-./testrun
+ai_benchmarking
+./ai_benchmarking
+ai_testrun
+./ai_testrun
 TODO.md
 
 # Dependencies

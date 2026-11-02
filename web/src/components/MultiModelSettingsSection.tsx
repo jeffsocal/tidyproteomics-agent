@@ -28,7 +28,7 @@ export const STANDARD_PHASES: PhaseDefinitionInfo[] = [
   { id: "03", name: "03_IMPUTE", description: "Missing Value Imputation Strategy", defaultTier: "utility" },
   { id: "04", name: "04_EXPRESSION", description: "Differential Expression Analytics & Linear Modeling", defaultTier: "toolRunner" },
   { id: "05", name: "05_ENRICHMENT", description: "Functional Pathway Enrichment Analysis", defaultTier: "toolRunner" },
-  { id: "06", name: "06_OBSERVATIONS", description: "Biological Observations & Mechanistic Synthesis", defaultTier: "reasoner" },
+  { id: "06", name: "06_OBSERVATIONS", description: "Data-Derived Observations & Candidate Extraction", defaultTier: "toolRunner" },
   { id: "07", name: "07_KNOWLEDGE", description: "Biomedical Knowledge Integration & Literature Queries", defaultTier: "reasoner" },
   { id: "08", name: "08_LITERATURE", description: "Scientific Literature Retrieval", defaultTier: "toolRunner" },
   { id: "09", name: "09_WEBSEARCH", description: "Targeted Web Search & Ontology Cross-Check", defaultTier: "toolRunner" },

@@ -245,8 +245,10 @@ Target execution budget: **2–3 turns max**.
    lit_candidates <- character(0)
    if (has_lit) {
      lit_lines <- readLines("docs/literature_candidates.md")
-     cand_matches <- regmatches(lit_lines, gregexpr("(?<=\\|\\s*)[A-Za-z0-9_-]+(?=\\s*\\|)", lit_lines, perl = TRUE))
-     cands_flat <- unique(unlist(cand_matches))
+     pipe_lines <- lit_lines[grepl("\\|", lit_lines)]
+     cells <- unlist(lapply(pipe_lines, function(l) strsplit(l, "|", fixed = TRUE)[[1]]))
+     cells <- trimws(cells)
+     cands_flat <- unique(cells[grepl("^[A-Za-z0-9_.-]+$", cells)])
      lit_candidates <- intersect(cands_flat, expr$gene_name)
    }
 
@@ -397,6 +399,15 @@ Target execution budget: **2–3 turns max**.
      if (!is.null(exclude)) x <- x[!grepl(exclude, basename(x), ignore.case = TRUE)]
      if (length(x)) x[1] else NA_character_
    }
+   # Contrast-Specific Resolver: guarantees primary contrast figures are prioritized
+   contrast_path <- function(pattern, c_str, exclude = NULL) {
+     c_clean <- gsub("[^A-Za-z0-9]", "[-_]", c_str)
+     patt <- paste0(pattern, ".*", c_clean)
+     x <- all_png[grepl(patt, basename(all_png), ignore.case = TRUE)]
+     if (!is.null(exclude)) x <- x[!grepl(exclude, basename(x), ignore.case = TRUE)]
+     if (length(x)) return(x[1])
+     existing_path(pattern, exclude)
+   }
    total_quant <- get_unique_variables(tp_data, id_col, format = "vector")
    qn <- get_quant_names(tp_data)
    active_sel <- if (is.data.frame(qn) && "selected" %in% names(qn)) qn$quant_name[qn$selected] else character(0)
@@ -534,9 +545,9 @@ Target execution budget: **2–3 turns max**.
        venn = existing_path("venn|euler"),
        variation_cv = existing_path("variation"),
        pca = existing_path("pca"),
-       heatmap = existing_path("heatmap", exclude = "module|discussion"),
-       volcano = existing_path("volcano"),
-       enrichment = existing_path("enrichment")
+       heatmap = if (!is.na(existing_path("heatmap", exclude = "module|discussion"))) existing_path("heatmap", exclude = "module|discussion") else discussion_figures[["module"]],
+       volcano = contrast_path("volcano", contrast_str),
+       enrichment = contrast_path("enrichment", contrast_str)
      ),
      discussion_figures = discussion_figures
    )

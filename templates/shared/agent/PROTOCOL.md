@@ -55,8 +55,12 @@ $$\text{Read Active Phase Directive} \longrightarrow \text{Execute Scoped Tools 
 3. **Exploratory Scaffolding vs. Pre-Flight HITL Gating (`fail_phase`)**:
    - **Discovery & Scaffolding Tasks Never Halt**: When an exploratory/inspection phase discovers ungrouped sample names, technical batch suffixes, or potential batch confounding, it must scaffold Section 3 of `docs/experiment.md` with initial `FALSE` confirmation defaults and complete normally via `complete_phase`. Similarly, exploratory header audits (`tpa_input_audit`) are advisory diagnostics; if `tpa_load()` successfully imports the dataset with quantified entities, exploratory inspection must never trigger `fail_phase`.
    - **Downstream Pre-Flight HITL Gates**: When an active phase requires human-in-the-loop confirmation of Section 3 settings before executing downstream statistical transformations:
-     - **Autonomous / Headless Bypass**: If `docs/experiment.md` specifies `- **Autonomous Mode**: TRUE` or `- **Auto-Confirm**: TRUE`, automatically update unconfirmed Section 3 checks to `TRUE` via `replace_file_content` and proceed without calling `fail_phase`.
+     - **Autonomous / Headless Bypass**: If `docs/experiment.md` specifies `- **Autonomous Mode**: TRUE` or `- **Auto-Confirm**: TRUE`, or when running in an automated batch pipeline, do NOT call `fail_phase`. Ensure Section 3 subtasks (3.A through 3.E) are cleanly populated with standard analytical defaults, automatically update unconfirmed checks to `TRUE` via a single `replace_file_content` call, and proceed immediately.
      - **Interactive Gate Halt**: If required confirmation flags are `FALSE` (and not in Autonomous Mode), ensure Section 3 is cleanly populated and immediately invoke `fail_phase(phaseName = "<ACTIVE_PHASE>", reason = "<REASON>", actionableInsights = "<UI_ACTION_INSTRUCTIONS>")` without looping or repeating commands.
+4. **Strict Ban on Speculative `fail_phase` Invocations**:
+   - `fail_phase` is strictly reserved for unrecoverable infrastructure crashes, missing prerequisite input files, or fatal tool error strings that persist after one remediation attempt.
+   - **Surprising biology, modest CV reduction across normalization candidates, empty pathway enrichments, or condition-exclusive dropouts are empirical data results, NEVER pipeline failures.**
+   - Calling `fail_phase` without quoting a hard tool error message is strictly prohibited. If unexpected data distributions occur, document them objectively, adapt according to the phase directive's fallback path, and proceed to `complete_phase`.
 
 ---
 

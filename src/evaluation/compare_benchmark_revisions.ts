@@ -67,7 +67,7 @@ async function main() {
 
   const entries = fsSync.readdirSync(absEvalDir, { withFileTypes: true });
   const runDirs = entries
-    .filter((e) => e.isDirectory() && /^\d+_/.test(e.name) && !e.name.startsWith("00_benchmark"))
+    .filter((e) => e.isDirectory() && /^\d+_/.test(e.name))
     .map((e) => path.join(absEvalDir, e.name))
     .sort();
 

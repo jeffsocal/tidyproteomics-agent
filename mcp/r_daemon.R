@@ -493,6 +493,65 @@ handle_request <- function(req) {
           res_output <- get_annotation_terms(data, format = "vector")
         } else if (what == "accountings") {
           res_output <- capture.output(print(get_accountings(data)))
+        } else if (what %in% c("accounting", "protein_accounting", "feature_accounting")) {
+          id_col <- if (!is.null(data$identifier)) data$identifier[1] else "protein"
+          analyte_name <- if (!is.null(data$analyte)) data$analyte else "proteins"
+          all_features <- get_unique_variables(data, id_col, format = "vector")
+          total_features <- length(all_features)
+
+          # Quantifiable features (with at least one non-missing abundance across samples)
+          qn <- get_quant_names(data)
+          active_sel <- if (is.data.frame(qn) && "selected" %in% names(qn)) qn$quant_name[qn$selected] else character(0)
+          active_assay <- if (length(active_sel) > 0) active_sel[1] else tail(get_quant_names(data, format = "vector"), 1)
+          quant_col <- paste0("abundance_", active_assay)
+
+          df_long <- tryCatch(as.data.frame(data, shape = "long"), error = function(e) data.frame())
+          zero_quant_n <- 0
+          quantifiable_n <- total_features
+          if (nrow(df_long) > 0 && quant_col %in% names(df_long) && id_col %in% names(df_long)) {
+            obs_per_f <- tapply(!is.na(df_long[[quant_col]]), df_long[[id_col]], sum)
+            zero_quant_n <- sum(obs_per_f == 0, na.rm = TRUE)
+            quantifiable_n <- sum(obs_per_f > 0, na.rm = TRUE)
+          }
+
+          acc_tbl <- tibble::tibble(
+            accounting_metric = c(
+              paste0("Total retained ", analyte_name, " in active object"),
+              paste0("Quantifiable ", analyte_name, " (>= 1 non-zero observation)"),
+              paste0("Zero-quantification background (0 non-missing values)"),
+              "Active quantification assay",
+              "Number of biological samples",
+              "Number of evaluated comparisons/analyses"
+            ),
+            value = c(
+              as.character(total_features),
+              as.character(quantifiable_n),
+              as.character(zero_quant_n),
+              as.character(active_assay),
+              as.character(length(get_sample_names(data, format = "vector"))),
+              as.character(nrow(get_analyses(data)))
+            )
+          )
+
+          # If comparisons exist, add modeled vs unmodeled breakdown
+          comps <- names(data$analysis)
+          if (length(comps) > 0) {
+            for (cn in comps) {
+              exp_df <- data$analysis[[cn]]$expression
+              if (!is.null(exp_df) && nrow(exp_df) > 0) {
+                modeled_cnt <- nrow(exp_df)
+                unmod_cnt <- total_features - modeled_cnt
+                acc_tbl <- dplyr::bind_rows(acc_tbl, tibble::tibble(
+                  accounting_metric = c(
+                    paste0("Comparison '", cn, "' modeled ", analyte_name),
+                    paste0("Comparison '", cn, "' unmodeled (condition-exclusive + zero-quant)")
+                  ),
+                  value = c(as.character(modeled_cnt), as.character(unmod_cnt))
+                ))
+              }
+            }
+          }
+          res_output <- capture.output(print(acc_tbl, n = 30))
         } else if (what == "variables") {
           res_output <- get_variables(data)
         } else if (what == "unique_variables") {
@@ -2177,12 +2236,13 @@ handle_request <- function(req) {
                 Protein = .data[[id_col]],
                 Description = if ("description" %in% names(df_cand)) substr(description, 1, 45) else "-",
                 `log2FC` = sprintf("%.4f", log2_foldchange),
+                `p-value` = fmt_pvalue(p_value),
                 `q-value` = fmt_pvalue(adj_p_value),
                 `Imputation Risk` = imputation_bias,
                 `Candidate Reliability` = candidate_reliability,
                 `Δ imputation` = ifelse(is.na(imputation_delta), "NA", sprintf("%.3f", imputation_delta))
               ) %>%
-              dplyr::select(Rank, Identifier, Protein, Description, `log2FC`, `q-value`, `Imputation Risk`, `Candidate Reliability`, `Δ imputation`)
+              dplyr::select(Rank, Identifier, Protein, Description, `log2FC`, `p-value`, `q-value`, `Imputation Risk`, `Candidate Reliability`, `Δ imputation`)
           }
 
           # Top 10 Upregulated
@@ -2209,12 +2269,13 @@ handle_request <- function(req) {
                 Identifier = gene_name,
                 Protein = .data[[id_col]],
                 `log2FC` = sprintf("%.4f", log2_foldchange),
+                `p-value` = fmt_pvalue(p_value),
                 `q-value` = fmt_pvalue(adj_p_value),
                 `Pi-Score` = sprintf("%.2f", pi_score),
                 `Imputation Risk` = imputation_bias,
                 `Candidate Reliability` = candidate_reliability
               ) %>%
-              dplyr::select(Rank, Identifier, Protein, `log2FC`, `q-value`, `Pi-Score`, `Imputation Risk`, `Candidate Reliability`)
+              dplyr::select(Rank, Identifier, Protein, `log2FC`, `p-value`, `q-value`, `Pi-Score`, `Imputation Risk`, `Candidate Reliability`)
             emit_tbl(top_pi_disp)
           } else {
             emit("_No balanced candidates available._\n")
@@ -2334,7 +2395,66 @@ handle_request <- function(req) {
           emit(sprintf("- **Pan-Contrast Concordant Upregulated (%d)**: %s", length(shared_up), if (length(shared_up) > 0) paste(head(shared_up, 10), collapse = ", ") else "None"))
           emit(sprintf("- **Pan-Contrast Concordant Downregulated (%d)**: %s", length(shared_down), if (length(shared_down) > 0) paste(head(shared_down, 10), collapse = ", ") else "None"))
           emit(sprintf("- **Discordantly Regulated Across Contrasts (%d)**: %s\n", length(discordant), if (length(discordant) > 0) paste(head(discordant, 10), collapse = ", ") else "None"))
+
+          if (length(discordant) > 0) {
+            emit("#### Discordant Feature Breakdown Across Contrasts", "")
+            disc_records <- lapply(discordant, function(g) {
+              row_info <- list(Gene = g)
+              for (cn in names(contrast_sig_sets)) {
+                dir_str <- if (g %in% contrast_sig_sets[[cn]]$up_genes) "UP" else if (g %in% contrast_sig_sets[[cn]]$down_genes) "DOWN" else "FLAT"
+                row_info[[cn]] <- dir_str
+              }
+              tibble::as_tibble(row_info)
+            })
+            emit_tbl(dplyr::bind_rows(disc_records))
+          }
         }
+
+        # Export authoritative feature accounting table
+        acc_file <- file.path(STATE$output_dir, "data", "table_feature_accounting.tsv")
+        tryCatch({
+          df_long <- tryCatch(as.data.frame(data, shape = "long"), error = function(e) data.frame())
+          zero_quant_n <- 0
+          quantifiable_n <- length(features)
+          quant_col_name <- paste0("abundance_", source_norm)
+          if (nrow(df_long) > 0 && quant_col_name %in% names(df_long) && id_col %in% names(df_long)) {
+            obs_per_f <- tapply(!is.na(df_long[[quant_col_name]]), df_long[[id_col]], sum)
+            zero_quant_n <- sum(obs_per_f == 0, na.rm = TRUE)
+            quantifiable_n <- sum(obs_per_f > 0, na.rm = TRUE)
+          }
+
+          master_acc <- tibble::tibble(
+            metric = c(
+              paste0("total_features_retained_", analyte_name),
+              paste0("quantifiable_features_", analyte_name),
+              "zero_quantifiable_background",
+              "active_normalization_assay",
+              "sample_count"
+            ),
+            value = c(
+              as.character(length(features)),
+              as.character(quantifiable_n),
+              as.character(zero_quant_n),
+              as.character(source_norm),
+              as.character(length(samples))
+            )
+          )
+
+          for (cn in comp_names) {
+            exp_df <- data$analysis[[cn]]$expression
+            if (!is.null(exp_df) && nrow(exp_df) > 0) {
+              m_cnt <- nrow(exp_df)
+              unm_cnt <- length(features) - m_cnt
+              master_acc <- dplyr::bind_rows(master_acc, tibble::tibble(
+                metric = c(paste0("contrast_", gsub("[^A-Za-z0-9_]", "_", cn), "_modeled"),
+                           paste0("contrast_", gsub("[^A-Za-z0-9_]", "_", cn), "_unmodeled")),
+                value = c(as.character(m_cnt), as.character(unm_cnt))
+              ))
+            }
+          }
+          dir.create(dirname(acc_file), recursive = TRUE, showWarnings = FALSE)
+          readr::write_tsv(master_acc, acc_file)
+        }, error = function(e) NULL)
 
         # Write docs/observations_summary.md
         writeLines(out_md, con = summary_path)

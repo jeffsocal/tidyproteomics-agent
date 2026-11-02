@@ -647,7 +647,25 @@ export class ProviderClient {
       },
     }));
 
-    const formattedMessages: any[] = [{ role: "system", content: params.system }];
+    let model = this.config.model || "anthropic/claude-3.7-sonnet";
+    if (model === "anthropic/claude-3.5-sonnet") {
+      model = "anthropic/claude-3.5-sonnet-20241022";
+    }
+
+    const systemMessage = model.startsWith("anthropic/")
+      ? {
+          role: "system",
+          content: [
+            {
+              type: "text",
+              text: params.system,
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+        }
+      : { role: "system", content: params.system };
+
+    const formattedMessages: any[] = [systemMessage];
     for (const msg of params.messages) {
       if (msg.role === "tool") {
         formattedMessages.push({
@@ -677,10 +695,6 @@ export class ProviderClient {
     }
 
     const maxTokens = this.config.maxTokens || 32768;
-    let model = this.config.model || "anthropic/claude-3.7-sonnet";
-    if (model === "anthropic/claude-3.5-sonnet") {
-      model = "anthropic/claude-3.5-sonnet-20241022";
-    }
     const body: Record<string, any> = {
       model,
       messages: formattedMessages,

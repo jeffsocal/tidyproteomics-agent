@@ -89,12 +89,12 @@ If no active DuckDB literature database is configured (e.g. `ACTIVE LITERATURE D
 
 ---
 
-#### 3. Interactive Data Queries via `tidyproteomics` (Pursuing Literature Hypotheses)
-If the literature database assertions point to additional protein families, isoform differences, or pathway branches:
-- Write and execute `code/08_literature.R` (output is automatically captured to `logs/08_literature/console.log`):
+#### 3. Authoring Reproducible Execution Script (`code/08_literature.R`)
+- **Mandatory Reproducibility Requirement**: Whenever the literature database is active or reverse interrogation is performed, you MUST author and execute `code/08_literature.R` (output is automatically captured to `logs/08_literature/console.log`):
   ```bash
   if [ -f tools/lint_tidyproteomics.R ]; then Rscript tools/lint_tidyproteomics.R code/08_literature.R && Rscript code/08_literature.R; else Rscript code/08_literature.R; fi
   ```
+- **Prohibition on Temporary Scripts**: NEVER run patched scripts from `/tmp` or execute one-off bash commands without persisting them in `code/08_literature.R`.
 - Document any **new** data-derived findings in `docs/literature.md`.
 
 ---

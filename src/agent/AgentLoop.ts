@@ -502,8 +502,9 @@ DO NOT repeat the identical failing command without structural fixes:
           }
 
           if (tc.name === "complete_phase") {
+            const proposedSummary = String(tc.args?.summary || response.content || "");
             // Verify mandatory deliverables before allowing phase completion
-            const gateErrors = await this.verifyPhaseGateDeliverables(this.phaseName);
+            const gateErrors = await this.verifyPhaseGateDeliverables(this.phaseName, proposedSummary);
             if (gateErrors.length > 0) {
               const gateWarning = `❌ [CHECKPOINT GATE ERROR]: Cannot complete phase '${this.phaseName}'. Mandatory deliverables are missing or 0-byte:\n${gateErrors.map((e) => `• ${e}`).join("\n")}\nPlease execute the required tools to generate all required deliverables before invoking complete_phase.`;
               this.messages.push({
@@ -757,7 +758,7 @@ DO NOT repeat the identical failing command without structural fixes:
     return false;
   }
 
-  private async verifyPhaseGateDeliverables(phaseName: string): Promise<string[]> {
+  private async verifyPhaseGateDeliverables(phaseName: string, summary?: string): Promise<string[]> {
     const root = this.tools.getWorkspaceRoot() || process.cwd();
     if (!root) return [];
 
@@ -811,7 +812,28 @@ DO NOT repeat the identical failing command without structural fixes:
       const hasRds = await checkFile("data/tidyproteomics_data.rds");
       const hasEnrich = (await checkFile("data/table_*enrichment_*.tsv")) || (await checkFile("data/table_*enrichment_*.csv"));
       if (!hasRds) missing.push("data/tidyproteomics_data.rds");
-      if (!hasEnrich) missing.push("data/table_*enrichment_*.tsv or .csv");
+
+      // Checkpoint 5.4: enrichment tables are required ONLY if functional terms were analyzed.
+      // If formal biological ontology terms are absent, the directive specifies bypassing enrichment
+      // and preserving data for Phase 6 observations and Phase 7 de novo functional module testing.
+      let isBypassed = Boolean(summary && /bypass|annotation-free|no formal ontology|absence of formal|de novo/i.test(summary));
+      if (!isBypassed) {
+        try {
+          const notesPath = path.resolve(root, "docs/notes.md");
+          if (fsSync.existsSync(notesPath)) {
+            const notesContent = await fs.readFile(notesPath, "utf-8");
+            if (/05_enrichment|phase\s*5/i.test(notesContent) && /bypass|annotation-free|absence of formal/i.test(notesContent)) {
+              isBypassed = true;
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      if (!hasEnrich && !isBypassed) {
+        missing.push("data/table_*enrichment_*.tsv or .csv (or recorded bypass summary matching Checkpoint 5.4)");
+      }
     } else if (normPhase.includes("06_observations")) {
       const hasObs = await checkFile("docs/observations.md");
       if (!hasObs) missing.push("docs/observations.md");
@@ -820,7 +842,9 @@ DO NOT repeat the identical failing command without structural fixes:
       if (!hasKnowledge) missing.push("docs/knowledge.md");
     } else if (normPhase.includes("08_literature") || normPhase.includes("literature")) {
       const hasLit = await checkFile("docs/literature.md");
+      const hasActionable = await checkFile("data/actionable_synthesis.json");
       if (!hasLit) missing.push("docs/literature.md");
+      if (!hasActionable) missing.push("data/actionable_synthesis.json");
     } else if (normPhase.includes("09_websearch") || normPhase.includes("websearch")) {
       const hasWeb = await checkFile("docs/websearch.md");
       const hasActionable = await checkFile("data/actionable_synthesis.json");

@@ -17,7 +17,7 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/05_e
   - If canonical ontology categories (`biological_process`, `cellular_component`, `molecular_function`, `reactome_pathway`, `wiki_pathway`) are missing, but structured functional term categories exist that support grouping, test `tpa_enrichment(comparison = "<treatment>/<control>", terms = "<term>", method = "wilcoxon")`.
   - If NO biological ontology categories or grouping annotations exist (e.g., only `gene_name` and free-text `description` are present):
     1. **CRITICAL AUTONOMOUS CONTINUATION MANDATE (DO NOT HALT)**:
-       - **NEVER halt execution, stop calling tools, or invoke `fail_phase` asking the user for instructions.**
+       - **NEVER halt execution, stop calling tools, or invoke `fail_phase` when formal ontology terms are absent.** Empty ontology columns are a valid negative analytical result to be documented, never a failure.
        - Do NOT manually edit `docs/notes.md` via file tools; the orchestrator automatically records your `complete_phase` summary into `docs/notes.md`.
        - Invoke `tpa_export_state(rds_path = "data/tidyproteomics_data.rds", script_path = "code/05_enrichment.R")`.
        - **Immediately invoke `complete_phase(phaseName = "05_ENRICHMENT", summary = "Standard pathway enrichment bypassed due to absence of formal biological ontology annotations (GO/Reactome/KEGG); data preserved for Phase 6 observations and Phase 7 de novo functional module testing.")`** so the pipeline autonomously advances to Phase 6 and Phase 7 (where `code/07_knowledge.R` constructs and statistically tests *de novo* functional modules from `description` and `gene_name` families).

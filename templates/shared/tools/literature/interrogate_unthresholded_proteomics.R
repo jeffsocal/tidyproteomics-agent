@@ -37,7 +37,7 @@ fail <- function(msg) {
 
 parse_list <- function(val) {
   if (is.null(val) || !nzchar(trimws(val))) return(character(0))
-  trimws(strsplit(val, "[,;\\s]+")[[1]])
+  trimws(strsplit(val, "[,;[:space:]]+")[[1]])
 }
 
 main <- function() {
@@ -246,29 +246,67 @@ main <- function() {
       }
     }
 
+    # Determine candidate symbols that were not detected in this contrast
+    found_symbols <- character(0)
+    if (nrow(matched_rows) > 0) {
+      for (cs in candidate_symbols) {
+        is_hit <- any(
+          toupper(as.character(matched_rows$protein)) == cs |
+          vapply(strsplit(toupper(as.character(matched_rows$gene_name)), "[;,[:space:]]+"), function(syms) cs %in% syms, logical(1)) |
+          (cs %in% names(matched_prots) & matched_rows$protein %in% matched_prots[cs])
+        )
+        if (is_hit) found_symbols <- c(found_symbols, cs)
+      }
+    }
+    missing_symbols <- setdiff(candidate_symbols, found_symbols)
+
+    missing_display <- NULL
+    if (length(missing_symbols) > 0) {
+      missing_display <- data.frame(
+        gene_name = missing_symbols,
+        protein = rep("NOT_DETECTED", length(missing_symbols)),
+        log2_foldchange = rep(NA_real_, length(missing_symbols)),
+        p_value = rep("NA", length(missing_symbols)),
+        adj_p_value = rep("NA", length(missing_symbols)),
+        trend_direction = rep("NOT_FOUND", length(missing_symbols)),
+        subthreshold_sig = rep(FALSE, length(missing_symbols)),
+        strict_sig = rep(FALSE, length(missing_symbols)),
+        description = rep("Absent from modeled contrast / unmodeled or 0 quantifiable intensity", length(missing_symbols)),
+        stringsAsFactors = FALSE
+      )
+    }
+
+    full_display <- if (!is.null(missing_display)) {
+      dplyr::bind_rows(matched_display, missing_display)
+    } else {
+      matched_display
+    }
+
     # Generate Markdown Table
     md_table <- ""
-    if (nrow(matched_display) > 0) {
+    if (nrow(full_display) > 0) {
       cols_to_show <- intersect(
         c("gene_name", "protein", "log2_foldchange", "p_value", "adj_p_value", "trend_direction", "subthreshold_sig", "strict_sig"),
-        colnames(matched_display)
+        colnames(full_display)
       )
-      tbl_clean <- matched_display[, cols_to_show, drop = FALSE]
+      tbl_clean <- full_display[, cols_to_show, drop = FALSE]
       md_table <- paste(knitr::kable(tbl_clean, format = "pipe", digits = 3), collapse = "\n")
     }
 
-    if (nrow(matched_display) > 0) {
-      all_tables[[contrast_tag]] <- matched_display %>% dplyr::mutate(contrast = contrast_tag)
+    if (nrow(full_display) > 0) {
+      all_tables[[contrast_tag]] <- full_display %>% dplyr::mutate(contrast = contrast_tag)
     }
 
     contrast_results[[contrast_tag]] <- list(
       contrast = contrast_tag,
       candidates_tested = num_tested,
       candidates_detected = num_detected,
+      candidates_missing = missing_symbols,
       subthreshold_p05_count = sum(matched_display$subthreshold_sig, na.rm = TRUE),
       strict_sig_count = sum(matched_display$strict_sig, na.rm = TRUE),
       fgsea = fgsea_res,
       matched_rows = matched_display,
+      missing_rows = missing_display,
       markdown_table = md_table
     )
   }

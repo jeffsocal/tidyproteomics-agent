@@ -175,14 +175,14 @@ TOOLS = [
     },
     {
         "name": "tpa_inspect",
-        "description": "Introspects the active dataset: retrieves sample names, quantitation names, completed analyses, annotations, accounting metrics, or experimental variables.",
+        "description": "Introspects the active dataset: retrieves sample names, quantitation names, completed analyses, annotations, accounting columns or authoritative feature accounting breakdown, and experimental variables.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "what": {
                     "type": "string",
-                    "enum": ["samples", "quants", "analyses", "annotations", "annotation_terms", "accountings", "variables", "unique_variables", "experiments", "operations", "overview", "summary"],
-                    "description": "What metadata to inspect."
+                    "enum": ["samples", "quants", "analyses", "annotations", "annotation_terms", "accountings", "accounting", "protein_accounting", "feature_accounting", "variables", "unique_variables", "experiments", "operations", "overview", "summary"],
+                    "description": "What metadata to inspect. Use 'accounting' for the authoritative feature retention and modeled/unmodeled accounting table; use 'accountings' for accounting column types."
                 },
                 "variable": {
                     "type": "string",

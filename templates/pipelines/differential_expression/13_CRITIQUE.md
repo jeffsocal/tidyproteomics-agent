@@ -41,7 +41,7 @@ To ensure seamless version provenance across the pipeline:
 
 #### **Turn 1: Comprehensive Multi-Dimensional Peer Review**
 1. Read `docs/manuscript.md` and review it against the 5 publication rubric dimensions:
-   - **Dimension 1: Scientific Evaluation**: Is multiple-testing correction framed consistently? Are effect sizes reported alongside uncertainty? Are limitations tailored to THIS study rather than boilerplate?
+   - **Dimension 1: Scientific Evaluation**: Is multiple-testing correction framed consistently? Are effect sizes reported alongside uncertainty? Are limitations tailored to THIS study rather than boilerplate? Are protein counts and statistics internally consistent with the post-filter total in `data/manuscript_digest.json` (no confusion between raw ingest and quantified features)? Does the Results section display the primary study contrast volcano plot?
    - **Dimension 2: Bioinformatics Intelligence**: Are normalization/imputation choices grounded in CV/PCA benchmarking outputs? Are functional complex members interpreted accurately?
    - **Dimension 3: Insights & Novelty**: Is known biology (with literature citations) clearly decoupled from novel discoveries? Are alternative interpretations considered?
    - **Dimension 4: Clarity & Information Density**: Is the abstract $\le 300$ words with quantitative key findings? Are all figures interpretable and cited? Is there padding or repetition?

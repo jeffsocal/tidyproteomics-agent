@@ -25,18 +25,22 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/02_n
       4. **3.D Sample Group Renaming & Pooling Map**: `- **Confirm Sample Pooling Map**: TRUE` (and `- **Reassign Sample Names According to Pooling Map**: TRUE` if raw replicates map into cohorts).
       5. **3.E Target Contrasts**: `- **Confirm Target Contrasts**: TRUE` or `Status: CONFIRMED` (with non-empty `<treatment>/<control>` contrast).
       6. **3.F Confounded Batch Gate**: If batch confounding was detected (`- **Batch Confounding Detected**: TRUE`), verify `- **Proceed With Potential Batch Confounding**: TRUE` and `- **Confirm Batch Confounding Authorization**: TRUE`. If `- **Batch Confounding Detected**: FALSE`, Section 3.F is unexposed and does not block.
-    - **Autonomous / Headless Mode Check**:
-      - If `docs/experiment.md` contains `- **Autonomous Mode**: TRUE` or `- **Auto-Confirm**: TRUE`, or if running in an automated non-interactive pipeline test, do NOT call `fail_phase`. Ensure Section 3 subtasks (`3.A` through `3.E`) are cleanly populated with standard analytical defaults, automatically update unconfirmed checks to `TRUE` via a single `replace_file_content` call, and proceed immediately to **Execute Sample Pooling & Condition Recoding**.
-    - If ANY required confirmation check is `FALSE` (and NOT in Autonomous Mode):
-      - Ensure Section 3 subtasks (`3.A` through `3.E`, and `3.F` if detected) are cleanly populated in `docs/experiment.md`.
-      - Halt execution cleanly via a single `fail_phase` call listing ALL unconfirmed items so the researcher can review and confirm all items in one click:
-        ```
-        fail_phase(
-          phaseName = "02_NORMALIZE",
-          reason = "Pre-flight Study Design Gate: Human-in-the-loop (HITL) confirmation required for Section 3 subtasks (3.A Discovered Groups, 3.B Normalization, 3.C Imputation, 3.D Sample Pooling, 3.E Target Contrasts) in docs/experiment.md.",
-          actionableInsights = "ACTION REQUIRED: Open docs/experiment.md (highlighted in orange outline), verify each Section 3 subtask confirmation check, and click '🎯 Confirm All Study Design & Proceed' in the sidebar or Live Agent to resume Phases 02–11 uninterrupted."
-        )
-        ```
+    - **Autonomous / Automated Execution Policy (Priority Rule - DO NOT HALT)**:
+      - In automated batch runs, benchmark evaluations, non-interactive execution, or if `docs/experiment.md` contains `- **Autonomous Mode**: TRUE` or `- **Auto-Confirm**: TRUE`:
+        - **DO NOT invoke `fail_phase`. Calling `fail_phase` on unconfirmed study design defaults in automated runs is strictly prohibited.**
+        - Ensure Section 3 subtasks (`3.A` through `3.E`) are cleanly populated with standard analytical defaults (e.g. `Normalization Methods: default`, `Normalization Subset Filter: NONE`, standard pooling map from sample prefixes).
+        - Automatically update all unconfirmed checks from `FALSE` to `TRUE` in a single `replace_file_content` call on `docs/experiment.md`, and proceed immediately to **Execute Sample Pooling & Condition Recoding**.
+    - **Interactive User Gate Halt (Interactive GUI Mode Only)**:
+      - If running in interactive human-in-the-loop mode with a live human researcher and ANY required confirmation check is `FALSE`:
+        - Ensure Section 3 subtasks (`3.A` through `3.E`, and `3.F` if detected) are cleanly populated in `docs/experiment.md`.
+        - Halt execution cleanly via a single `fail_phase` call listing ALL unconfirmed items so the researcher can review and confirm all items in one click:
+          ```
+          fail_phase(
+            phaseName = "02_NORMALIZE",
+            reason = "Pre-flight Study Design Gate: Human-in-the-loop (HITL) confirmation required for Section 3 subtasks (3.A Discovered Groups, 3.B Normalization, 3.C Imputation, 3.D Sample Pooling, 3.E Target Contrasts) in docs/experiment.md.",
+            actionableInsights = "ACTION REQUIRED: Open docs/experiment.md (highlighted in orange outline), verify each Section 3 subtask confirmation check, and click '🎯 Confirm All Study Design & Proceed' in the sidebar or Live Agent to resume Phases 02–11 uninterrupted."
+          )
+          ```
   - **Execute Sample Pooling & Condition Recoding**:
     - Once confirmed (`Reassign Sample Names According to Pooling Map: TRUE` and a non-empty mapping table exists in Section 3.D):
       - Apply sample reassignment for **all** rows in Section 3.D's mapping table in a single batch call using `tpa_reassign(mapping = { "raw_sample_1": "clean_group_1", ... })` before normalization benchmarking and variation analysis (never leave secondary cohorts ungrouped as $n=1$ singletons if mapped in Section 3.D).

@@ -255,12 +255,19 @@ export class PerformanceReviewService {
           const line = chatLines[i];
 
           if (line.startsWith("- **Tool Calls**:") || line.startsWith("**Tool Calls**:")) {
-            for (let j = i + 1; j < Math.min(chatLines.length, i + 8); j++) {
-              if (chatLines[j].includes("- **`")) {
-                const match = chatLines[j].match(/- \*\*`([^`]+)`\*\*/);
+            for (let j = i + 1; j < chatLines.length; j++) {
+              const cl = chatLines[j];
+              if (cl.startsWith("### [") || cl.startsWith("#### [") || cl.startsWith("### Phase") || cl.startsWith("✓ Phase") || cl.startsWith("❌ Phase")) break;
+              if (cl.includes("- **`")) {
+                const match = cl.match(/- \*\*`([^`]+)`\*\*/);
                 if (match) toolCalls.push(match[1]);
               }
             }
+          }
+
+          if (line.includes("Tool Result: `")) {
+            const m = line.match(/Tool Result:\s*`([^`]+)`/);
+            if (m) toolCalls.push(m[1]);
           }
 
           if (line.includes("[ERROR]") || line.includes("Execution halted") || line.includes("❌ Phase FAILED")) {

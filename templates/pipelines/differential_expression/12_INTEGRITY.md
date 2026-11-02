@@ -37,6 +37,8 @@ To ensure full reproducibility and auditable provenance:
 2. Review the defects catalog:
    - **Direction Errors**: Contradictions between narrative wording ("decreased", "depleted", "suppressed", "downregulated") and actual table fold-change sign ($log_2\text{FC} > 0$ means accumulated/increased/upregulated; $log_2\text{FC} < 0$ means depleted/decreased/downregulated).
    - **Numeric Mismatches**: Values of fold-changes, p-values, or q-values in text that diverge from table records.
+   - **Protein Count Inconsistencies**: Ensure that total quantified protein count across Abstract and Results strictly matches the authoritative post-filter count in `data/manuscript_digest.json:total_quantified` (e.g. 1,941), and that raw ingest counts (e.g. 2,209) are not conflated with the quantified proteome.
+   - **Primary Volcano Alignment**: Ensure Section 3.2 embeds the primary contrast volcano plot, not an exploratory or secondary contrast (e.g. `m-control`).
    - **Significance Overclaims**: Proteins asserted as "significant" when $q > 0.05$ without hedging.
    - **Missing Figures**: References to figures not present in `data/`.
    - **Ungrounded Citations**: DOIs or PMIDs not present in literature logs.

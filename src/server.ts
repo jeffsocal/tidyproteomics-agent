@@ -516,12 +516,14 @@ async function startServer() {
         phaseModels: updated.phaseModels,
       });
 
+      let latestState: any = undefined;
       if (patch.workspaceRoot && patch.workspaceRoot !== workspaceRoot) {
         await switchWorkspace(patch.workspaceRoot);
       } else {
         await syncModelSummary();
-        const state = await orchestrator.getState();
-        broadcast({ type: "stateUpdate", state });
+        await orchestrator.rescanPhases(true);
+        latestState = await orchestrator.getState();
+        broadcast({ type: "stateUpdate", state: latestState });
       }
 
       if (patch.mcpMode || patch.mcpServerPath || patch.dockerImage) {
@@ -530,7 +532,7 @@ async function startServer() {
         });
       }
 
-      res.json({ ok: true, config: updated, mcpStatus: executionManager.getStatus() });
+      res.json({ ok: true, config: updated, mcpStatus: executionManager.getStatus(), state: latestState });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err.message });
     }

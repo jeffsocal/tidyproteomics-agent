@@ -150,11 +150,6 @@ async function main() {
     .map((e) => path.join(absEvalDir, e.name))
     .sort();
 
-  // Exclude 00_benchmark unless explicitly targeted
-  if (!opts.modelFilter || !opts.modelFilter.includes("00_benchmark")) {
-    runDirs = runDirs.filter((d) => !path.basename(d).startsWith("00_benchmark"));
-  }
-
   if (opts.modelFilter) {
     const f = opts.modelFilter.toLowerCase();
     runDirs = runDirs.filter((d) => path.basename(d).toLowerCase().includes(f));
@@ -204,8 +199,12 @@ async function main() {
       } catch {}
     }
 
-    const modelName = existingSummary?.model || runId;
-    const providerName = existingSummary?.provider || "openrouter";
+    const rawModelName = existingSummary?.model || runId;
+    const modelName = rawModelName.replace(/\s*\(baseline\)/i, "").trim();
+    let providerName = existingSummary?.provider || "openrouter";
+    if (!providerName || providerName === "-") {
+      providerName = "openrouter";
+    }
 
     console.log(`\n-----------------------------------------------------------------------------`);
     console.log(`[${idx + 1}/${runDirs.length}] Run: ${runId}`);
@@ -234,10 +233,16 @@ async function main() {
     const activeManuscriptPath = fsSync.existsSync(manuscriptDoc) ? manuscriptDoc : manuscriptRoot;
     const manuscriptRev00 = path.join(rDir, "docs", "manuscript_rev_00.md");
 
+    await fs.mkdir(path.join(rDir, "docs"), { recursive: true });
+
     if (fsSync.existsSync(activeManuscriptPath) && !fsSync.existsSync(manuscriptRev00)) {
-      await fs.mkdir(path.join(rDir, "docs"), { recursive: true });
       fsSync.copyFileSync(activeManuscriptPath, manuscriptRev00);
       console.log(`  ✓ Preserved baseline manuscript: docs/manuscript_rev_00.md`);
+    }
+
+    if (!fsSync.existsSync(manuscriptDoc) && fsSync.existsSync(manuscriptRoot)) {
+      fsSync.copyFileSync(manuscriptRoot, manuscriptDoc);
+      console.log(`  ✓ Synced root manuscript to docs/manuscript.md`);
     }
 
     if (opts.force) {
@@ -263,6 +268,41 @@ async function main() {
     fsSync.copyFileSync(templatePhase12, path.join(targetAnalysisDir, "12_INTEGRITY.md"));
     fsSync.copyFileSync(templatePhase13, path.join(targetAnalysisDir, "13_CRITIQUE.md"));
     console.log(`  ✓ Injected 12_INTEGRITY.md & 13_CRITIQUE.md into analysis/`);
+
+    // Ensure phases 01-11 templates exist in analysis/
+    const templatePipelineDir = path.join(projectRoot, "templates", "pipelines", "differential_expression");
+    if (fsSync.existsSync(templatePipelineDir)) {
+      const templateFiles = fsSync.readdirSync(templatePipelineDir);
+      for (const tf of templateFiles) {
+        if (/^\d\d_.*\.md$/.test(tf)) {
+          const destFile = path.join(targetAnalysisDir, tf);
+          if (!fsSync.existsSync(destFile)) {
+            fsSync.copyFileSync(path.join(templatePipelineDir, tf), destFile);
+          }
+        }
+      }
+    }
+
+    const experimentDoc = path.join(rDir, "docs", "experiment.md");
+    if (!fsSync.existsSync(experimentDoc)) {
+      const sampleExp = path.join(absEvalDir, "01_google_gemini-3_1-flash-lite_iter1", "docs", "experiment.md");
+      if (fsSync.existsSync(sampleExp)) {
+        fsSync.copyFileSync(sampleExp, experimentDoc);
+      }
+    }
+
+    const notesDoc = path.join(rDir, "docs", "notes.md");
+    if (!fsSync.existsSync(notesDoc) && existingSummary?.phaseMetrics) {
+      let notesContent = `# Autonomous Proteomics Analysis Notes\nModel: ${modelName}\n\n`;
+      for (const pm of existingSummary.phaseMetrics) {
+        notesContent += `### ${pm.phaseTitle || `Phase ${pm.phaseId}`} - COMPLETED\n`;
+        notesContent += `- **File**: \`${pm.fileName || `${pm.phaseId}.md`}\`\n`;
+        notesContent += `- **Duration**: ${pm.durationSeconds || 0}s\n`;
+        notesContent += `- **Turns**: ${pm.turns || 1}\n`;
+        notesContent += `- **Token Usage**: Total: ${pm.tokenUsage?.totalTokens || 0}, Prompt: ${pm.tokenUsage?.promptTokens || 0}, Completion: ${pm.tokenUsage?.completionTokens || 0}\n\n---\n\n`;
+      }
+      fsSync.writeFileSync(notesDoc, notesContent, "utf-8");
+    }
 
     // Step 2b: Pre-generate data/integrity_defects.json so the LLM has exact defect coordinates in Turn 1
     try {
@@ -378,6 +418,40 @@ async function main() {
 
     // Step 5: Collect telemetry across all 13 phases
     const telemetry = await evalService.collectTelemetry(rDir, orchestrator);
+
+    // If existingSummary has phase metrics for 01-11 that orchestrator didn't track in memory, merge them
+    if (existingSummary?.phaseMetrics) {
+      const priorPhases = existingSummary.phaseMetrics.filter((p) => {
+        const idNum = parseInt(p.phaseId, 10);
+        return !isNaN(idNum) && idNum < 12;
+      });
+      for (const prior of priorPhases) {
+        const existingIdx = telemetry.phaseMetrics.findIndex((p) => p.phaseId === prior.phaseId);
+        if (existingIdx >= 0) {
+          const cur = telemetry.phaseMetrics[existingIdx];
+          if ((cur.tokenUsage?.totalTokens || 0) === 0 && (prior.tokenUsage?.totalTokens || 0) > 0) {
+            telemetry.phaseMetrics[existingIdx] = prior;
+          }
+        } else {
+          telemetry.phaseMetrics.unshift(prior);
+        }
+      }
+      // Sort phase metrics in numeric order
+      telemetry.phaseMetrics.sort((a, b) => parseInt(a.phaseId, 10) - parseInt(b.phaseId, 10));
+
+      // Re-sum total tokens and turns
+      let promptT = 0, compT = 0, totalT = 0, turnsT = 0, durT = 0;
+      for (const p of telemetry.phaseMetrics) {
+        promptT += p.tokenUsage?.promptTokens || 0;
+        compT += p.tokenUsage?.completionTokens || 0;
+        totalT += p.tokenUsage?.totalTokens || 0;
+        turnsT += p.turns || 0;
+        durT += p.durationSeconds || 0;
+      }
+      telemetry.tokenUsage = { promptTokens: promptT, completionTokens: compT, totalTokens: totalT };
+      telemetry.totalTurns = turnsT;
+      telemetry.totalDurationSeconds = durT;
+    }
 
     // Step 6: Rescore revised output
     console.log(`  ▶ Rescoring revised outputs (Rubric v${RUBRIC_VERSION})...`);

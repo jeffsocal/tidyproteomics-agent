@@ -765,6 +765,12 @@ export class PipelineOrchestrator {
         const { client: phaseClient, source: modelSource } = this.client.forPhase(id, fileName, defaultRole);
         const phaseCfg = phaseClient.getConfig();
 
+        const isCompleted = resolvedStatus === "completed";
+        const phaseModel = isCompleted ? (prev?.model || noteRec?.model || phaseCfg.model) : phaseCfg.model;
+        const phaseRole = isCompleted ? (prev?.role || noteRec?.role || defaultRole) : defaultRole;
+        const phaseProvider = isCompleted ? (prev?.provider || noteRec?.provider || phaseCfg.provider) : phaseCfg.provider;
+        const phaseModelSource = isCompleted ? (prev?.modelSource || modelSource) : modelSource;
+
         newPhases.push({
           id,
           fileName,
@@ -780,10 +786,10 @@ export class PipelineOrchestrator {
           summary: summaryText,
           error: prev?.error || (resolvedStatus === "failed" ? noteRec?.summary : undefined),
           associatedFiles: this.resolveAssociatedFiles(fileName, id, summaryText),
-          model: prev?.model || noteRec?.model || phaseCfg.model,
-          role: prev?.role || noteRec?.role || defaultRole,
-          provider: prev?.provider || noteRec?.provider || phaseCfg.provider,
-          modelSource: prev?.modelSource || modelSource,
+          model: phaseModel,
+          role: phaseRole,
+          provider: phaseProvider,
+          modelSource: phaseModelSource,
         });
       }
     } catch (e) {
@@ -1439,7 +1445,7 @@ Construct and execute code for this phase, capturing output to logs.
 
       let lastToolPendingText = "";
 
-      const phaseRole: LLMRole = phase.role || this.resolvePhaseRole(phase.id, phase.fileName);
+      const phaseRole: LLMRole = this.resolvePhaseRole(phase.id, phase.fileName);
       const { client: phaseClient, source: modelSource } = this.client.forPhase(phase.id, phase.fileName, phaseRole);
 
       const phaseModelCfg = phaseClient.getConfig();

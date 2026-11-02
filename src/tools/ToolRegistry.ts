@@ -477,7 +477,7 @@ export class ToolRegistry {
     this.tools.set("check_checkpoint_gate", {
       definition: {
         name: "check_checkpoint_gate",
-        description: "Checks whether required checkpoint files exist, are non-empty, and returns their file size.",
+        description: "Checks whether required checkpoint files exist, are non-empty, and optionally verifies that a log file contains an expected checkpoint marker string.",
         parameters: {
           type: "object",
           properties: {
@@ -485,6 +485,15 @@ export class ToolRegistry {
               type: "array",
               description: "Array of relative paths to files that must exist (e.g. ['logs/01_data_quality.log', 'data/tidyproteomics_data.rds'])",
               items: { type: "string" },
+            },
+            requiredLogMarker: {
+              type: "object",
+              description: "Optional verification that a log file contains an expected checkpoint marker string (e.g. 'PHASE_6_EXTRACTION_CHECKPOINT_PASS').",
+              properties: {
+                logFile: { type: "string", description: "Relative path to log file (e.g. 'logs/06_observations/console.log')" },
+                marker: { type: "string", description: "Expected marker substring (e.g. 'PHASE_6_EXTRACTION_CHECKPOINT_PASS')" },
+              },
+              required: ["logFile", "marker"],
             },
           },
           required: ["requiredFiles"],
@@ -539,6 +548,28 @@ export class ToolRegistry {
             }
           }
         }
+
+        if (args.requiredLogMarker && args.requiredLogMarker.logFile && args.requiredLogMarker.marker) {
+          const logPath = this.resolvePath(args.requiredLogMarker.logFile);
+          try {
+            if (fsSync.existsSync(logPath)) {
+              const logContent = await fs.readFile(logPath, "utf-8");
+              if (logContent.includes(args.requiredLogMarker.marker)) {
+                results.push(`PASS: Log marker '${args.requiredLogMarker.marker}' confirmed in ${args.requiredLogMarker.logFile}`);
+              } else {
+                results.push(`FAIL: Log marker '${args.requiredLogMarker.marker}' NOT found in ${args.requiredLogMarker.logFile}`);
+                allPassed = false;
+              }
+            } else {
+              results.push(`FAIL: Log file ${args.requiredLogMarker.logFile} does not exist`);
+              allPassed = false;
+            }
+          } catch {
+            results.push(`FAIL: Error reading ${args.requiredLogMarker.logFile}`);
+            allPassed = false;
+          }
+        }
+
         return `Checkpoint Gate Status: ${allPassed ? "ALL CHECKPOINTS PASSED" : "GATE FAILED"}\n${results.join("\n")}`;
       },
     });
