@@ -160,7 +160,7 @@ ${engineSection}
   Agent: TidyProteomicsAgent vX.X.X
 - Standardized Note Ownership: Do not directly append phase completion headers or raw execution blocks to docs/notes.md from manual file commands. The orchestration framework automatically records a single, clean markdown summary upon complete_phase(phaseName = "${normalizedPhaseName}", summary = "...").
 - Once all checkpoints for this phase are satisfied and verified, invoke complete_phase(phaseName = "${normalizedPhaseName}", summary = "...").
-- If a mandatory pre-flight gate, configuration prerequisite, or checkpoint fails and requires user intervention (such as unconfigured placeholders or unconfirmed contrasts in docs/experiment.md Section 3.C), scaffold concrete suggestions directly into Section 3 of docs/experiment.md, then immediately invoke fail_phase(phaseName = "${normalizedPhaseName}", reason = "...", actionableInsights = "...") to halt execution and present actionable insights to the user.
+- If a mandatory pre-flight gate, configuration prerequisite, or checkpoint fails and requires user intervention (such as unconfigured placeholders or unconfirmed contrasts in docs/experiment.md Section 3.C), scaffold concrete suggestions directly into Section 3 of docs/experiment.md, then immediately invoke fail_phase(phaseName = "${normalizedPhaseName}", reason = "...", actionableInsights = "...") to halt execution and present actionable insights to the user. (In autonomous execution, automated test runs, or benchmark evaluations, do NOT call fail_phase: populate standard analytical defaults and auto-confirm Section 3 instead; do NOT treat 'Batch Confounding Detected: FALSE' as an unconfirmed blocker).
 `.trim();
 
     return {

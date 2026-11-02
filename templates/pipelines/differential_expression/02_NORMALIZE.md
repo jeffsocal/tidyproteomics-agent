@@ -24,14 +24,14 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/02_n
       3. **3.C Missing Value Imputation Strategy**: `- **Confirm Imputation Strategy**: TRUE`. (If post-filter missingness dropped to `0%`, set `- **Imputation Method**: none` and `- **Confirm Imputation Strategy**: TRUE`).
       4. **3.D Sample Group Renaming & Pooling Map**: `- **Confirm Sample Pooling Map**: TRUE` (and `- **Reassign Sample Names According to Pooling Map**: TRUE` if raw replicates map into cohorts).
       5. **3.E Target Contrasts**: `- **Confirm Target Contrasts**: TRUE` or `Status: CONFIRMED` (with non-empty `<treatment>/<control>` contrast).
-      6. **3.F Confounded Batch Gate**: If batch confounding was detected (`- **Batch Confounding Detected**: TRUE`), verify `- **Proceed With Potential Batch Confounding**: TRUE` and `- **Confirm Batch Confounding Authorization**: TRUE`. If `- **Batch Confounding Detected**: FALSE`, Section 3.F is unexposed and does not block.
+      6. **3.F Confounded Batch Gate**: If batch confounding was detected (`- **Batch Confounding Detected**: TRUE`), verify `- **Proceed With Potential Batch Confounding**: TRUE` and `- **Confirm Batch Confounding Authorization**: TRUE`. **CRITICAL**: If `- **Batch Confounding Detected**: FALSE`, Section 3.F is completely unexposed, inactive, and SATISFIED. Do NOT treat `FALSE` for batch confounding detection as an unconfirmed gate or blocker.
     - **Autonomous / Automated Execution Policy (Priority Rule - DO NOT HALT)**:
-      - In automated batch runs, benchmark evaluations, non-interactive execution, or if `docs/experiment.md` contains `- **Autonomous Mode**: TRUE` or `- **Auto-Confirm**: TRUE`:
-        - **DO NOT invoke `fail_phase`. Calling `fail_phase` on unconfirmed study design defaults in automated runs is strictly prohibited.**
-        - Ensure Section 3 subtasks (`3.A` through `3.E`) are cleanly populated with standard analytical defaults (e.g. `Normalization Methods: default`, `Normalization Subset Filter: NONE`, standard pooling map from sample prefixes).
+      - When running in autonomous pipeline execution, automated benchmark evaluations, non-interactive execution, or if `docs/experiment.md` contains `- **Autonomous Mode**: TRUE` or `- **Auto-Confirm**: TRUE`:
+        - **DO NOT invoke `fail_phase`. Calling `fail_phase` on unconfirmed study design defaults in automated or autonomous runs is strictly prohibited.**
+        - Ensure Section 3 subtasks (`3.A` through `3.E`) are cleanly populated with standard analytical defaults (e.g. `Normalization Methods: default`, `Normalization Subset Filter: NONE`, standard pooling map from sample prefixes, and primary contrast `<treatment>/<control>`).
         - Automatically update all unconfirmed checks from `FALSE` to `TRUE` in a single `replace_file_content` call on `docs/experiment.md`, and proceed immediately to **Execute Sample Pooling & Condition Recoding**.
     - **Interactive User Gate Halt (Interactive GUI Mode Only)**:
-      - If running in interactive human-in-the-loop mode with a live human researcher and ANY required confirmation check is `FALSE`:
+      - ONLY if running in an interactive human-in-the-loop session with an active live human researcher prompt loop and ANY required confirmation check is `FALSE`:
         - Ensure Section 3 subtasks (`3.A` through `3.E`, and `3.F` if detected) are cleanly populated in `docs/experiment.md`.
         - Halt execution cleanly via a single `fail_phase` call listing ALL unconfirmed items so the researcher can review and confirm all items in one click:
           ```
@@ -59,7 +59,10 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/02_n
     - **Default Benchmarking (Linear Models + Loess)**: When `Normalization Methods` is `default` and `Normalization Subset Filter` is `NONE`, invoke `tpa_normalize(methods = ["scaled", "median", "linear", "limma", "loess"])`.
     - **Compute-Intensive Non-Linear Models (`randomforest`, `svm`)**: If Section 3.B specifies `randomforest`, `svm`, `all`, or a custom list, pass the requested methods to `tpa_normalize(methods = [...])`.
     - **Sub-Population Training (`subset_filter`)**: If Section 3.B specifies a `Normalization Subset Filter` other than `NONE` (e.g. `description %like% "Ribosome"` or `!description %like% "mitochondrial"`), pass `subset_filter = "<filter>"` and `methods = ["scaled", "median", "linear", "svm"]` to `tpa_normalize(...)`. *(Note: Only `scaled`, `median`, `linear`, and `svm` can extrapolate normalization factors beyond the training subset; `limma`, `randomforest`, and `loess` cannot extrapolate out-of-sample).*
-    - **Automatic Selection & Sensitivity Audit**: `tpa_normalize` automatically selects the optimal method via `select_normalization()` and returns the full `summary(data, "normalization")` benchmark table! Only invoke `tpa_select_normalization(normalization = "<method>")` if overriding automatic selection. When the top two candidate methods differ by $< 5\%$ in median replicate CV or when `subset_filter` is applied, optionally invoke `tpa_normalization_sensitivity(comparison = "<treatment>/<control>")` to verify that top regulated candidates are invariant to the choice of scaling algorithm.
+    - **Automatic Selection vs. Manual Override**: `tpa_normalize` automatically selects the optimal method via `select_normalization()` (minimizing median replicate CV), activates it as the current assay in memory, and returns the full `summary(data, "normalization")` benchmark table!
+      - **DO NOT call `tpa_select_normalization()` if accepting the automatically selected method** (doing so with empty arguments or repeating the active selection is a redundant no-op that wastes turns).
+      - Only invoke `tpa_select_normalization(normalization = "<method>")` if explicitly overriding automatic selection with a different algorithm.
+      - When the top two candidate methods differ by $< 5\%$ in median replicate CV or when `subset_filter` is applied, optionally invoke `tpa_normalization_sensitivity(comparison = "<treatment>/<control>")` to verify that top regulated candidates are invariant to the choice of scaling algorithm.
 - [ ] **Checkpoint 2.2**: Verify that normalized abundances are confirmed in stdout and log (displaying replicate CV and PC1 metrics for benchmarked candidates or confirming pre-existing normalized state).
 
 #### Phase 2.3: Quantitative Variation Benchmarking & CV Reduction Verification
@@ -71,7 +74,14 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/02_n
   - Confirm from the normalization summary that the selected method minimized median replicate CV relative to raw abundance.
   - Confirm biological replicate clustering and condition separation along PC1/PC2.
 
-#### Phase 2.4: Object Persistence & Checkpoint Verification
+#### Phase 2.4: Object Persistence, Authoritative Accounting & Checkpoint Verification
+- [ ] **Authoritative Feature Accounting & Discrepancy Prevention**:
+  - Run `tpa_inspect(what = "protein_accounting")` (or `accounting`) to review the authoritative feature counts breakdown.
+  - Understand the accounting metric distinction:
+    - `tpa_subset` reports the *total entities retained in the data object* (e.g. 1,941 proteins).
+    - `tidyproteomics::summary(by = "global")` reports *quantifiable entities with at least one non-missing abundance across samples* (e.g. 1,908 proteins; 33 proteins have all-NA abundance in the active raw/normalized assay and are not quantifiable).
+  - In your phase summary and reports, explicitly cite both metrics: e.g., *"1,941 total proteins retained after contaminant and 2-peptide filtering; 1,908 quantifiable proteins with observed abundance (33 background entities have 0 quantifiable values)"*. Never leave this as an unexplained discrepancy across phases.
+  - **Tool Discipline**: Do NOT call redundant inspection tools (`tpa_inspect(what = "experiments")`, `tpa_inspect(what = "operations")`) right after passing `check_checkpoint_gate` or right before calling `complete_phase`.
 - [ ] Persist the normalized dataset and generate reproducible R script:
   - Invoke `tpa_export_state(rds_path = "data/tidyproteomics_data.rds", script_path = "code/02_normalize.R")`.
 - [ ] **Checkpoint 2.4**:
@@ -81,5 +91,5 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/02_n
   4. If multiple quantitative layers exist, variation plot (`data/plot_*_normalizated_variation.png`) exists on disk (along with optional `data/plot_*_heatmap.png` if generated).
 - [ ] **Complete Phase (Automated Blackboard Recording)**:
   - Do NOT manually edit `docs/notes.md` via file tools; the orchestrator automatically records your `complete_phase` summary into `docs/notes.md`.
-  - Invoke `complete_phase` with a comprehensive summary including the selected normalization method (e.g., `loess`, `limma`, `median`), replicate CV statistics demonstrating variance minimization, and PCA clustering observations (PC1/PC2 variance explained and replicate tightness):
-    `complete_phase(phaseName = "02_NORMALIZE", summary = "Normalization benchmarking/verification completed (<selected_method> selected; <N> high-confidence proteins retained). Confirmed replicate CV reduction (<raw_cv>% -> <norm_cv>%), verified replicate clustering on PCA (PC1 <X>%, PC2 <Y>%), generated diagnostic plots, and persisted data/tidyproteomics_data.rds.")`
+  - Invoke `complete_phase` with a comprehensive summary including the selected normalization method (e.g., `loess`, `limma`, `median`), replicate CV statistics demonstrating variance minimization, PCA clustering observations (PC1/PC2 variance explained and replicate tightness), and reconciled feature accounting:
+    `complete_phase(phaseName = "02_NORMALIZE", summary = "Normalization benchmarking/verification completed (<selected_method> selected; <N_total> retained proteins, <N_quant> quantifiable). Confirmed replicate CV reduction (<raw_cv>% -> <norm_cv>%), verified replicate clustering on PCA (PC1 <X>%, PC2 <Y>%), generated diagnostic plots, and persisted data/tidyproteomics_data.rds.")`
