@@ -670,12 +670,16 @@ export class PipelineOrchestrator {
 
     // Tier 3: Frontier Scientific Reasoner (Internal biomedical hypothesis generation & final synthesis)
     const isReasoning =
-      ["07", "11"].includes(cleanId) ||
+      ["07", "11", "12", "13"].includes(cleanId) ||
       cleanId.startsWith("07") ||
       cleanId.startsWith("11") ||
+      cleanId.startsWith("12") ||
+      cleanId.startsWith("13") ||
       fn.includes("knowledge") ||
       fn.includes("synthesis") ||
-      fn.includes("manuscript");
+      fn.includes("manuscript") ||
+      fn.includes("integrity") ||
+      fn.includes("critique");
     if (isReasoning) return "reasoner";
 
     // Tier 1: Fast Utility & Ingestion for mechanical inspection, normalization & imputation
@@ -911,7 +915,7 @@ Construct and execute code for this phase, capturing output to logs.
     }
 
     const list = [
-      { name: "analysis", relPath: "analysis", description: "Phase Prompts (01_INSPECT.md .. 11_SYNTHESIS.md)" },
+      { name: "analysis", relPath: "analysis", description: "Phase Prompts (01_INSPECT.md .. 13_CRITIQUE.md)" },
       { name: agentFolder, relPath: agentFolder, description: "Protocol, Variables & Skills (Cached Prefix)" },
       { name: "code", relPath: "code", description: "Generated Analysis Scripts" },
       { name: "tools", relPath: "tools", description: "Linter & Execution Helper Utilities" },
@@ -1658,6 +1662,15 @@ Construct and execute code for this phase, capturing output to logs.
       addIfExists("data/plot_discussion_signatures.png");
       addIfExists("data/plot_discussion_candidates.png");
     } else if (phaseId === "11") {
+      addIfExists("docs/manuscript.md");
+      addIfExists("docs/manuscript_rev_00.md");
+    } else if (phaseId === "12") {
+      addIfExists("docs/report_integrity.md");
+      addIfExists("docs/manuscript_rev_01.md");
+      addIfExists("docs/manuscript.md");
+    } else if (phaseId === "13") {
+      addIfExists("docs/report_critique.md");
+      addIfExists("docs/manuscript_rev_02.md");
       addIfExists("docs/manuscript.md");
     }
 

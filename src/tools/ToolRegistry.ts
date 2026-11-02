@@ -596,7 +596,48 @@ export class ToolRegistry {
         return `PHASE_HALTED_FAILED: ${args.phaseName}\nReason: ${args.reason}\nActionable Insights:\n${args.actionableInsights}`;
       },
     });
-    // 9. Built-in Web & Scientific Literature Search tools (scoped via frontmatter or available in Phase 08)
+
+    // 9. check_integrity
+    this.tools.set("check_integrity", {
+      definition: {
+        name: "check_integrity",
+        description:
+          "Runs deterministic data-grounded verification against docs/manuscript.md (or specified revision) and data/*.tsv tables. Saves data/integrity_defects.json and returns a structured defect catalog with direction errors, numeric mismatches, and figure references.",
+        parameters: {
+          type: "object",
+          properties: {
+            manuscriptPath: {
+              type: "string",
+              description: "Optional relative path to manuscript file (defaults to docs/manuscript.md or docs/manuscript_rev_01.md)",
+            },
+          },
+          required: [],
+        },
+      },
+      execute: async (args) => {
+        try {
+          const effectiveCwd = this.workspaceRoot || process.cwd();
+          let mPath = args.manuscriptPath;
+          if (!mPath) {
+            if (fsSync.existsSync(path.join(effectiveCwd, "docs", "manuscript_rev_01.md"))) {
+              mPath = "docs/manuscript_rev_01.md";
+            } else if (fsSync.existsSync(path.join(effectiveCwd, "docs", "manuscript.md"))) {
+              mPath = "docs/manuscript.md";
+            } else {
+              mPath = "manuscript.md";
+            }
+          }
+          const { runIntegrityCheck } = await import("../evaluation/check_integrity");
+          const res = runIntegrityCheck(effectiveCwd, mPath);
+          return JSON.stringify(res, null, 2);
+        } catch (err: any) {
+          return `Error running check_integrity: ${err.message}`;
+        }
+      },
+    });
+    this.mcpToolNames.add("check_integrity");
+
+    // 10. Built-in Web & Scientific Literature Search tools (scoped via frontmatter or available in Phase 08)
     for (const handler of createWebSearchToolHandlers()) {
       this.tools.set(handler.definition.name, handler);
       this.mcpToolNames.add(handler.definition.name);

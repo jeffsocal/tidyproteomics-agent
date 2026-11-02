@@ -38,7 +38,7 @@ export const FollowonPhaseModal: React.FC<FollowonPhaseModalProps> = ({
       if (val > maxIdx) maxIdx = val;
     }
   });
-  const nextNum = maxIdx > 0 ? maxIdx + 1 : 12;
+  const nextNum = maxIdx > 0 ? maxIdx + 1 : 14;
   const nextId = String(nextNum).padStart(2, "0");
 
   const [description, setDescription] = useState("");

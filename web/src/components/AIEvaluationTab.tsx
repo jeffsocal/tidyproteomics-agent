@@ -2565,6 +2565,18 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
               <button
                 type="button"
                 className="btn btn-secondary btn-xs"
+                onClick={() => {
+                  prevBenchmarksRef.current = "";
+                  refreshBenchmarks();
+                }}
+                style={{ gap: "4px" }}
+                title="Reload suite.json and run summaries directly from disk"
+              >
+                <RefreshCw size={11} /> Sync from Disk
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-xs"
                 onClick={() => setSelectedRunIds(currentDisplaySuite.runs.map((r) => r.id))}
                 disabled={selectedRunIds.length === currentDisplaySuite.runs.length}
               >
@@ -2873,14 +2885,67 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
 
                       {/* Reviewer Panel (if present) */}
                       {r.scores?.reviewerPanel && r.scores.reviewerPanel.reviewers?.length > 0 && (
-                        <div style={{ display: "flex", flexDirection: "column", gap: "6px", background: "rgba(168, 85, 247, 0.08)", border: "1px solid rgba(168, 85, 247, 0.25)", borderRadius: "6px", padding: "10px 12px" }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "8px", background: "rgba(168, 85, 247, 0.08)", border: "1px solid rgba(168, 85, 247, 0.25)", borderRadius: "6px", padding: "10px 12px" }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                            <span style={{ fontSize: "10.5px", fontWeight: 700, color: "#c084fc", textTransform: "uppercase" }}>
-                              LLM Reviewer Panel ({r.scores.reviewerPanel.completedCount}/{r.scores.reviewerPanel.requestedModels.length} Completed)
+                            <span style={{ fontSize: "10.5px", fontWeight: 700, color: "#c084fc", textTransform: "uppercase", display: "flex", alignItems: "center", gap: "6px" }}>
+                              <Sparkles size={12} /> LLM Critic Panel ({r.scores.reviewerPanel.completedCount}/{r.scores.reviewerPanel.requestedModels.length} Completed)
                             </span>
                           </div>
+
+                          {/* 3 Critics Score Breakdown Table */}
+                          <div style={{ overflowX: "auto" }}>
+                            <table className="pipeline-table" style={{ fontSize: "10.5px", width: "100%", margin: 0 }}>
+                              <thead>
+                                <tr>
+                                  <th style={{ textAlign: "left" }}>Critic Model</th>
+                                  <th style={{ textAlign: "center" }}>SciEval</th>
+                                  <th style={{ textAlign: "center" }}>BioInt</th>
+                                  <th style={{ textAlign: "center" }}>Insights</th>
+                                  <th style={{ textAlign: "center" }}>Clarity</th>
+                                  <th style={{ textAlign: "center" }}>Action</th>
+                                  <th style={{ textAlign: "right" }}>Duration</th>
+                                  <th style={{ textAlign: "center" }}>Status</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {r.scores.reviewerPanel.reviewers.map((rev, revIdx) => (
+                                  <tr key={revIdx}>
+                                    <td style={{ fontWeight: 600, color: "var(--fg-bright)" }}>
+                                      {rev.model.includes("/") ? rev.model.split("/")[1] : rev.model}
+                                    </td>
+                                    <td style={{ textAlign: "center", fontVariantNumeric: "tabular-nums" }}>{rev.dimensions?.scientificEvaluation ?? "-"}</td>
+                                    <td style={{ textAlign: "center", fontVariantNumeric: "tabular-nums" }}>{rev.dimensions?.bioinformaticsIntelligence ?? "-"}</td>
+                                    <td style={{ textAlign: "center", fontVariantNumeric: "tabular-nums" }}>{rev.dimensions?.insights ?? "-"}</td>
+                                    <td style={{ textAlign: "center", fontVariantNumeric: "tabular-nums" }}>{rev.dimensions?.clarity ?? "-"}</td>
+                                    <td style={{ textAlign: "center", fontVariantNumeric: "tabular-nums" }}>{rev.dimensions?.actionableInsights ?? "-"}</td>
+                                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--muted)" }}>{rev.durationSeconds ? `${rev.durationSeconds}s` : "-"}</td>
+                                    <td style={{ textAlign: "center" }}>
+                                      <span style={{ color: rev.status === "ok" ? "#4ade80" : "#f87171", fontWeight: 700, fontSize: "9.5px", textTransform: "uppercase" }}>
+                                        {rev.status}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                ))}
+                                {/* Panel Consensus (Median) Row */}
+                                {r.scores.rawManuscriptDimensions && (
+                                  <tr style={{ background: "rgba(168, 85, 247, 0.12)", fontWeight: 700 }}>
+                                    <td style={{ color: "#c084fc" }}>Panel Median (Consensus)</td>
+                                    <td style={{ textAlign: "center" }}>{r.scores.rawManuscriptDimensions.scientificEvaluation}</td>
+                                    <td style={{ textAlign: "center" }}>{r.scores.rawManuscriptDimensions.bioinformaticsIntelligence}</td>
+                                    <td style={{ textAlign: "center" }}>{r.scores.rawManuscriptDimensions.insights}</td>
+                                    <td style={{ textAlign: "center" }}>{r.scores.rawManuscriptDimensions.clarity}</td>
+                                    <td style={{ textAlign: "center" }}>{r.scores.rawManuscriptDimensions.actionableInsights}</td>
+                                    <td style={{ textAlign: "right", color: "var(--muted)" }}>—</td>
+                                    <td style={{ textAlign: "center", color: "#c084fc", fontSize: "9.5px" }}>MEDIAN</td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+
+                          {/* Consensus Weaknesses */}
                           {r.scores.reviewerPanel.consensusWeaknesses && r.scores.reviewerPanel.consensusWeaknesses.length > 0 && (
-                            <div style={{ fontSize: "11px", color: "var(--fg-bright)" }}>
+                            <div style={{ fontSize: "11px", color: "var(--fg-bright)", marginTop: "4px" }}>
                               <b>Consensus Weaknesses:</b>
                               <ul style={{ margin: "4px 0 0 16px", padding: 0 }}>
                                 {r.scores.reviewerPanel.consensusWeaknesses.map((w, idx) => (

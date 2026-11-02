@@ -65,7 +65,7 @@ export class FollowonPhaseService {
       }
     }
 
-    const nextIndex = maxIdx > 0 ? maxIdx + 1 : 12;
+    const nextIndex = maxIdx > 0 ? maxIdx + 1 : 14;
     const nextId = String(nextIndex).padStart(2, "0");
     return { nextIndex, nextId, existingPhases };
   }
@@ -237,7 +237,7 @@ tools: [tpa_health, tpa_load, tpa_inspect, tpa_expression, tpa_enrichment, tpa_b
 ### Phase ${nextIndex}: <Clear Descriptive Title>
 
 3. Mandatory Documentation & Synthesis Requirements:
-- Dedicated Report Requirement: At a minimum, every follow-on phase MUST author a dedicated scientific markdown document in 'docs/' (named strictly 'docs/${nextId}_<singleword_lower>.md') capturing candidate screening metrics, biological mechanisms, hypotheses, and figure/table citations.
+- Dedicated Report Requirement: At a minimum, every follow-on phase MUST author a dedicated scientific markdown document in 'docs/' (named strictly 'docs/report_<singleword_lower>.md', e.g. 'docs/report_kinase.md') capturing candidate screening metrics, biological mechanisms, hypotheses, and figure/table citations.
 ${
   mode === "append"
     ? `- MANUSCRIPT INTEGRATION (APPEND):
@@ -249,16 +249,16 @@ ${
   - Prior manuscript version has been archived/preserved in '${manuscriptInfo.sourceFile}'.
   - The agent MUST comprehensively rewrite and synthesize '${manuscriptInfo.targetFile}', incorporating these follow-on findings into the Abstract, Results, Discussion, and Conclusions.
   - The agent MUST also update/copy to 'docs/manuscript.md' with the revised manuscript so the main document viewer remains current.`
-    : `- MANUSCRIPT INTEGRATION: Manuscript modification is not requested. Keep all discoveries documented in 'docs/${nextId}_<singleword_lower>.md' without editing manuscript files.`
+    : `- MANUSCRIPT INTEGRATION: Manuscript modification is not requested. Keep all discoveries documented in 'docs/report_<singleword_lower>.md' without editing manuscript files.`
 }
-- Pre-Flight Gate Requirement: Before invoking complete_phase, the agent MUST confirm that 'docs/${nextId}_<singleword_lower>.md' exists on disk with non-zero size${mode !== "none" ? ` and '${manuscriptInfo.targetFile}' has been written` : ""}.
+- Pre-Flight Gate Requirement: Before invoking complete_phase, the agent MUST confirm that 'docs/report_<singleword_lower>.md' exists on disk with non-zero size${mode !== "none" ? ` and '${manuscriptInfo.targetFile}' has been written` : ""}.
 
 4. Step-by-step numbered sub-checkpoints:
 - Phase ${nextIndex}.1: Data verification & in-memory state continuity (loading 'data/tidyproteomics_data.rds' and tpa_inspect)
 - Phase ${nextIndex}.2: Targeted analytical computation, candidate screening via tpa_query_expression, or specialized modeling
 - Phase ${nextIndex}.3: Publication figure generation & tabular data export (saving to data/plot_*.png and data/table_*.tsv)
 - Phase ${nextIndex}.4: Scientific documentation & manuscript revision:
-  - Author dedicated report 'docs/${nextId}_<singleword_lower>.md' using write_file.
+  - Author dedicated report 'docs/report_<singleword_lower>.md' using write_file.
   ${mode === "append" ? `  - Edit '${manuscriptInfo.targetFile}' by appending a dedicated follow-on results and discussion section, and update 'docs/manuscript.md'` : mode === "rewrite" ? `  - Rewrite '${manuscriptInfo.targetFile}' with holistic integration across abstract, results, and discussion, and update 'docs/manuscript.md'` : "  - No manuscript edits requested"}
 - Phase ${nextIndex}.5: State persistence and automated completion via complete_phase(phaseName = "${nextId}_SINGLEWORD", summary = "...")
 

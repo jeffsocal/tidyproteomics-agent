@@ -33,6 +33,8 @@ export const STANDARD_PHASES: PhaseDefinitionInfo[] = [
   { id: "09", name: "09_WEBSEARCH", description: "Targeted Web Search & Ontology Cross-Check", defaultTier: "toolRunner" },
   { id: "10", name: "10_FIGURES", description: "Publication-Grade Visualization & Figure Generation", defaultTier: "toolRunner" },
   { id: "11", name: "11_SYNTHESIS", description: "Final Manuscript Synthesis & Reproducibility Audit", defaultTier: "reasoner" },
+  { id: "12", name: "12_INTEGRITY", description: "Data-Grounded Integrity Review & Defect Correction", defaultTier: "reasoner" },
+  { id: "13", name: "13_CRITIQUE", description: "Scientific Critique & Argument Strengthening", defaultTier: "reasoner" },
 ];
 
 interface MultiModelSettingsSectionProps {
