@@ -183,13 +183,14 @@ export class PerformanceReviewService {
 
         for (const file of mdFiles.slice(-3)) { // inspect up to 3 most recent sessions
           const content = await fs.readFile(path.join(agentLogsDir, file), "utf-8");
-          const lines = content.split("\n");
-          const dialogSnippet = lines
-            .filter((l) => l.startsWith("### User") || l.startsWith("### Assistant") || l.startsWith("### Agent") || l.startsWith("User:") || l.startsWith("Assistant:") || l.startsWith("Agent:"))
-            .slice(0, 30)
-            .join("\n");
-          if (dialogSnippet) {
-            chatExtracts.push(`Session ${file}:\n${dialogSnippet}`);
+          // Extract conversational user and agent turns with their verbatim content
+          const turns = content.split(/(?=###\s+(?:User|Agent|Assistant|TidyProteomics Agent))/i);
+          const meaningfulTurns = turns
+            .map((t) => t.trim())
+            .filter((t) => /^###\s+(?:User|Agent|Assistant|TidyProteomics Agent)/i.test(t))
+            .slice(-12);
+          if (meaningfulTurns.length > 0) {
+            chatExtracts.push(`Session ${file}:\n${meaningfulTurns.join("\n\n")}`);
           }
         }
 
@@ -259,14 +260,14 @@ export class PerformanceReviewService {
               const cl = chatLines[j];
               if (cl.startsWith("### [") || cl.startsWith("#### [") || cl.startsWith("### Phase") || cl.startsWith("✓ Phase") || cl.startsWith("❌ Phase")) break;
               if (cl.includes("- **`")) {
-                const match = cl.match(/- \*\*`([^`]+)`\*\*/);
+                const match = cl.match(/- \*\*`([A-Za-z0-9_]+)`\*\*/);
                 if (match) toolCalls.push(match[1]);
               }
             }
           }
 
           if (line.includes("Tool Result: `")) {
-            const m = line.match(/Tool Result:\s*`([^`]+)`/);
+            const m = line.match(/Tool Result:\s*`([A-Za-z0-9_]+)`/);
             if (m) toolCalls.push(m[1]);
           }
 

@@ -120,7 +120,7 @@ export class AgentService {
       for (const m of this.messages) {
         if (m.role === "user") {
           lines.push(`### User`);
-          lines.push(m.content);
+          lines.push(m.content && m.content.trim().length > 0 ? m.content.trim() : "(User confirmation / action payload submitted)");
           lines.push("");
         } else if (m.type === "milestone") {
           lines.push(`### Phase Event: ${m.phaseTitle || m.phaseId || "Milestone"}`);
@@ -134,7 +134,7 @@ export class AgentService {
           lines.push(`> *Pipeline Activity*: ${m.content}`);
           lines.push("");
         } else {
-          lines.push(`### TidyProteomics Agent`);
+          lines.push(`### Agent`);
           lines.push(m.content);
           if (m.quickChips && m.quickChips.length > 0) {
             lines.push("");

@@ -82,10 +82,13 @@ Execute the iterative graph interrogation loop:
 ##### Strategy B: When Literature Database is DISABLED (2-Turn Fast-Path Fallback)
 If no active DuckDB literature database is configured (e.g. `ACTIVE LITERATURE DATABASE` is `DISABLED` or `literature/` lacks `.duckdb` files):
 - Record `literature_status: SKIPPED (NO_LOCAL_LITERATURE_DB)` in the report header of `docs/literature.md` and in the `complete_phase` summary (do NOT manually edit `docs/notes.md`).
-- Synthesize baseline biological literature for the system based on `docs/knowledge.md` and standard annotations, applying Evidentiary Distance Tiering.
-- **No Synthetic Candidate Forcing**: Do NOT generate artificial or duplicate DE entries in `docs/literature_candidates.md` or `data/literature_candidate_expression.csv`. Leave literature candidates empty so downstream phases know literature validation was skipped.
-- Formulate targeted search terms to guide Phase 09 web search in addressing the core biological questions.
-- Cite standard literature by Author (Year). Never invent or hallucinate numerical PMIDs or DOIs.
+- **Skip Path Directives**:
+  - Title the document: `# Literature Database Bypass Notice & Phase 09 Web Search Strategy` with `Literature Database: SKIPPED (NO_LOCAL_LITERATURE_DB)`.
+  - Provide a concise `LITERATURE_NOT_RUN` stub explaining that local literature DuckDB querying was bypassed due to missing database index.
+  - Do NOT restate or re-title Phase 7 conclusions as 'second-layer literature database conclusions'. Instead, title Section 4 as `Preliminary Mechanistic Hypotheses (Uncorroborated by Local Literature DB; Awaiting Phase 09 Web Verification)`.
+  - No synthetic candidate forcing: leave literature candidate tables empty so downstream phases recognize local DB validation was skipped.
+  - Formulate prioritized, targeted search terms to guide Phase 09 web search in addressing the core biological questions.
+  - Cite standard literature by Author (Year). Never invent or hallucinate numerical PMIDs or DOIs.
 
 ---
 

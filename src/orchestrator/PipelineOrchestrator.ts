@@ -25,6 +25,7 @@ export class PipelineOrchestrator {
   private currentRunController?: AbortController;
   private activeRunPromise?: Promise<void>;
   private activeRunId?: symbol;
+  private phaseFailureCounts: Map<string, number> = new Map();
 
   constructor(
     private workspaceRoot: string,
@@ -565,8 +566,9 @@ export class PipelineOrchestrator {
         }
 
         const isCompleted = section.includes("- COMPLETED");
+        const isBlocked = section.includes("- BLOCKED");
         const isFailed = section.includes("- FAILED");
-        const status: PhaseStatus = isCompleted ? "completed" : isFailed ? "failed" : "completed";
+        const status: PhaseStatus = isBlocked ? "awaiting_hitl" : isFailed ? "failed" : isCompleted ? "completed" : "pending";
 
         const summaryMatch = section.match(/\*\*Summary\*\*:\s*\n([\s\S]*?)(?:\n---|\n###|$)/);
         const summary = summaryMatch ? summaryMatch[1].trim() : undefined;
@@ -610,12 +612,18 @@ export class PipelineOrchestrator {
       const lines = pipelineContent.split("\n");
       for (const line of lines) {
         const match = line.match(
-          /\|\s*([✓❌⏳\?])\s*\*\*([^\*]+)\*\*\s*\|\s*([^\|]+)\|\s*([A-Z]+)\s*\|\s*(\d+)s\s*\|\s*([\d,]+)\s*\|/i
+          /\|\s*([✓❌⏳\?🛑])\s*\*\*([^\*]+)\*\*\s*\|\s*([^\|]+)\|\s*([A-Za-z0-9_:\s\.\-\[\]]+?)\s*\|\s*(\d+)s\s*\|\s*([\d,]+)\s*\|/i
         );
         if (match) {
           const rawTag = match[2].trim().toLowerCase();
-          const statusText = match[4].trim().toUpperCase();
-          const status: PhaseStatus = statusText === "COMPLETED" ? "completed" : statusText === "FAILED" ? "failed" : "pending";
+          const statusCol = match[4].trim().toUpperCase();
+          const status: PhaseStatus = statusCol.startsWith("BLOCKED")
+            ? "awaiting_hitl"
+            : statusCol.startsWith("COMPLETED")
+            ? "completed"
+            : statusCol.startsWith("FAILED")
+            ? "failed"
+            : "pending";
           const durationSeconds = parseInt(match[5], 10);
           const totalTokens = parseInt(match[6].replace(/,/g, ""), 10);
 
@@ -1641,10 +1649,36 @@ Construct and execute code for this phase, capturing output to logs.
     const phase = getActivePhase();
     if (!phase) return false;
 
-    const isContinuing = Boolean(continuationTurns && continuationTurns > 0);
+    const normPhase = path.basename(phase.fileName).replace(/\.md$/i, "").toLowerCase();
     const phaseTagUpper = path.basename(phase.fileName).replace(/\.md$/i, "").toUpperCase();
     const phaseTag = phaseTagUpper;
     const cleanTitle = (phase.title || "").replace(/^Phase\s+\d+:\s*/i, "").trim();
+
+    // Guard: Do not allow Phase 2+ to execute if Phase 1 failed or was blocked
+    const phase1 = this.phases.find((p) => p.id === "01" || p.fileName.includes("01_inspect"));
+    if (phase1 && phase.id !== "00" && phase.id !== "01" && phase1.status !== "completed") {
+      const p1Status = (phase1.status || "pending").toUpperCase();
+      this.logPhase(phaseTag, `🛑 Pre-flight Gate Enforced: Cannot execute ${cleanTitle} while Phase 01 status is ${p1Status}. Complete Phase 01 study design first.`);
+      phase.status = "failed";
+      phase.error = `Phase 01 status is ${p1Status}. Human authorization / design completion required before Phase 02.`;
+      await this.appendPhaseRecordToNotes(phase);
+      await this.notifyState();
+      return false;
+    }
+
+    // Guard: Cap integrity retries at one (max 2 attempts)
+    const prevIntegrityFailures = this.phaseFailureCounts.get(phase.id) || 0;
+    if (normPhase.includes("integrity") && prevIntegrityFailures >= 2) {
+      this.logPhase(phaseTag, `🛑 Integrity retries capped (already failed ${prevIntegrityFailures} times). Halting pipeline.`);
+      phase.status = "failed";
+      phase.canContinue = false;
+      phase.error = `Phase 12 Integrity retry limit reached (${prevIntegrityFailures} failures). Checkpoint errors logged to docs/notes.md. Halting execution.`;
+      await this.appendPhaseRecordToNotes(phase);
+      await this.notifyState();
+      return false;
+    }
+
+    const isContinuing = Boolean(continuationTurns && continuationTurns > 0);
     this.chatLogger.setPhase(phase.fileName);
 
     phase.status = "running";
@@ -1844,6 +1878,7 @@ Construct and execute code for this phase, capturing output to logs.
       currentPhase.associatedFiles = this.resolveAssociatedFiles(currentPhase.fileName, currentPhase.id, result.summary);
 
       if (result.success) {
+        this.phaseFailureCounts.delete(currentPhase.id);
         currentPhase.status = "completed";
         this.logPhase(
           phaseTag,
@@ -1858,8 +1893,15 @@ Construct and execute code for this phase, capturing output to logs.
         }
         return true;
       } else {
+        const failures = (this.phaseFailureCounts.get(currentPhase.id) || 0) + 1;
+        this.phaseFailureCounts.set(currentPhase.id, failures);
+        const normCurrent = path.basename(currentPhase.fileName).replace(/\.md$/i, "").toLowerCase();
+        if (normCurrent.includes("integrity") && failures >= 2) {
+          currentPhase.canContinue = false;
+        }
+
         const summaryText = String(result.summary || "Phase failed").trim();
-        const isHitl = /human-in-the-loop|hitl|study design gate|checkpoint gate|pre-flight|confirmation required|section 3/i.test(
+        const isHitl = result.isBlocked || /human-in-the-loop|hitl|study design gate|checkpoint gate|pre-flight|confirmation required|section 3/i.test(
           summaryText
         );
         currentPhase.status = isHitl ? "awaiting_hitl" : "failed";
@@ -1976,8 +2018,8 @@ Construct and execute code for this phase, capturing output to logs.
 
   private async appendPhaseRecordToNotes(phase: PhaseInfo) {
     const notesPath = path.join(this.workspaceRoot, "docs", "notes.md");
-    const statusText = phase.status === "failed" ? "FAILED" : "COMPLETED";
-    const summaryContent = phase.summary || (phase.status === "failed" ? phase.error || "Phase halted or failed." : "Phase checkpoints verified.");
+    const statusText = phase.status === "awaiting_hitl" ? "BLOCKED" : phase.status === "failed" ? "FAILED" : "COMPLETED";
+    const summaryContent = phase.summary || (phase.status === "awaiting_hitl" || phase.status === "failed" ? phase.error || "Phase halted or blocked." : "Phase checkpoints verified.");
     const entry = `
 ### ${phase.title} - ${statusText}
 - **File**: \`${phase.fileName}\`

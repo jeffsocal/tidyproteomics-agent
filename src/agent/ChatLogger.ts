@@ -120,6 +120,7 @@ export class ChatLogger {
     phaseFileName: string;
     model: string;
     provider: string;
+    role?: string;
     systemPromptFiles?: string[];
     inputPromptFiles?: string[];
   }): Promise<void> {
@@ -161,7 +162,7 @@ export class ChatLogger {
       `# Phase: ${phaseTagUpper}`,
       `# [${timestamp}] Phase Start: ${params.phaseTitle}`,
       `- **Phase Directive**: \`${params.phaseFileName}\``,
-      `- **Model**: \`${params.model}\` | **Provider**: \`${params.provider}\``,
+      `- **Model**: \`${params.model}\` (\`${params.role || "toolRunner"}\`) | **Provider**: \`${params.provider}\``,
       `- **Console Output**: [\`logs/${this.currentPhaseTag}/console.log\`](./console.log)`,
       "",
       "### Persistent System Frame (Sent & Cached Prefix)",
@@ -409,10 +410,12 @@ export class ChatLogger {
     durationSeconds: number;
     tokensUsed: TokenUsage;
     turnCount: number;
+    statusTextOverride?: "COMPLETED" | "FAILED" | "BLOCKED";
   }): Promise<void> {
     const timestamp = new Date().toISOString();
-    const statusIcon = params.success ? "✓" : "❌";
-    const statusText = params.success ? "COMPLETED" : "FAILED";
+    const isBlocked = params.statusTextOverride === "BLOCKED" || (!params.success && /human-in-the-loop|hitl|study design gate|checkpoint gate|pre-flight|confirmation required|section 3/i.test(params.summary || ""));
+    const statusIcon = isBlocked ? "🛑" : params.success ? "✓" : "❌";
+    const statusText = params.statusTextOverride || (isBlocked ? "BLOCKED" : params.success ? "COMPLETED" : "FAILED");
     const cached = params.tokensUsed.cachedPromptTokens || 0;
 
     let phaseTag = this.currentPhaseTag;
@@ -438,12 +441,12 @@ export class ChatLogger {
 
     // Update master pipeline.md index table (in place if row already exists, otherwise append)
     if (this.pipelineLogPath) {
-      let statusDisplay = statusText;
+      let statusDisplay: string = statusText;
       if (!params.success && params.summary) {
-        const firstLine = params.summary.replace(/^[❌⚠️\[\]\s*]+/, "").split("\n")[0].trim();
+        const firstLine = params.summary.replace(/^[❌⚠️🛑\[\]\s*]+/, "").split("\n")[0].trim();
         const shortReason = firstLine.length > 45 ? `${firstLine.slice(0, 42)}...` : firstLine;
         if (shortReason) {
-          statusDisplay = `FAILED: ${shortReason}`;
+          statusDisplay = `${statusText}: ${shortReason}`;
         }
       }
       const summaryRow = `| ${statusIcon} **${phaseTag}** | ${params.phaseTitle} | ${statusDisplay} | ${params.durationSeconds}s | ${params.tokensUsed.totalTokens.toLocaleString()} | [Chat](./${phaseTag}/chat.md) \\| [Console](./${phaseTag}/console.log) |`;
@@ -465,7 +468,7 @@ export class ChatLogger {
         }
 
         const lines = content.split("\n");
-        const regex = new RegExp(`^\\|\\s*(?:✓|❌)?\\s*\\*\\*${phaseTag}\\*\\*\\s*\\|`, "i");
+        const regex = new RegExp(`^\\|\\s*(?:✓|❌|🛑)?\\s*\\*\\*${phaseTag}\\*\\*\\s*\\|`, "i");
         let foundIndex = -1;
         for (let i = 0; i < lines.length; i++) {
           if (regex.test(lines[i])) {

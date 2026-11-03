@@ -92,6 +92,7 @@ Organize the document strictly into the following structured sections:
   2. If follow-up data queries were executed, `code/09_websearch.R` exited with code 0 and output was logged to `logs/09_websearch/console.log`.
   3. `data/actionable_synthesis.json` exists on disk with non-zero size and valid structure.
   4. `docs/websearch.md` exists on disk with non-zero size, containing third-layer conclusions, finalized actionable synthesis, and documented references.
+  5. **Non-Empty Summary & Cited-Claim Table Mandate**: When `pubmed_search` or `web_search` is called, `complete_phase` summary must NOT be empty or generic. You must include a concise cited-claim table summarizing queried candidates, retrieved biological mechanisms, and primary PMIDs/DOIs.
 - [ ] **Complete Phase**:
-  - Invoke `complete_phase(phaseName = "09_WEBSEARCH", summary = "Web search gap-filling corroboration complete in docs/websearch.md and finalized actionable synthesis persisted to data/actionable_synthesis.json.")`
+  - Invoke `complete_phase(phaseName = "09_WEBSEARCH", summary = "Web search gap-filling corroboration complete in docs/websearch.md with cited-claim findings (<N> queries executed) and finalized actionable synthesis persisted to data/actionable_synthesis.json.")`
 

@@ -471,6 +471,37 @@ export function verifyCountConsistency(manuscript: string, tables: RunTables): V
   check(/\b(\d[\d,]*)\s+(?:proteins?\s+)?(?:were\s+|are\s+)?(?:significantly\s+)?(?:lower|decreased|down-?regulated|reduced|depleted)\b/gi, downs, "down");
   check(/\b(\d[\d,]*)\s+(?:of\s+[\d,]+\s+)?(?:proteins?\s+)?(?:significantly\s+)?(?:altered|changed|passed|qualified|differentially\s+(?:expressed|abundant))\b/gi, totals, "total DE");
 
+  // Verify count arithmetic (up + down = total)
+  const arithPatterns = [
+    /(\d[\d,]*)\s+(?:proteins?|genes?|features?|DE proteins?).*?\b(\d[\d,]*)\s+(?:were\s+)?(?:up-?regulated|higher|increased|elevated)\b.*?\b(?:and\s+)?(\d[\d,]*)\s+(?:were\s+)?(?:down-?regulated|lower|decreased|reduced|depleted)\b/gi,
+    /\b(\d[\d,]*)\s+(?:were\s+)?(?:up-?regulated|higher|increased|elevated)\b.*?\b(?:and\s+)?(\d[\d,]*)\s+(?:were\s+)?(?:down-?regulated|lower|decreased|reduced|depleted)\b.*?(?:totaling|for a total of|total of|summing to)\s+(\d[\d,]*)\b/gi,
+    /(\d[\d,]*)\s+(?:significant|differentially expressed).*?\(\s*(\d[\d,]*)\s*(?:up|higher|increased)[^)]*?,\s*(\d[\d,]*)\s*(?:down|lower|decreased)[^)]*?\)/gi,
+  ];
+  for (const re of arithPatterns) {
+    let mArith: RegExpExecArray | null;
+    re.lastIndex = 0;
+    while ((mArith = re.exec(text))) {
+      let tot: number, u: number, d: number;
+      if (mArith[0].includes("totaling") || mArith[0].includes("for a total of") || mArith[0].includes("summing to")) {
+        u = parseNum(mArith[1]);
+        d = parseNum(mArith[2]);
+        tot = parseNum(mArith[3]);
+      } else {
+        tot = parseNum(mArith[1]);
+        u = parseNum(mArith[2]);
+        d = parseNum(mArith[3]);
+      }
+      if (Number.isFinite(tot) && Number.isFinite(u) && Number.isFinite(d)) {
+        checked++;
+        if (u + d === tot) {
+          ok++;
+        } else {
+          details.push(`Count arithmetic contradiction: stated ${u} up + ${d} down = ${u + d}, which fails to sum to stated total ${tot} in "${mArith[0].trim().slice(0, 100)}"`);
+        }
+      }
+    }
+  }
+
   // Verify missingness arithmetic if stated in manuscript
   if (tables.accounting && tables.accounting.has("matrix_missingness_percentage")) {
     const trueMissStr = tables.accounting.get("matrix_missingness_percentage")!.replace("%", "").trim();
@@ -533,6 +564,32 @@ export function verifyFigureIntegrity(manuscript: string, runRoot: string): { re
     ...missingList.map((f) => `Referenced figure '${f}' does not exist in data/`),
     ...coreMissing.map((c) => `Core figure not referenced: ${c}`),
   ];
+
+  // Verify caption contract and prevent label collisions (e.g. labeling module heatmap as correlation heatmap)
+  const figuresTsvPath = path.join(runRoot, "data", "figures.tsv");
+  if (fsSync.existsSync(figuresTsvPath)) {
+    try {
+      const figRows = fsSync.readFileSync(figuresTsvPath, "utf-8").split("\n").filter(Boolean);
+      if (figRows.length <= 1) {
+        details.push("data/figures.tsv exists but contains no figure metadata rows.");
+      }
+    } catch { }
+  }
+
+  // Check specific caption contract violations
+  if (/plot_discussion_module\.png/i.test(manuscript)) {
+    const lines = manuscript.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      if (/plot_discussion_module\.png/i.test(lines[i])) {
+        // Inspect surrounding 3 lines for incorrect label
+        const contextLines = lines.slice(Math.max(0, i - 3), Math.min(lines.length, i + 4)).join(" ");
+        if (/abundance\s+correlation|sample\s+correlation|correlation\s+heatmap/i.test(contextLines)) {
+          details.push("Figure caption mismatch: 'plot_discussion_module.png' represents a functional module heatmap, but manuscript labels or titles it as an abundance correlation heatmap.");
+        }
+      }
+    }
+  }
+
   return {
     result: result(0.7 * existFrac + 0.3 * coreFrac, `${refs.size - missingList.length}/${refs.size} referenced figures exist; ${core.length - coreMissing.length}/4 core figures referenced.`, details, 0.9),
     missing: missingList.length,
@@ -663,6 +720,119 @@ export function abstractWordCount(manuscript: string): number | null {
   return sec.body.split(/\s+/).filter(Boolean).length;
 }
 
+export function verifyCandidateReliabilityConsistency(manuscript: string, runRoot: string, tables: RunTables): VerifierResult {
+  const details: string[] = [];
+  const obsCandidates = new Map<string, { gene?: string; protein?: string; reliability: string; delta?: number }>();
+
+  // 1. Ingest docs/observations.md if it exists
+  const obsPath = path.join(runRoot, "docs", "observations.md");
+  if (fsSync.existsSync(obsPath)) {
+    try {
+      const obsContent = fsSync.readFileSync(obsPath, "utf-8");
+      const lines = obsContent.split("\n");
+      for (const line of lines) {
+        if (!line.includes("|")) continue;
+        const parts = line.split("|").map((p) => p.trim());
+        const relIdx = parts.findIndex((p) => /^(ROBUST_QUANTITATIVE|HIGH_UNCERTAINTY|DETECTION_LIMITED_ON_OFF|UNKNOWN)$/.test(p));
+        if (relIdx !== -1) {
+          const reliability = parts[relIdx];
+          let gene: string | undefined;
+          let protein: string | undefined;
+          for (let i = 1; i < relIdx; i++) {
+            const val = parts[i];
+            if (/^[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9]([A-Z][A-Z0-9]{2}[0-9]){1,2}/.test(val)) {
+              protein = val;
+            } else if (/^[A-Za-z0-9_-]{2,15}$/.test(val) && !/^(Rank|Identifier|Protein|Description|Candidate|Gene)$/i.test(val)) {
+              gene = val;
+            }
+          }
+          let delta: number | undefined;
+          for (let i = relIdx + 1; i < parts.length; i++) {
+            const num = parseFloat(parts[i]);
+            if (Number.isFinite(num)) {
+              delta = num;
+              break;
+            }
+          }
+          if (gene || protein) {
+            const entry = { gene, protein, reliability, delta };
+            if (gene) obsCandidates.set(gene.toUpperCase(), entry);
+            if (protein) obsCandidates.set(protein.toUpperCase(), entry);
+          }
+        }
+      }
+    } catch { }
+  }
+
+  // 2. Also check tables.expression
+  for (const row of tables.expression) {
+    if (row.gene) {
+      const g = row.gene.toUpperCase();
+      if (!obsCandidates.has(g) && (row as any).candidate_reliability) {
+        obsCandidates.set(g, {
+          gene: row.gene,
+          protein: row.protein || undefined,
+          reliability: (row as any).candidate_reliability,
+          delta: (row as any).imputation_delta,
+        });
+      }
+    }
+  }
+
+  if (obsCandidates.size === 0) {
+    return result(null, "No candidate reliability annotations available to verify.");
+  }
+
+  let checked = 0;
+  let mismatches = 0;
+  const sentences = manuscript.split(/(?<=[.!?])\s+/);
+
+  for (const s of sentences) {
+    for (const [key, cand] of obsCandidates.entries()) {
+      if (key.length < 3) continue;
+      const wordRe = new RegExp(`\\b${key}\\b`, "i");
+      if (!wordRe.test(s)) continue;
+
+      checked++;
+      const isClaimedRobust = /robust(?:\s+quantitative|\s+quantification|ly\s+quantified)|high\s+quantitative\s+reliability|unaffected\s+by\s+imputation/i.test(s);
+      const isClaimedUncertain = /high\s+uncertainty|detection[\s-]limited|heavily\s+imputed|low\s+confidence/i.test(s);
+
+      if (cand.reliability === "HIGH_UNCERTAINTY" || cand.reliability === "DETECTION_LIMITED_ON_OFF") {
+        if (isClaimedRobust && !isClaimedUncertain) {
+          mismatches++;
+          details.push(`Reliability tag conflict for ${cand.gene || cand.protein || key}: observations marked it '${cand.reliability}', but manuscript claims it as robust quantitative: "${s.trim().slice(0, 120)}"`);
+        }
+      } else if (cand.reliability === "ROBUST_QUANTITATIVE") {
+        if (isClaimedUncertain && !isClaimedRobust) {
+          mismatches++;
+          details.push(`Reliability tag conflict for ${cand.gene || cand.protein || key}: observations marked it 'ROBUST_QUANTITATIVE', but manuscript claims it as uncertain/detection-limited: "${s.trim().slice(0, 120)}"`);
+        }
+      }
+
+      if (cand.delta !== undefined && Number.isFinite(cand.delta)) {
+        const deltaMatch = s.match(/(?:(?:imputation\s+delta|Δ\s*imputation|delta)\s*(?:of|=|:)?\s*|imputed\s+by\s+)(\d+(?:\.\d+)?)/i);
+        if (deltaMatch) {
+          const statedDelta = parseFloat(deltaMatch[1]);
+          if (Number.isFinite(statedDelta) && Math.abs(statedDelta - cand.delta) > 0.05) {
+            mismatches++;
+            details.push(`Imputation delta contradiction for ${cand.gene || cand.protein || key}: observations records Δ imputation = ${cand.delta.toFixed(3)}, but manuscript claims ${statedDelta.toFixed(3)}: "${s.trim().slice(0, 120)}"`);
+          }
+        }
+      }
+    }
+  }
+
+  const score = checked > 0 ? Math.max(0, 1 - (mismatches / Math.max(1, checked))) : 1;
+  return result(
+    score,
+    mismatches === 0
+      ? `Candidate reliability tags and imputation deltas verified consistent across observations and manuscript (${checked} checked mentions).`
+      : `${mismatches} candidate reliability conflict(s) detected across observations and manuscript.`,
+    details,
+    0.85
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* Orchestration                                                       */
 /* ------------------------------------------------------------------ */
@@ -674,6 +844,7 @@ export function runAllVerifiers(manuscript: string, runRoot: string, tables: Run
   const sig = verifySignificanceHonesty(manuscript, tables);
   const figures = verifyFigureIntegrity(manuscript, runRoot);
   const repetition = measureRepetition(manuscript);
+  const candidateRel = verifyCandidateReliabilityConsistency(manuscript, runRoot, tables);
 
   return {
     numericFidelity: numeric.result,
@@ -684,6 +855,7 @@ export function runAllVerifiers(manuscript: string, runRoot: string, tables: Run
     citationIntegrity: verifyCitationIntegrity(manuscript, runRoot),
     sectionStructure: verifySectionStructure(manuscript),
     methodsReproducibility: verifyMethodsReproducibility(manuscript, tables),
+    candidateReliabilityConsistency: candidateRel,
     repetition,
     stats: {
       claimsExtracted: claims.length,
@@ -693,6 +865,7 @@ export function runAllVerifiers(manuscript: string, runRoot: string, tables: Run
       directionErrors: countDirectionErrors(direction),
       overclaims: sig.overclaims,
       missingFigures: figures.missing,
+      candidateTagMismatches: candidateRel.details?.length || 0,
       repetitionRatio: (repetition as any).value ?? null,
       abstractWords: abstractWordCount(manuscript),
       expressionRows: tables.expression.length,

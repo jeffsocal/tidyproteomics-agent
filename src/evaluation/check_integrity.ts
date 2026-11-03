@@ -24,6 +24,7 @@ export interface IntegrityCheckOutput {
     significanceOverclaims: string[];
     missingFigures: string[];
     ungroundedCitations: string[];
+    candidateReliabilityMismatches: string[];
     repetitionWarning: string | null;
   };
   verifierScores: {
@@ -33,6 +34,7 @@ export interface IntegrityCheckOutput {
     countConsistency: number | null;
     figureIntegrity: number | null;
     citationIntegrity: number | null;
+    candidateReliabilityConsistency?: number | null;
   };
 }
 
@@ -58,6 +60,7 @@ export function runIntegrityCheck(
   const significanceOverclaims = report.significanceHonesty.details || [];
   const missingFigures = report.figureIntegrity.details || [];
   const ungroundedCitations = report.citationIntegrity.details || [];
+  const candidateReliabilityMismatches = report.candidateReliabilityConsistency?.details || [];
 
   const repRatio = report.stats.repetitionRatio ?? 0;
   const repetitionWarning =
@@ -71,6 +74,7 @@ export function runIntegrityCheck(
     significanceOverclaims.length +
     missingFigures.length +
     ungroundedCitations.length +
+    candidateReliabilityMismatches.length +
     (repetitionWarning ? 1 : 0);
 
   const hasDefects = totalDefectCount > 0;
@@ -87,6 +91,7 @@ export function runIntegrityCheck(
       significanceOverclaims,
       missingFigures,
       ungroundedCitations,
+      candidateReliabilityMismatches,
       repetitionWarning,
     },
     verifierScores: {
@@ -96,6 +101,7 @@ export function runIntegrityCheck(
       countConsistency: report.countConsistency.score,
       figureIntegrity: report.figureIntegrity.score,
       citationIntegrity: report.citationIntegrity.score,
+      candidateReliabilityConsistency: report.candidateReliabilityConsistency?.score ?? null,
     },
   };
 
@@ -165,6 +171,11 @@ if (require.main === module || process.argv[1]?.endsWith("check_integrity.ts")) 
     if (res.defects.ungroundedCitations.length > 0) {
       console.log(`\n⚠️ UNGROUNDED CITATIONS (${res.defects.ungroundedCitations.length}):`);
       res.defects.ungroundedCitations.forEach((d) => console.log(`   • ${d}`));
+    }
+
+    if (res.defects.candidateReliabilityMismatches.length > 0) {
+      console.log(`\n❌ CANDIDATE RELIABILITY CONFLICTS (${res.defects.candidateReliabilityMismatches.length}):`);
+      res.defects.candidateReliabilityMismatches.forEach((d) => console.log(`   • ${d}`));
     }
 
     if (res.defects.repetitionWarning) {

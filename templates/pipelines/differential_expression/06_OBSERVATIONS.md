@@ -19,6 +19,8 @@ Proceed deterministically in 3 concise turns using the MCP toolset:
 >    - It automatically exports the authoritative, reproducible R script `code/06_observations.R`.
 >    - *(Optional query)*: If specific biomarker candidates or functional pathways require deeper inspection, query them directly via `tpa_query_expression` or `tpa_query_enrichment`.
 > 2. **Turn 2 (Assemble `docs/observations.md`)**: Inspect `docs/observations_summary.md` via `read_file(filePath = "docs/observations_summary.md")` and construct `docs/observations.md` in a single pass following the document structure below.
+>    - **Expression Header Verification**: Inspect the first 2 lines of exported expression data (e.g. `read_file(filePath = "data/table_expression_*.tsv", EndLine = 2)`) to confirm available columns (`gene_name`, `description`). Never claim symbols or descriptions are attached if these columns are missing or blank.
+>    - **Contrast Completeness Mandate**: The summary for EVERY evaluated contrast must be copied in full from `tpa_compile_summary` (Strict, Relaxed, and Nominal counts for each contrast, e.g. `s3/s1`). Never omit threshold tiers or contrasts; if a metric is absent from tool output, explicitly tag it `TOOL_OUTPUT_MISSING`.
 > 3. **Turn 3 (Phase Gate Verification)**: Verify checkpoint artifacts (`code/06_observations.R`, `docs/observations_summary.md`, `docs/observations.md`), verify `Rscript code/06_observations.R` passes with `PHASE_6_EXTRACTION_CHECKPOINT_PASS`, and invoke `complete_phase`.
 
 ---

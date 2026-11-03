@@ -74,6 +74,7 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/01_i
          - Technical replicates / cuts (flagging subjects with duplicate injections/cuts within a group so technical duplicates are not confused with independent biological replicates).
          - Discovered sample groups table with raw file counts and unique subject counts.
          - Confirmation toggle: `- **Confirm Discovered Sample Groups**: FALSE`.
+         - **Biological Mapping Rule**: If any sample group lacks a biological label (e.g. raw codes like `s1, s2, s3`), set `- **Confirm Discovered Sample Groups**: FALSE` and do NOT call `complete_phase`. A human deviation must explicitly set `analysis_mode: cohort_coded_descriptive` before Phase 2 can proceed.
       2. **Section 3.B**: Label with `👉 [USER ACTION REQUIRED - CONFIGURE & CONFIRM NORMALIZATION STRATEGY]:` and scaffold the **Quantitative Normalization Strategy**:
          - By default, set `- **Normalization Methods**: default` (which benchmarks linear models `scaled, median, linear, limma` plus `loess`), `- **Normalization Subset Filter**: NONE`, and `- **Confirm Normalization Strategy**: FALSE`.
          - If Section 2 explicitly requests `randomforest` or `svm` normalization, include it in `- **Normalization Methods**`.
@@ -105,6 +106,7 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/01_i
 - [ ] **Checkpoint 1.4 (Design Alignment Gate)**:
   - Verify that discovered sample groups, alignment with `docs/experiment.md`, and Section 3 (`3.A`–`3.G`) scaffolding are complete.
   - Phase 1 must NEVER invoke `fail_phase` for pre-ingestion audit warnings, unmapped columns, discovered groups, batch suffixes, or confounding if `tpa_load` loads the data with quantified entities.
+  - **Unmapped Cohort Code Gate**: If any sample group lacks a biological condition label, you must set `- **Confirm Discovered Sample Groups**: FALSE` and halt for HITL review. Do not call `complete_phase`. If the user confirms execution with unmapped cohorts, an explicit `analysis_mode: cohort_coded_descriptive` deviation must be recorded before Phase 2.
 - [ ] **Complete Phase (Automated Blackboard Recording)**:
   - Do NOT manually edit `docs/notes.md` via file tools; the orchestrator automatically records your `complete_phase` summary into `docs/notes.md`.
   - Invoke `complete_phase` with a comprehensive summary including quantified entity count, sample inventory, proposed/confirmed contrast groups, baseline quality stats, and detected upstream operations:

@@ -8,6 +8,10 @@ export interface ExperimentSpec {
   platform: string | null;
   analyte: string | null;
   description: string | null;
+  analysisMode: "hypothesis_test" | "cohort_coded_descriptive";
+  subjectPairing: "paired" | "unpaired" | "unknown";
+  batchEffect: "none" | "column" | "unknown";
+  groupLabelsMapped: boolean;
   rawSampleGroups: string[];
   discoveredGroups: string[];
   discoveredGroupsConfirmed: boolean;
@@ -140,6 +144,10 @@ export class ExperimentManager {
         platform: null,
         analyte: null,
         description: null,
+        analysisMode: "hypothesis_test",
+        subjectPairing: "unpaired",
+        batchEffect: "none",
+        groupLabelsMapped: false,
         rawSampleGroups: [],
         discoveredGroups: [],
         discoveredGroupsConfirmed: false,
@@ -300,9 +308,43 @@ export class ExperimentManager {
 
     const effectiveGroups = cleanBiologicalGroups.length >= 2 ? cleanBiologicalGroups : rawGroups;
 
-    // 8. Confirmation Checks for All Section 3 Sub-Tasks
-    // 3.A Discovered Groups Confirmation
-    const discoveredGroupsConfirmed = /-\s*\*\*Confirm Discovered Sample Groups\*\*:\s*TRUE/i.test(content);
+    // 8. Typed Design Object Metadata
+    const modeMatch = content.match(/-\s*\*\*Analysis Mode\*\*:\s*([^\n\r]+)/i);
+    const analysisMode: "hypothesis_test" | "cohort_coded_descriptive" =
+      modeMatch && /cohort_coded_descriptive/i.test(modeMatch[1]) ? "cohort_coded_descriptive" : "hypothesis_test";
+
+    const pairingMatch = content.match(/-\s*\*\*Subject Pairing\*\*:\s*([^\n\r]+)/i);
+    const subjectPairing: "paired" | "unpaired" | "unknown" =
+      pairingMatch && /paired/i.test(pairingMatch[1])
+        ? "paired"
+        : pairingMatch && /unknown/i.test(pairingMatch[1])
+        ? "unknown"
+        : "unpaired";
+
+    const batchMatch = content.match(/-\s*\*\*Batch Effect\*\*:\s*([^\n\r]+)/i);
+    const batchEffect: "none" | "column" | "unknown" =
+      batchMatch && /column/i.test(batchMatch[1])
+        ? "column"
+        : batchMatch && /unknown/i.test(batchMatch[1])
+        ? "unknown"
+        : "none";
+
+    const hasUnmapped = rawGroups.length > 0 && rawGroups.some(g => {
+      const lower = g.toLowerCase();
+      const isCodedOnly = /^[sS]?\d+$/.test(lower) || /^(sample|group|cohort)[-_]?\d+$/i.test(lower);
+      const mapped = sampleRenamingMap[g];
+      return isCodedOnly && (!mapped || /^[sS]?\d+$/.test(mapped) || /^(sample|group|cohort)[-_]?\d+$/i.test(mapped));
+    });
+    const groupLabelsMappedMatch = content.match(/-\s*\*\*Group Labels Mapped\*\*:\s*([^\n\r]+)/i);
+    const groupLabelsMapped = groupLabelsMappedMatch
+      ? /TRUE/i.test(groupLabelsMappedMatch[1])
+      : !hasUnmapped;
+
+    // 3.A Discovered Groups Confirmation: illegal to set TRUE if cohorts are unmapped without explicit descriptive deviation
+    let discoveredGroupsConfirmed = /-\s*\*\*Confirm Discovered Sample Groups\*\*:\s*TRUE/i.test(content);
+    if (analysisMode !== "cohort_coded_descriptive" && hasUnmapped && !groupLabelsMapped) {
+      discoveredGroupsConfirmed = false;
+    }
 
     // 3.B Quantitative Normalization Strategy & Confirmation
     const normMethodsMatch = content.match(/-\s*\*\*Normalization Methods\*\*:\s*([^\n\r]+)/i);
@@ -374,6 +416,10 @@ export class ExperimentManager {
       platform,
       analyte,
       description,
+      analysisMode,
+      subjectPairing,
+      batchEffect,
+      groupLabelsMapped,
       rawSampleGroups: rawGroups,
       discoveredGroups: effectiveGroups,
       discoveredGroupsConfirmed,
@@ -448,13 +494,36 @@ export class ExperimentManager {
     await fs.writeFile(expPath, content, "utf-8");
   }
 
+  public async setAnalysisMode(mode: "hypothesis_test" | "cohort_coded_descriptive"): Promise<void> {
+    await this.ensureExperimentDoc();
+    const expPath = this.getExperimentPath();
+    let content = await fs.readFile(expPath, "utf-8");
+    if (/-\s*\*\*Analysis Mode\*\*:/i.test(content)) {
+      content = content.replace(/(-\s*\*\*Analysis Mode\*\*:\s*)([^\n\r]+)/i, `$1${mode}`);
+    } else {
+      content = content.replace(/(## 3\. Bioinformatics Design\s*\n)/i, `$1\n- **Analysis Mode**: ${mode}\n`);
+    }
+    await fs.writeFile(expPath, content, "utf-8");
+  }
+
   /**
    * Sets Section 3.A Discovered Sample Groups confirmation check.
    */
   public async setDiscoveredGroupsConfirmed(confirmed: boolean = true): Promise<void> {
     await this.ensureExperimentDoc();
     const expPath = this.getExperimentPath();
+    const spec = await this.readSpec();
     let content = await fs.readFile(expPath, "utf-8");
+
+    // Guard: Confirm flags may be set TRUE only after non-empty sample-key field,
+    // or an explicit DEVIATION_ACCEPTED / cohort_coded_descriptive mode (Issue 2)
+    if (confirmed && !spec.groupLabelsMapped && spec.analysisMode !== "cohort_coded_descriptive") {
+      throw new Error(
+        "Cannot set Confirm Discovered Sample Groups: TRUE while sample group biological identities are unmapped. " +
+        "Map cohorts to biological condition labels in Section 3.D, or explicitly set Analysis Mode: cohort_coded_descriptive."
+      );
+    }
+
     const val = confirmed ? "TRUE" : "FALSE";
     if (/-\s*\*\*Confirm Discovered Sample Groups\*\*:/i.test(content)) {
       content = content.replace(/(-\s*\*\*Confirm Discovered Sample Groups\*\*:\s*)(TRUE|FALSE)/i, `$1${val}`);
@@ -844,6 +913,9 @@ export class ExperimentManager {
    */
   public async updateFromForm(patch: Partial<ExperimentSpec>): Promise<{ spec: ExperimentSpec; raw: string }> {
     await this.ensureExperimentDoc();
+    if (patch.analysisMode !== undefined && patch.analysisMode !== null) {
+      await this.setAnalysisMode(patch.analysisMode);
+    }
     if (patch.pathToDataFile !== undefined && patch.pathToDataFile !== null) {
       await this.setParameter("PATH_TO_DATA_FILE", patch.pathToDataFile);
     }
@@ -993,6 +1065,10 @@ export class ExperimentManager {
     const spec = await this.readSpec();
 
     // Confirm 3.A Discovered Groups
+    if (!spec.groupLabelsMapped && spec.analysisMode !== "cohort_coded_descriptive") {
+      // Unmapped cohort codes require explicit DEVIATION_ACCEPTED descriptive mode before confirming
+      await this.setAnalysisMode("cohort_coded_descriptive");
+    }
     await this.setDiscoveredGroupsConfirmed(true);
 
     // Confirm 3.B Normalization

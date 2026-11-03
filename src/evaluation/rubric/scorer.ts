@@ -35,8 +35,8 @@ export function computeAnalyticalFidelityScore(v: VerifierReport): number {
   let num = 0;
   let den = 0;
   for (const w of FIDELITY_WEIGHTS) {
-    const s = v[w.key].score;
-    if (s !== null) {
+    const s = v[w.key]?.score;
+    if (s !== null && s !== undefined) {
       num += s * w.weight;
       den += w.weight;
     }

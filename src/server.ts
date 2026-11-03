@@ -820,6 +820,15 @@ async function startServer() {
       const expMgr = agentService.getExperimentManager();
       const { spec, raw } = await expMgr.updateFromForm(req.body || {});
       broadcast({ type: "experimentUpdate", spec, raw });
+
+      // Verbatim persistence of form payload into agent dialogue trace (Issue 3)
+      const formKeys = Object.keys(req.body || {}).filter((k) => req.body[k] !== undefined);
+      if (formKeys.length > 0) {
+        const payloadSummary = `[Experiment Form Update]: Updated ${formKeys.join(", ")} in docs/experiment.md (Mode: ${spec.analysisMode}, Pairing: ${spec.subjectPairing}, Batch: ${spec.batchEffect}, Discovered Groups Confirmed: ${spec.discoveredGroupsConfirmed})`;
+        agentService.addUserMessage(payloadSummary);
+        await agentService.saveCurrentSession();
+      }
+
       res.json({ ok: true, spec, raw });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err.message });
@@ -834,11 +843,12 @@ async function startServer() {
       const confirmedContrasts = await expMgr.confirmContrastAndAuthorizeConfounding(contrasts);
       await broadcastExperimentSpec();
 
-      // Record user confirmation in agent stream so pending checkpoints transition to neutral grey
+      // Record user confirmation in agent stream and flush immediately to disk (Issue 3)
       const detail = confirmedContrasts && confirmedContrasts.length > 0
-        ? `Confirmed target contrasts (${confirmedContrasts.join(", ")}) & authorized study design parameters in docs/experiment.md`
-        : "Confirmed study design & parameters in docs/experiment.md";
+        ? `[HITL Confirmation]: Confirmed target contrasts (${confirmedContrasts.join(", ")}) & authorized study design parameters in docs/experiment.md`
+        : "[HITL Confirmation]: Confirmed study design & parameters in docs/experiment.md";
       agentService.addUserMessage(detail);
+      await agentService.saveCurrentSession();
 
       if (orchestrator.isBusy()) {
         return res.status(409).json({ ok: false, error: "A pipeline or phase is currently running or stopping. Please wait or stop it first." });

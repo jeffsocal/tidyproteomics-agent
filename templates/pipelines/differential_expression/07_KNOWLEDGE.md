@@ -19,8 +19,9 @@ Finally, you will construct `docs/knowledge.md` documenting both the **new** obs
 #### 1. Pre-Flight Verification & Inputs Ingestion
 Before proceeding:
 1. Read `docs/observations.md` in a single turn to ingest verified quantitative data (dimensions, target metrics, top up/down tables, and enrichment summaries).
-2. Rely on the `[WORKSPACE MANIFEST]` and `docs/experiment.md` already injected in your prompt above—do NOT waste turns calling `list_directory`, dumping raw tabular rows from `data/table_*_expression_*.tsv` into prompt context, or re-reading `docs/experiment.md`.
-3. ⚠️ **Immediate Tool Call Requirement**: Do NOT emit conversational preambles or announcements between reading observations and authoring code (e.g. "Let me create the R script..."). In your very next turn after reading `docs/observations.md`, immediately invoke `write_file("code/07_knowledge.R", ...)` to author the analysis script.
+2. **Annotation Provenance Check**: Inspect `data/annotations_uniprot.tsv.status.json` (or verify whether `data/annotations_uniprot.tsv` exists). If `data/annotations_uniprot.tsv` does not exist or has `written: false`, you MUST NOT state or claim that gene symbols/annotations were resolved from that file. Instead, state explicitly: *"External UniProt annotation TSV was not written (ANNOTATION_UNAVAILABLE); gene symbols were sourced from FASTA headers or model knowledge (unverified)."*
+3. Rely on the `[WORKSPACE MANIFEST]` and `docs/experiment.md` already injected in your prompt above—do NOT waste turns calling `list_directory`, dumping raw tabular rows from `data/table_*_expression_*.tsv` into prompt context, or re-reading `docs/experiment.md`.
+4. ⚠️ **Immediate Tool Call Requirement**: Do NOT emit conversational preambles or announcements between reading observations and authoring code (e.g. "Let me create the R script..."). In your very next turn after reading `docs/observations.md`, immediately invoke `write_file("code/07_knowledge.R", ...)` to author the analysis script. Reasoner phases computing statistics must execute and cite checked script output (`code/07_knowledge.R`), quoting the stdout table and row count of `data/de_novo_modules.tsv`.
 
 ---
 

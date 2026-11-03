@@ -60,6 +60,7 @@ export interface LLMTierConfig {
 export interface LLMConfig {
   provider: LLMProviderType;
   model: string;
+  role?: LLMRole;
   apiKey: string;
   baseUrl?: string;
   temperature?: number;

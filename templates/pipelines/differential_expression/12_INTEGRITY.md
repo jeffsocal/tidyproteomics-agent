@@ -42,6 +42,8 @@ To ensure full reproducibility and auditable provenance:
    - **Significance Overclaims**: Proteins asserted as "significant" when $q > 0.05$ without hedging.
    - **Missingness & Denominator Audit**: Verify that stated missingness percentage matches `data/table_feature_accounting.tsv:matrix_missingness_percentage` (e.g. 15.1% true matrix missingness rather than Phase 1 pre-filter 9.1%), and ensure that the experimental design distinguishes raw data files (e.g. 23) from biological condition groups (e.g. 6).
    - **Filter Completeness Audit**: Ensure Methods states the unique-peptide filter (e.g. $\ge 2$ unique peptides) and contaminant filtering.
+   - **Candidate Reliability Tags & Arithmetic Diffs**: Verify that candidate reliability tags and imputation deltas match `docs/observations.md` (flagged under `candidateReliabilityMismatches` in `check_integrity`): e.g., if Cox6c is `HIGH_UNCERTAINTY`, eliminate any claims calling it 'robust quantitative'. Check count arithmetic: ensure relaxed up + down counts sum to the stated total (e.g. $217 + 148 = 365$, not $366$).
+   - **Figure Caption Contract**: Ensure `plot_discussion_module.png` is labeled as a functional module heatmap, never an abundance correlation heatmap.
    - **Missing Figures**: References to figures not present in `data/`.
    - **Ungrounded Citations**: DOIs or PMIDs not present in literature logs.
 
@@ -78,3 +80,4 @@ Before calling `complete_phase`, confirm:
 2. `docs/manuscript_rev_00.md` exists on disk (preserving baseline Phase 11 synthesis).
 3. `docs/manuscript_rev_01.md` exists on disk and has identical content to `docs/manuscript.md`.
 4. Zero unaddressed direction errors remain. All confirmed defects have been corrected in `docs/manuscript_rev_01.md` and `docs/manuscript.md`. Any false-positive matcher artifacts (e.g. proximity across clauses or prospective experiment mentions) must be explicitly listed and biologically justified under 'Dismissed Flags' in `docs/report_integrity.md`.
+5. **Gate Error Quoting & Retry Limit**: If `check_checkpoint_gate` fails, you MUST quote the exact checkpoint error in your next turn before retrying. Integrity gate retries are capped at one (maximum 2 attempts). If failures persist, the orchestrator will dump checkpoint stderr into `docs/notes.md` and halt.

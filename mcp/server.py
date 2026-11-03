@@ -10,6 +10,7 @@ import sys
 import json
 import os
 import time
+import datetime
 import subprocess
 import urllib.request
 import urllib.error
@@ -105,6 +106,23 @@ def ensure_daemon():
         except Exception:
             continue
     raise RuntimeError("Failed to connect to R Daemon after 15 seconds.")
+
+def get_daemon_stderr(max_lines=40):
+    log_dir = os.environ.get("TIDY_LOG_DIR")
+    if not log_dir:
+        if os.access(SCRIPT_DIR, os.W_OK):
+            log_dir = SCRIPT_DIR
+        else:
+            log_dir = os.path.join(os.path.expanduser("~"), ".tidyproteomics")
+    log_file = os.path.join(log_dir, "daemon.log")
+    if os.path.exists(log_file):
+        try:
+            with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+                return "".join(lines[-max_lines:])
+        except Exception:
+            pass
+    return "No daemon stderr available."
 
 def call_daemon(endpoint, payload=None):
     """Sends HTTP POST or GET to the R daemon."""
@@ -1245,10 +1263,51 @@ def handle_tool_call(name, args):
 
     elif name == "tpa_fetch_annotations":
         res = call_daemon("/fetch_annotations", args)
+        taxon = args.get("taxon_id") or "auto"
+        source = args.get("source") or "uniprot"
+        status_file = f"data/annotations_{source}.tsv.status.json"
+
         if res.get("success"):
+            try:
+                os.makedirs("data", exist_ok=True)
+                if not os.path.exists(status_file):
+                    with open(status_file, "w") as f:
+                        json.dump({
+                            "written": True,
+                            "source": source,
+                            "taxon": str(taxon),
+                            "timestamp": datetime.datetime.now().isoformat()
+                        }, f, indent=2)
+            except Exception:
+                pass
             return res.get("summary", "UniProt annotations fetched successfully.")
+
         err_msg = res.get("error") or res.get("message") or "Unknown error from annotation daemon."
-        return f"Error in fetch_annotations: {err_msg}"
+        stderr_snippet = get_daemon_stderr(40)
+
+        try:
+            os.makedirs("data", exist_ok=True)
+            with open(status_file, "w") as f:
+                json.dump({
+                    "written": False,
+                    "source": source,
+                    "url": "https://rest.uniprot.org",
+                    "taxon": str(taxon),
+                    "error": str(err_msg),
+                    "stderr": stderr_snippet,
+                    "timestamp": datetime.datetime.now().isoformat()
+                }, f, indent=2)
+        except Exception:
+            pass
+
+        return (
+            f"Error in fetch_annotations: [ANNOTATION_DAEMON_ERROR]\n"
+            f"- Taxon ID: {taxon}\n"
+            f"- Endpoint URL: https://rest.uniprot.org\n"
+            f"- Status: FAILED\n"
+            f"- Error: {err_msg}\n"
+            f"- Daemon Stderr:\n```\n{stderr_snippet.strip()}\n```"
+        )
 
     elif name == "tpa_list_annotations":
         res = call_daemon("/list_annotations", args)

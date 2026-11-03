@@ -9,6 +9,7 @@ import { ChatLogger } from "./ChatLogger";
 
 export interface LoopResult {
   success: boolean;
+  isBlocked?: boolean;
   summary: string;
   tokensUsed: TokenUsage;
   phaseName: string;
@@ -338,6 +339,7 @@ export class AgentLoop {
         phaseFileName: this.phaseName,
         model: cfg.model,
         provider: cfg.provider,
+        role: cfg.role || "toolRunner",
         systemPromptFiles: [
           "agent/PROTOCOL.md",
         ],
@@ -661,6 +663,24 @@ export class AgentLoop {
           if (this.checkCancelled()) {
             break;
           }
+
+          // Guard: Reject malformed tool calls whose name is not registered in ToolRegistry (e.g. contrast string 's3/s1')
+          if (!this.tools.hasTool(tc.name)) {
+            const availableNames = this.tools.getDefinitions().map((t) => t.name).join(", ");
+            const invalidMsg = `❌ [REJECTED TOOL INVOCATION]: Tool '${tc.name}' does not exist in the active tool registry. Available tools: ${availableNames}`;
+            this.onProgress({
+              type: "tool_end",
+              data: { name: tc.name, result: invalidMsg, isError: true },
+            });
+            this.messages.push({
+              role: "tool",
+              tool_name: tc.name,
+              tool_call_id: tc.id,
+              content: invalidMsg,
+            });
+            continue;
+          }
+
           this.onProgress({
             type: "tool_start",
             data: { name: tc.name, args: tc.args },
@@ -892,6 +912,7 @@ DO NOT repeat the identical failing command without structural fixes:
                 phaseTitle: this.phaseTitle || this.phaseName,
                 phaseFileName: this.phaseName,
                 success: false,
+                statusTextOverride: isHitlHalt ? "BLOCKED" : "FAILED",
                 summary,
                 durationSeconds,
                 tokensUsed: this.totalUsage,
@@ -901,6 +922,7 @@ DO NOT repeat the identical failing command without structural fixes:
 
             return {
               success: false,
+              isBlocked: isHitlHalt,
               summary,
               tokensUsed: this.totalUsage,
               phaseName: this.phaseName,
@@ -910,6 +932,24 @@ DO NOT repeat the identical failing command without structural fixes:
 
           if (tc.name === "complete_phase") {
             const proposedSummary = String(tc.args?.summary || response.content || "");
+
+            // Guard: Check if search tools were called (Issue 11)
+            const searchToolsUsed = this.messages.some(
+              (m) => m.role === "tool" && (m.tool_name === "pubmed_search" || m.tool_name === "web_search")
+            );
+            if (searchToolsUsed && (!proposedSummary || proposedSummary.trim().length < 120 || !/claim|query|search|pmid|finding|citation|result|concordance/i.test(proposedSummary))) {
+              const searchSummaryError = `❌ [CHECKPOINT GATE ERROR]: Search tools (pubmed_search/web_search) were invoked during this phase, but the complete_phase summary is empty or missing a cited-claim table. A detailed summary specifying queries executed, hit counts, and external cited claims is mandatory.`;
+              this.messages.push({
+                role: "user",
+                content: searchSummaryError,
+              });
+              this.onProgress({
+                type: "thought",
+                data: "Checkpoint gate check failed: complete_phase summary missing cited-claim table after search tool execution.",
+              });
+              continue;
+            }
+
             // Verify mandatory deliverables before allowing phase completion
             const gateErrors = await this.verifyPhaseGateDeliverables(this.phaseName, proposedSummary);
             if (gateErrors.length > 0) {
@@ -1266,9 +1306,47 @@ DO NOT repeat the identical failing command without structural fixes:
     } else if (normPhase.includes("06_observations")) {
       const hasObs = await checkFile("docs/observations.md");
       if (!hasObs) missing.push("docs/observations.md");
+
+      // Verify expression table header matches annotation claims (Issue 7)
+      try {
+        const dataDirPath = path.resolve(root, "data");
+        if (fsSync.existsSync(dataDirPath)) {
+          const exprFiles = (await fs.readdir(dataDirPath)).filter(f => /^table_.*expression_.*\.(tsv|csv)$/i.test(f));
+          if (exprFiles.length > 0) {
+            const firstExpr = path.join(dataDirPath, exprFiles[0]);
+            const headLine = (await fs.readFile(firstExpr, "utf-8")).split("\n")[0];
+            const hasGeneCol = /gene_name|gene|symbol/i.test(headLine);
+            const obsContent = fsSync.existsSync(path.resolve(root, "docs/observations.md"))
+              ? await fs.readFile(path.resolve(root, "docs/observations.md"), "utf-8")
+              : "";
+            if (!hasGeneCol && /symbols attached for 100%|gene symbols and descriptions attached/i.test(obsContent)) {
+              missing.push("Expression table header lacks gene symbols; observations summary contradicts export header.");
+            }
+          }
+        }
+      } catch {}
     } else if (normPhase.includes("07_knowledge")) {
       const hasKnowledge = await checkFile("docs/knowledge.md");
       if (!hasKnowledge) missing.push("docs/knowledge.md");
+
+      // Verify annotation file provenance claim (Issue 9)
+      try {
+        const statusJsonPath = path.resolve(root, "data/annotations_uniprot.tsv.status.json");
+        const tsvPath = path.resolve(root, "data/annotations_uniprot.tsv");
+        let isTsvWritten = fsSync.existsSync(tsvPath) && fsSync.statSync(tsvPath).size > 0;
+        if (fsSync.existsSync(statusJsonPath)) {
+          try {
+            const statusObj = JSON.parse(await fs.readFile(statusJsonPath, "utf-8"));
+            if (statusObj.written === false) isTsvWritten = false;
+          } catch {}
+        }
+        const knowContent = fsSync.existsSync(path.resolve(root, "docs/knowledge.md"))
+          ? await fs.readFile(path.resolve(root, "docs/knowledge.md"), "utf-8")
+          : "";
+        if (!isTsvWritten && /resolved from data\/annotations_uniprot\.tsv|from data\/annotations_uniprot\.tsv/i.test(knowContent)) {
+          missing.push("data/annotations_uniprot.tsv is absent or marked written:false. docs/knowledge.md must declare symbols came from unverified model memory, not data/annotations_uniprot.tsv.");
+        }
+      } catch {}
     } else if (normPhase.includes("08_literature") || normPhase.includes("literature")) {
       const hasLit = await checkFile("docs/literature.md");
       const hasActionable = await checkFile("data/actionable_synthesis.json");
@@ -1289,7 +1367,9 @@ DO NOT repeat the identical failing command without structural fixes:
       if (!hasPca && !hasHeatmap) missing.push("data/*pca*.png or data/*heatmap*.png");
     } else if (normPhase.includes("figures")) {
       const hasFig = await checkFile("data/plot_*.png");
+      const hasFiguresTsv = await checkFile("data/figures.tsv");
       if (!hasFig) missing.push("data/plot_*.png (at least one publication figure)");
+      if (!hasFiguresTsv) missing.push("data/figures.tsv (captions registry: path, generator, caption, what_it_shows)");
     } else if (normPhase.includes("synthesis")) {
       const hasManuscript = (await checkFile("manuscript.md")) || (await checkFile("docs/manuscript.md"));
       if (!hasManuscript) missing.push("manuscript.md or docs/manuscript.md");

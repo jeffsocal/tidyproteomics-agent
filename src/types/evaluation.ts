@@ -33,6 +33,7 @@ export interface VerifierReport {
   citationIntegrity: VerifierResult;
   sectionStructure: VerifierResult;
   methodsReproducibility: VerifierResult;
+  candidateReliabilityConsistency?: VerifierResult;
   repetition: VerifierResult;
   stats: {
     claimsExtracted: number;
@@ -42,6 +43,7 @@ export interface VerifierReport {
     directionErrors: number;
     overclaims: number;
     missingFigures: number;
+    candidateTagMismatches?: number;
     repetitionRatio: number | null;
     abstractWords: number | null;
     expressionRows: number;

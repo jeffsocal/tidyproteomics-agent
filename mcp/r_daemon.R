@@ -440,23 +440,28 @@ fetch_uniprot_annotations <- function(orig_ids, target_id_col = "protein", targe
     )
     
     res_text <- NULL
-    tryCatch({
-      resp <- httr::GET(
-        query_url,
-        httr::user_agent("TidyProteomicsAgent/1.0"),
-        httr::timeout(35)
-      )
-      st <- httr::status_code(resp)
-      if (st == 200) {
-        res_text <- httr::content(resp, as = "text", encoding = "UTF-8")
-      } else {
-        last_err <- glue::glue("HTTP {st} from UniProt API")
-        cat(glue::glue("[TidyDaemon] Warning: batch {b}/{total_batches} HTTP {st}\n"))
-      }
-    }, error = function(e) {
-      last_err <- e$message
-      cat(glue::glue("[TidyDaemon] Warning: batch {b}/{total_batches} fetch error: {e$message}\n"))
-    })
+    for (attempt in 1:2) {
+      tryCatch({
+        resp <- httr::GET(
+          query_url,
+          httr::user_agent("TidyProteomicsAgent/1.0"),
+          httr::timeout(45)
+        )
+        st <- httr::status_code(resp)
+        if (st == 200) {
+          res_text <- httr::content(resp, as = "text", encoding = "UTF-8")
+          break
+        } else {
+          last_err <- glue::glue("HTTP {st} from UniProt API")
+          cat(glue::glue("[TidyDaemon] Warning: batch {b}/{total_batches} HTTP {st} (attempt {attempt}/2)\n"))
+          if (attempt < 2) Sys.sleep(1.5)
+        }
+      }, error = function(e) {
+        last_err <- e$message
+        cat(glue::glue("[TidyDaemon] Warning: batch {b}/{total_batches} fetch error: {e$message} (attempt {attempt}/2)\n"))
+        if (attempt < 2) Sys.sleep(1.5)
+      })
+    }
 
     if (!is.null(res_text) && nzchar(res_text)) {
       parsed <- tryCatch(jsonlite::fromJSON(res_text, simplifyVector = FALSE), error = function(e) NULL)
@@ -1049,6 +1054,13 @@ handle_request <- function(req) {
           stop("Expression parameter is required for subset")
         }
 
+        if (grepl("\\bnum_unique_peptides\\b", expr_str)) {
+          has_num_uniq <- !is.null(data$accounting$num_unique_peptides)
+          if (!has_num_uniq) {
+            stop("COLUMN_MISSING: num_unique_peptides is absent from the dataset. Ensure platform configuration maps unique peptide columns (e.g. via tpa_ingest_config) before filtering on num_unique_peptides.")
+          }
+        }
+
         clauses <- split_top_level_and(expr_str)
         for (clause in clauses) {
           log_line <- glue::glue("{STATE$active_id} <- {STATE$active_id} %>% subset({clause})")
@@ -1252,11 +1264,32 @@ handle_request <- function(req) {
           stop(glue::glue("Annotation source '{source}' is currently not supported for direct remote fetching. Please use 'uniprot'."))
         }
 
+        status_file <- resolve_workspace_file(glue::glue("data/annotations_{source}.tsv.status.json"))
         if (is.null(annot_df) || nrow(annot_df) == 0) {
-          stop("Zero annotations retrieved from external query. Check accession formats and network connectivity.")
+          status_err <- list(
+            written = FALSE,
+            source = source,
+            url = "https://rest.uniprot.org",
+            taxon = if (!is.null(taxon_id)) as.character(taxon_id) else "auto",
+            error = "Zero annotations retrieved from external query. Check accession formats and network connectivity.",
+            timestamp = as.character(Sys.time())
+          )
+          tryCatch(jsonlite::write_json(status_err, status_file, pretty = TRUE, auto_unbox = TRUE), error = function(e) NULL)
+          stop(glue::glue("Zero annotations retrieved from external query (taxon: {status_err$taxon}, source: {source})."))
         }
 
         readr::write_tsv(annot_df, target_path)
+
+        status_ok <- list(
+          written = TRUE,
+          source = source,
+          total_dataset_proteins = length(dataset_proteins),
+          annotated_proteins = length(unique(annot_df[[id_col]])),
+          rows = nrow(annot_df),
+          taxon = if (!is.null(taxon_id)) as.character(taxon_id) else "auto",
+          timestamp = as.character(Sys.time())
+        )
+        tryCatch(jsonlite::write_json(status_ok, status_file, pretty = TRUE, auto_unbox = TRUE), error = function(e) NULL)
 
         prov_path <- resolve_workspace_file("data/annotations_provenance.json")
         prov_data <- list(
@@ -1411,33 +1444,88 @@ handle_request <- function(req) {
         log_code(sub("^data %>%", glue::glue("{STATE$active_id} <- {STATE$active_id} %>%"), eval_str))
 
         summary_text <- paste(capture.output(summary(data, "normalization")), collapse = "\n")
+
+        # Check for CV NaN / undefined
+        reps_per_sample <- if (!is.null(data$experiments$sample)) table(data$experiments$sample) else integer(0)
+        all_singletons <- length(reps_per_sample) > 0 && all(reps_per_sample <= 1)
+
+        cv_undefined <- FALSE
+        cv_reason <- ""
+        if (all_singletons) {
+          cv_undefined <- TRUE
+          cv_reason <- "Sample group size <= 1; every sample group contains only 1 replicate, preventing replicate variance/CV calculation."
+        } else {
+          tbl_stats <- tryCatch(tidyproteomics:::stats_summary(data, group_by = "normalization"), error = function(e) NULL)
+          if (!is.null(tbl_stats) && "CV" %in% names(tbl_stats)) {
+            if (all(is.na(tbl_stats$CV) | is.nan(tbl_stats$CV))) {
+              cv_undefined <- TRUE
+              cv_reason <- "Replicate CV returned non-finite (zero variance or non-numeric/missing intensity values across replicates)."
+            }
+          }
+        }
+
+        if (cv_undefined) {
+          cv_notice <- glue::glue(
+            "⚠️ [CV DIAGNOSTIC NOTICE - CV_UNDEFINED]\n",
+            "- Root Cause: {cv_reason}\n",
+            "- Guidance: Automated CV minimization cannot be quantified. Do NOT claim CV reduction. In tpa_select_normalization, select robust linear/location shift ('median' or 'none'/'raw') rather than complex non-linear fits ('loess')."
+          )
+          summary_text <- paste0(cv_notice, "\n\n", summary_text)
+        }
+
         if (!is.null(subset_notice)) {
           summary_text <- paste0(subset_notice, "\n\n", summary_text)
         }
-        list(success = TRUE, methods = methods, subset_filter = if (has_subset) subset_filt else NULL, summary = summary_text)
+        list(success = TRUE, methods = methods, subset_filter = if (has_subset) subset_filt else NULL, cv_undefined = cv_undefined, summary = summary_text)
       },
 
       "/select_normalization" = {
         data <- get_active_data(params$id)
         norm_method <- params$normalization
 
+        # Check if CV is undefined
+        reps_per_sample <- if (!is.null(data$experiments$sample)) table(data$experiments$sample) else integer(0)
+        all_singletons <- length(reps_per_sample) > 0 && all(reps_per_sample <= 1)
+        cv_undefined <- all_singletons
+        if (!cv_undefined) {
+          tbl_stats <- tryCatch(tidyproteomics:::stats_summary(data, group_by = "normalization"), error = function(e) NULL)
+          if (!is.null(tbl_stats) && "CV" %in% names(tbl_stats)) {
+            if (all(is.na(tbl_stats$CV) | is.nan(tbl_stats$CV))) {
+              cv_undefined <- TRUE
+            }
+          }
+        }
+
         already_selected <- (is.null(norm_method) || !nzchar(norm_method) || identical(norm_method, data$quantitative_source)) &&
           length(data$operations) > 0 &&
           grepl(paste0("selected as ", data$quantitative_source, "\\.$"), tail(unlist(data$operations), 1))
 
+        selection_note <- NULL
         if (!already_selected) {
-          eval_str <- if (!is.null(norm_method) && nchar(norm_method) > 0) {
-            glue::glue('data %>% select_normalization("{norm_method}")')
+          if ((is.null(norm_method) || !nzchar(norm_method)) && cv_undefined) {
+            # When CV is undefined, automated select_normalization() can pick loess inappropriately.
+            # Default to median (or raw if median not normalized)
+            avail_quant <- get_quant_names(data, format = "vector")
+            fallback_norm <- if ("median" %in% avail_quant) "median" else if ("scaled" %in% avail_quant) "scaled" else "raw"
+            data$quantitative_source <- fallback_norm
+            selection_note <- glue::glue("CV_UNDEFINED: Automated CV minimization bypassed (group size <= 1 or non-finite CV). Defaulted to robust location shift '{fallback_norm}'.")
+            data$operations <- append(data$operations, glue::glue("Normalization selected as {fallback_norm} (Fallback: {selection_note})."))
+            log_code(glue::glue('{STATE$active_id} <- {STATE$active_id} %>% select_normalization("{fallback_norm}") # Fallback: CV_UNDEFINED'))
+            set_active_data(data)
           } else {
-            glue::glue("data %>% select_normalization()")
-          }
+            eval_str <- if (!is.null(norm_method) && nchar(norm_method) > 0) {
+              glue::glue('data %>% select_normalization("{norm_method}")')
+            } else {
+              glue::glue("data %>% select_normalization()")
+            }
 
-          data <- eval(parse(text = eval_str))
-          set_active_data(data)
-          log_code(sub("^data %>%", glue::glue("{STATE$active_id} <- {STATE$active_id} %>%"), eval_str))
+            data <- eval(parse(text = eval_str))
+            set_active_data(data)
+            log_code(sub("^data %>%", glue::glue("{STATE$active_id} <- {STATE$active_id} %>%"), eval_str))
+          }
         }
 
-        list(success = TRUE, active_source = data$quantitative_source)
+        list(success = TRUE, active_source = data$quantitative_source, note = selection_note)
       },
 
       "/impute" = {
@@ -2529,12 +2617,34 @@ handle_request <- function(req) {
           }
         }
 
+        # Unique peptide candidate check for FragPipe / proteomics tables
+        has_uniq_mapped <- any(audit_tbl$matched & audit_tbl$column_defined == "num_unique_peptides")
+        if (!has_uniq_mapped) {
+          is_uniq_col <- !audit_tbl$matched & grepl("(?i)^(Combined\\s+Total\\s+Peptides|Combined\\s+Unique\\s+Peptides|Unique\\s+Peptides|Combined\\s+Unique\\s+Spectral\\s+Count)$", audit_tbl$raw_header)
+          if (any(is_uniq_col)) {
+            audit_tbl$suggestion[is_uniq_col] <- "Candidate: accounting (num_unique_peptides) via unique peptide count"
+          }
+        }
+
         suggestions <- unique(audit_tbl$suggestion[!audit_tbl$matched & audit_tbl$suggestion != "Unassigned"])
         if (length(matched_quants) == 0) {
           if (any(grepl("^Area\\:", audit_tbl$raw_header, ignore.case = TRUE))) {
             suggestions <- c(
               suggestions,
               "Column(s) matching '^Area:' detected without matched quantitative channels. In ProteomeDiscoverer, peak area exports use 'Area: ...'. Configure with: tpa_ingest_config(platform='ProteomeDiscoverer', action='set', category='quantitative', column_defined='abundance_raw', column_import='^Area:', pivot=TRUE)"
+            )
+          }
+        }
+        if (!has_uniq_mapped) {
+          if (any(grepl("(?i)^(Combined\\s+Total\\s+Peptides|Combined\\s+Unique\\s+Peptides|Unique\\s+Peptides|Combined\\s+Unique\\s+Spectral\\s+Count)$", audit_tbl$raw_header))) {
+            suggestions <- c(
+              suggestions,
+              "Column(s) matching unique peptide counts detected without matched 'num_unique_peptides'. Configure with: tpa_ingest_config(platform='FragPipe', action='auto_fix', file_name='...') or set category='accounting', column_defined='num_unique_peptides'."
+            )
+          } else {
+            suggestions <- c(
+              suggestions,
+              "COLUMN_MISSING: num_unique_peptides - No unique peptide column identified in raw headers (e.g. 'Combined Unique Peptides', 'Unique Peptides'). Downstream >= 2 peptide filter cannot be applied without this column."
             )
           }
         }
@@ -2653,6 +2763,29 @@ handle_request <- function(req) {
                 column_defined = "abundance_raw",
                 column_import = "^Area:",
                 pivot = TRUE,
+                save = TRUE,
+                output_file = effective_cfg
+              ),
+              error = function(e) updated_tbl
+            )
+          }
+
+          uniq_cols <- grep("(?i)^(Combined\\s+Total\\s+Peptides|Combined\\s+Unique\\s+Peptides|Unique\\s+Peptides|Combined\\s+Unique\\s+Spectral\\s+Count)$", raw_headers, value = TRUE)
+          if (length(uniq_cols) > 0) {
+            effective_cfg <- if (!is.null(out_file) && nzchar(out_file)) out_file else cfg_file
+            if (is.null(effective_cfg) || !nzchar(effective_cfg)) {
+              effective_cfg <- file.path(STATE$output_dir, paste0(platform, "_", analyte, ".tsv"))
+            }
+            chosen_uniq <- uniq_cols[1]
+            updated_tbl <- tryCatch(
+              tidyproteomics::ingest_config(
+                platform = platform,
+                analyte = analyte,
+                config_file = effective_cfg,
+                action = "set",
+                category = "accounting",
+                column_defined = "num_unique_peptides",
+                column_import = paste0("^", chosen_uniq, "$"),
                 save = TRUE,
                 output_file = effective_cfg
               ),
@@ -2934,13 +3067,15 @@ handle_request <- function(req) {
           sig_up <- sig_strict %>% dplyr::filter(log2_foldchange >= 1.0)
           sig_down <- sig_strict %>% dplyr::filter(log2_foldchange <= -1.0)
           sig_relaxed <- exp_tbl %>% dplyr::filter(!is.na(adj_p_value) & adj_p_value <= 0.05 & abs(log2_foldchange) >= 0.38)
+          sig_relaxed_up <- sig_relaxed %>% dplyr::filter(log2_foldchange >= 0.38)
+          sig_relaxed_down <- sig_relaxed %>% dplyr::filter(log2_foldchange <= -0.38)
           sig_nom <- exp_tbl %>% dplyr::filter(!is.na(p_value) & p_value <= 0.05)
+          sig_nom_up <- sig_nom %>% dplyr::filter(log2_foldchange > 0)
+          sig_nom_down <- sig_nom %>% dplyr::filter(log2_foldchange < 0)
 
           emit(sprintf("- **Strict Threshold (|log2FC| >= 1.0, q <= 0.05)**: %d significant (%d higher in %s, %d lower in %s).", nrow(sig_strict), nrow(sig_up), treatment, nrow(sig_down), treatment))
-          if (nrow(sig_up) < 3 || nrow(sig_down) < 3) {
-            emit(sprintf("- **Relaxed Threshold (|log2FC| >= 0.38, q <= 0.05)**: %d significant.", nrow(sig_relaxed)))
-            emit(sprintf("- **Nominal Threshold (p <= 0.05)**: %d significant.", nrow(sig_nom)))
-          }
+          emit(sprintf("- **Relaxed Threshold (|log2FC| >= 0.38, q <= 0.05)**: %d significant (%d higher in %s, %d lower in %s).", nrow(sig_relaxed), nrow(sig_relaxed_up), treatment, nrow(sig_relaxed_down), treatment))
+          emit(sprintf("- **Nominal Threshold (p <= 0.05)**: %d significant (%d higher in %s, %d lower in %s).", nrow(sig_nom), nrow(sig_nom_up), treatment, nrow(sig_nom_down), treatment))
           emit("")
 
           contrast_sig_sets[[contrast_str]] <- list(
@@ -2948,6 +3083,11 @@ handle_request <- function(req) {
             strict_up = nrow(sig_up),
             strict_down = nrow(sig_down),
             relaxed_total = nrow(sig_relaxed),
+            relaxed_up = nrow(sig_relaxed_up),
+            relaxed_down = nrow(sig_relaxed_down),
+            nom_total = nrow(sig_nom),
+            nom_up = nrow(sig_nom_up),
+            nom_down = nrow(sig_nom_down),
             up_genes = unique(na.omit(sig_up$gene_name)),
             down_genes = unique(na.omit(sig_down$gene_name))
           )

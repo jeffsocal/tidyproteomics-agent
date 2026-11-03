@@ -10,9 +10,16 @@
 
 ## 3. Bioinformatics Design
 
+### Design Specification & Mode
+- **Analysis Mode**: hypothesis_test
+- **Subject Pairing**: unpaired
+- **Batch Effect**: none
+
 ### A. Discovered Sample Groups in Dataset
 - *(Pending Phase 1 data ingestion)*
+- **Group Labels Mapped**: FALSE
 - **Confirm Discovered Sample Groups**: FALSE
+<!-- Note: Confirm flags may be set TRUE only after a non-empty sample-key field. Unmapped codes require an explicit DEVIATION_ACCEPTED record setting Analysis Mode: cohort_coded_descriptive before Phase 2. -->
 
 ### B. Quantitative Normalization Strategy
 - **Normalization Methods**: default

@@ -553,10 +553,45 @@ Target execution budget: **2–3 turns max**.
    )
    write_json(digest, "data/manuscript_digest.json", auto_unbox = TRUE, pretty = TRUE, null = "null")
    cat("Wrote data/manuscript_digest.json successfully.\n")
+
+   # Persist authoritative figure caption contract for Phase 11 manuscript
+   fig_meta <- tibble::tibble(
+     path = c(
+       existing_path("counts"),
+       existing_path("pca"),
+       contrast_path("volcano", contrast_str),
+       discussion_figures[["module"]],
+       discussion_figures[["dichotomy"]],
+       discussion_figures[["forest"]],
+       discussion_figures[["imputation"]]
+     ),
+     generator = "code/10_figures.R",
+     caption = c(
+       "Identification counts across sample groups",
+       "Principal Component Analysis (PCA) scores plot showing sample clustering and condition separation",
+       paste0("Volcano plot of differential expression for ", contrast_str),
+       "Functional module abundance heatmap showing coordinate regulation of candidate protein programs",
+       paste0("Biological program dichotomy signatures for ", contrast_str),
+       paste0("Candidate targets and literature effect sizes for ", contrast_str),
+       paste0("Imputation diagnostic and individual protein abundance for ", contrast_str)
+     ),
+     what_it_shows = c(
+       "Protein identification count per sample group",
+       "Replicate variance and cohort separation on PC1 vs PC2",
+       "Statistical significance (q-value) vs log2 fold change",
+       "Relative abundance pattern across biological modules (NOT an abundance correlation heatmap)",
+       "Coordinate shift of opposing functional gene signatures",
+       "Estimated fold change and confidence bounds for key candidates",
+       "Observed vs imputed abundance distributions for top candidates"
+     )
+   ) %>% dplyr::filter(!is.na(path), nzchar(path))
+   readr::write_tsv(fig_meta, "data/figures.tsv")
+   cat("Wrote data/figures.tsv successfully.\n")
    ```
 
-4. **Emit Pre-Compiled Statistical Digest (`data/manuscript_digest.json`)**:
+4. **Emit Pre-Compiled Statistical Digest (`data/manuscript_digest.json`) & Figure Registry (`data/figures.tsv`)**:
    - The script must write a clean JSON file compiling all primary statistics, sample counts, differential expression tallies, feature retention breakdown (`feature_retention`: modeled vs unmodeled entities, accounting for zero-quantification background vs condition-exclusive dropouts), top candidates, pathway enrichments, and figure paths so Phase 11 can author the manuscript directly without running exploratory bash or R commands.
+   - The script must write `data/figures.tsv` documenting `path`, `generator`, `caption`, and `what_it_shows` for every generated figure. Caption headings MUST match the actual file generated (e.g. `plot_discussion_module.png` is a module heatmap, NEVER titled as an abundance correlation heatmap).
    > ⚠️ **R Syntax Note for Reserved Keyword `function`**:
    > In R, `function` is a reserved language keyword. When constructing named list elements for JSON serialization, always quote or backtick it (e.g. `list(gene = ..., \`function\` = as.character(r$description))` or `"function" = ...`) to prevent critical parser syntax errors (`unexpected '=' in "..., function="`).
 
@@ -568,9 +603,10 @@ Target execution budget: **2–3 turns max**.
   1. `code/10_figures.R` executed with status code 0 and output logged to `logs/10_figures/console.log`.
   2. Four discussion figures exist in `data/` with non-zero file sizes (`*module*.png`, `*signatures*.png` or `*programs*.png` or `*dichotomy*.png`, `*candidates*.png` or `*forest*.png`, `*expression*imputation*.png` or `*imputation*.png`).
   3. `data/manuscript_digest.json` exists on disk with non-zero file size, `discussion_figures` lists the 4 generated figure paths, and `feature_retention` details unmodeled feature statistics.
-  4. (Optional validation command): Verify digest schema cleanly:
+  4. `data/figures.tsv` exists on disk with non-zero file size, specifying exact captions and descriptions for each figure.
+  5. (Optional validation command): Verify digest schema cleanly:
      ```bash
      Rscript -e 'x <- jsonlite::fromJSON("data/manuscript_digest.json", simplifyVector = FALSE); stopifnot(length(x$top_candidates_up) > 0, length(x$discussion_figures) == 4, !is.null(x$feature_retention)); cat("Digest validation PASS\n")'
      ```
 - [ ] **Complete Phase**:
-  - Invoke `complete_phase(phaseName = "10_FIGURES", summary = "Generated 4 hypothesis-driven discussion figures in data/ and compiled statistical digest with feature retention accounting in data/manuscript_digest.json.")`.
+  - Invoke `complete_phase(phaseName = "10_FIGURES", summary = "Generated 4 hypothesis-driven discussion figures in data/, compiled data/figures.tsv figure contract, and compiled statistical digest with feature retention accounting in data/manuscript_digest.json.")`.

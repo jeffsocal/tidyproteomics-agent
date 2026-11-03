@@ -31,6 +31,7 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/05_e
   - If NO biological ontology categories or grouping annotations exist (e.g., only `gene_name` and free-text `description` are present):
     1. **Gene Symbol & Annotation Resolution Obligation**:
        - Verify whether `gene_name` or `description` are populated across rows. If identifiers are bare accessions but `fasta_header` is present in the object annotations, parse `GN=` gene symbols and protein titles into `gene_name` and `description` (e.g., via `tpa_run_code` or `tpa_integrate_annotations`), ensuring downstream Phase 6 expression tables and volcano labels are not accession-only.
+       - **Annotation Attachment Verification Rule**: You may claim that gene symbols or descriptions are attached/populated ONLY if you quote the verbatim output of `tpa_inspect(what = "annotation_terms")`. If `tpa_fetch_annotations` failed or `data/annotations_uniprot.tsv.status.json` has `written: false`, explicitly record `ANNOTATION_UNAVAILABLE` with the tool error and do NOT claim that external database annotations were written.
        - If external ontology mapping is impossible or bypassed, document `ANNOTATION_UNAVAILABLE` as a formal empirical finding (empty ontologies are a valid negative analytical result, never an error).
     2. **CRITICAL AUTONOMOUS CONTINUATION MANDATE (DO NOT HALT)**:
        - **NEVER halt execution, stop calling tools, or invoke `fail_phase` when formal ontology terms are absent or bypassed.**
