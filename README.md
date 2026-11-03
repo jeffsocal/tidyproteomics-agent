@@ -187,16 +187,24 @@ workspace/
 
 ---
 
-### Option B: Self-Contained Docker Container
+### Option B: Self-Contained Docker Container (Fastest & Zero-Dependency)
 
-Run the complete stack (Studio Web UI, Node.js Orchestrator, Python MCP Server, R Daemon, and TidyProteomics) in an isolated container while mounting your local host workspaces:
+Run the entire studio (Web UI, Node.js Orchestrator, Python MCP Server, R Daemon, and TidyProteomics) with a single command. **No manual directory creation or environment file editing is required**—all configuration is handled directly in the browser:
 
-```bash
-docker compose up --build
-```
+1. **Start the studio**:
+   ```bash
+   docker compose up --build
+   ```
+   *(Add `-d` if you want to run it in the background).*
 
-- Open **`http://localhost:3000`** in your browser.
-- All code, datasets, plots, and manuscripts generated within `/workspaces/<project>` are written directly to `./workspaces/<project>` on your host machine.
+2. **Open the Studio**:
+   Navigate to **`http://localhost:3000`** in your browser.
+
+3. **Configure directly in the Web UI**:
+   - **API Key**: In the **Settings** tab, select your preferred provider (Anthropic, OpenRouter, OpenAI, Gemini, or local Ollama) and paste your API key. Settings are saved automatically to a persistent Docker volume (`tidyproteomics-config`) across container restarts and updates.
+   - **Workspace**: Select or initialize your project workspace directly in the UI. Any data files, R code, plots, and manuscripts are automatically persisted to `./workspaces/` on your host machine.
+
+> **Optional Headless / Server Deployment**: If deploying to a headless cloud server or CI/CD environment, you can optionally pass API keys via host environment variables or a `.env` file (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`), but this is completely optional for normal interactive use.
 
 ---
 

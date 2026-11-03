@@ -5,7 +5,7 @@ FROM node:20-bookworm-slim AS builder
 
 WORKDIR /build
 
-COPY package.json tsconfig.server.json ./
+COPY package*.json tsconfig.server.json ./
 COPY web/ ./web/
 COPY src/ ./src/
 COPY templates/ ./templates/
@@ -40,13 +40,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpng-dev \
     libtiff5-dev \
     libjpeg-dev \
+    poppler-utils \
     git \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Install required R packages & tidyproteomics
-RUN R -e "install.packages(c('httpuv', 'jsonlite', 'dplyr', 'tidyr', 'readr', 'ggplot2', 'stringr', 'purrr', 'tibble', 'glue', 'remotes', 'BiocManager'), repos='https://cloud.r-project.org')" && \
+# Install required R packages & tidyproteomics (including Literature DuckDB, knitr, and readxl)
+RUN R -e "install.packages(c('httpuv', 'jsonlite', 'dplyr', 'tidyr', 'readr', 'ggplot2', 'stringr', 'purrr', 'tibble', 'glue', 'remotes', 'BiocManager', 'DBI', 'duckdb', 'readxl', 'knitr'), repos='https://cloud.r-project.org')" && \
     R -e "BiocManager::install(c('limma', 'fgsea'), ask = FALSE, update = FALSE)" && \
     R -e "remotes::install_github('jeffsocal/tidyproteomics', upgrade = 'never')"
 
