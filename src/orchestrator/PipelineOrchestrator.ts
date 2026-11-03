@@ -1331,6 +1331,45 @@ Construct and execute code for this phase, capturing output to logs.
     const runPromise = (async () => {
       try {
         success = await this.executePhase(phaseIndex, additionalTurns, runController.signal, runId);
+
+        // If the continued phase succeeded and wasn't aborted,
+        // automatically proceed through the remaining downstream enabled phases
+        if (success && !this.shouldStop && !runController.signal.aborted && this.activeRunId === runId) {
+          const hasDownstream = this.phases.slice(phaseIndex + 1).some((p) => p.enabled && p.status !== "completed");
+          if (hasDownstream) {
+            this.isFullPipelineRunning = true;
+            this.logPipeline(`Phase ${phase.id} (${phase.title}) completed successfully. Automatically continuing downstream pipeline...`);
+            await this.notifyState();
+
+            for (let i = phaseIndex + 1; i < this.phases.length; i++) {
+              if (this.shouldStop || runController.signal.aborted || this.activeRunId !== runId) {
+                this.logPipeline("Execution stopped by user.");
+                break;
+              }
+
+              const nextPhase = this.phases[i];
+              if (!nextPhase.enabled) {
+                this.logPipeline(`Skipping disabled phase: ${nextPhase.title}`);
+                continue;
+              }
+
+              await this.pruneNotesFromPhase(i);
+
+              const nextSuccess = await this.executePhase(i, undefined, runController.signal, runId);
+              if (!nextSuccess || this.shouldStop || runController.signal.aborted || this.activeRunId !== runId) {
+                this.logPipeline(`Pipeline paused due to checkpoint failure in ${nextPhase.title}`);
+                break;
+              }
+            }
+
+            if (!this.shouldStop && !runController.signal.aborted && this.activeRunId === runId && this.phases.length > 0 && this.phases.every((p) => !p.enabled || p.status === "completed")) {
+              this.logPipeline("All phases completed successfully.");
+              if (!this.suppressNotifications) {
+                this.onPipelineFinished?.(await this.getState());
+              }
+            }
+          }
+        }
       } catch (err: any) {
         this.logPipeline(`Error continuing phase ${phaseId}: ${err.message}`);
       } finally {
@@ -1677,7 +1716,7 @@ Construct and execute code for this phase, capturing output to logs.
         } else if (phaseTagLower.includes("normalize")) {
           phaseMaxTurns = Math.max(baseMaxTurns, 30);
         } else if (phaseTagLower.includes("integrity")) {
-          phaseMaxTurns = 6;
+          phaseMaxTurns = Math.max(baseMaxTurns, 25);
         }
       }
       phase.maxTurns = phaseMaxTurns;
