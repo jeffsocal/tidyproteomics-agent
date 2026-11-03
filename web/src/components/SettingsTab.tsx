@@ -17,7 +17,7 @@ import {
   Palette,
   AlertTriangle,
 } from "lucide-react";
-import { AppConfig, LLMProviderType, LLMTierConfig, McpStatus, PipelineState } from "../types";
+import { AppConfig, LLMProviderType, LLMTierConfig, McpStatus, PipelineId, PipelineState } from "../types";
 import { MultiModelSettingsSection } from "./MultiModelSettingsSection";
 import { ThemeToggle } from "./ThemeToggle";
 
@@ -29,7 +29,7 @@ interface SettingsTabProps {
   onSelectWorkspace: (dir: string) => Promise<void>;
   onInitWorkspace: (
     dir: string,
-    pipelineId: "differential_expression" | "quality_control_only"
+    pipelineId: PipelineId
   ) => Promise<void>;
   onReconnectMcp: () => Promise<void>;
   onOpenPerformanceReview?: () => void;
@@ -44,6 +44,80 @@ const POWER_OF_TWO_TOKENS = [
   { value: 131072, label: "128K" },
   { value: 262144, label: "256K" },
   { value: 524288, label: "512K" },
+];
+
+export interface ScaffoldOption {
+  id: PipelineId;
+  icon: string;
+  title: string;
+  phases: string;
+  badgeBg: string;
+  badgeColor: string;
+  timeEst: string;
+  description: string;
+}
+
+export const SCAFFOLD_OPTIONS: ScaffoldOption[] = [
+  {
+    id: "differential_expression",
+    icon: "🎯",
+    title: "Full Discovery Pipeline",
+    phases: "13 Phases",
+    badgeBg: "rgba(59, 130, 246, 0.15)",
+    badgeColor: "var(--primary)",
+    timeEst: "⏱️ ~45 min · End-to-End",
+    description: "End-to-end autonomous analysis (Phases 01–13): Ingestion, Normalization, Imputation, Linear Modeling, Functional Enrichment, Literature Corroboration, Discussion Figures, Manuscript Drafting, and Numerical Integrity Review.",
+  },
+  {
+    id: "rapid_expression",
+    icon: "⚡",
+    title: "Rapid Expression Screening",
+    phases: "5 Phases",
+    badgeBg: "rgba(34, 197, 94, 0.15)",
+    badgeColor: "#22c55e",
+    timeEst: "⏱️ ~5 min · Fast-Path",
+    description: "Fast-path statistical screening (Phases 01–05): Ingestion, Normalization, Imputation, Limma Linear Modeling, Volcano Plots, PCA, and TSV/CSV Exports. Bypasses pathway enrichment and literature synthesis.",
+  },
+  {
+    id: "quality_control_only",
+    icon: "📊",
+    title: "Comprehensive Quality Control",
+    phases: "3 Phases",
+    badgeBg: "rgba(245, 158, 11, 0.15)",
+    badgeColor: "#f59e0b",
+    timeEst: "⏱️ ~3 min · Diagnostic",
+    description: "Focused diagnostic suite (Phases 01–03): Raw Header Audit & Contaminant Yield, Technical Replicate Precision (CVs) & Dynamic Range, and Unsupervised PCA & Batch Confounding Audit.",
+  },
+  {
+    id: "multi_cohort_merge",
+    icon: "🔄",
+    title: "Multi-Cohort / Cross-Merge",
+    phases: "4 Phases",
+    badgeBg: "rgba(168, 85, 247, 0.15)",
+    badgeColor: "#a855f7",
+    timeEst: "⏱️ ~8 min · Integration",
+    description: "Multi-experiment integration (Phases 01–04): Ingest Cohort A & Cohort B, run cross-cohort feature intersection, merge datasets via merge_tidyproteomics(), and audit batch effects.",
+  },
+  {
+    id: "biological_synthesis",
+    icon: "🧬",
+    title: "Post-DE Biological Synthesis",
+    phases: "10 Phases",
+    badgeBg: "rgba(236, 72, 153, 0.15)",
+    badgeColor: "#ec4899",
+    timeEst: "⏱️ ~30 min · Synthesis Only",
+    description: "Pre-computed DE tables to manuscript (Phases 01–10): Ingest external CSV/TSV, fetch UniProt GO/Reactome annotations, run enrichment, ground in literature, and draft the manuscript.",
+  },
+  {
+    id: "peptide_analysis",
+    icon: "🔬",
+    title: "Peptide Resolution & Roll-Up",
+    phases: "5 Phases",
+    badgeBg: "rgba(14, 165, 233, 0.15)",
+    badgeColor: "#0ea5e9",
+    timeEst: "⏱️ ~10 min · Peptide-Level",
+    description: "Precursor-level resolution (Phases 01–05): Ingest peptides, normalize and impute at peptide level, test differential abundance, roll up to proteins via collapse(), and map sequence coordinates.",
+  },
 ];
 
 export const SettingsTab: React.FC<SettingsTabProps> = ({
@@ -95,9 +169,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   const [searxngUrl, setSearxngUrl] = useState("");
 
   // Pipeline template selection
-  const [pipelineTemplate, setPipelineTemplate] = useState<
-    "differential_expression" | "quality_control_only"
-  >("differential_expression");
+  const [pipelineTemplate, setPipelineTemplate] = useState<PipelineId>("differential_expression");
 
   // Directory browser state
   const dialogRef = useRef<HTMLDialogElement | null>(null);
@@ -241,13 +313,11 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
 
   const handleInitPipeline = async () => {
     if (!config?.workspaceRoot) return;
+    const activeScaffold = SCAFFOLD_OPTIONS.find((s) => s.id === pipelineTemplate);
+    const label = activeScaffold ? `${activeScaffold.phases} ${activeScaffold.title}` : pipelineTemplate;
     if (
       !confirm(
-        `Initialize ${
-          pipelineTemplate === "differential_expression"
-            ? "12-Phase Differential Expression"
-            : "Quality Control Only"
-        } pipeline in "${config.workspaceRoot}"? This configures standard folders (analysis/, code/, data/, docs/) and phase directives.`
+        `Initialize ${label} pipeline in "${config.workspaceRoot}"? This configures standard folders (analysis/, code/, data/, docs/) and phase directives.`
       )
     ) {
       return;
@@ -462,74 +532,55 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 </div>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-                <div
-                  style={{
-                    border: `1px solid ${
-                      pipelineTemplate === "differential_expression"
-                        ? needsScaffold
-                          ? "var(--attention-orange)"
-                          : "var(--primary)"
-                        : "var(--border)"
-                    }`,
-                    background:
-                      pipelineTemplate === "differential_expression"
-                        ? needsScaffold
-                          ? "var(--attention-orange-bg)"
-                          : "rgba(59, 130, 246, 0.08)"
-                        : "var(--card-bg)",
-                    borderRadius: "8px",
-                    padding: "14px",
-                    cursor: "pointer",
-                    boxShadow:
-                      pipelineTemplate === "differential_expression" && needsScaffold
-                        ? "0 0 8px var(--attention-orange-border)"
-                        : "none",
-                    transition: "all 0.15s ease",
-                  }}
-                  onClick={() => setPipelineTemplate("differential_expression")}
-                >
-                  <div style={{ fontWeight: 700, fontSize: "13px", color: "var(--fg-bright)", marginBottom: "4px" }}>
-                    🎯 Differential Expression Pipeline
-                  </div>
-                  <div style={{ fontSize: "11.5px", color: "var(--muted)", lineHeight: 1.45 }}>
-                    Full 12-phase pipeline (Phases 00–11): Ingestion, QC, Normalization, Imputation, Linear Modeling, Volcano Plots, Pathway Enrichment, and Manuscript Drafting.
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    border: `1px solid ${
-                      pipelineTemplate === "quality_control_only"
-                        ? needsScaffold
-                          ? "var(--attention-orange)"
-                          : "var(--primary)"
-                        : "var(--border)"
-                    }`,
-                    background:
-                      pipelineTemplate === "quality_control_only"
-                        ? needsScaffold
-                          ? "var(--attention-orange-bg)"
-                          : "rgba(59, 130, 246, 0.08)"
-                        : "var(--card-bg)",
-                    borderRadius: "8px",
-                    padding: "14px",
-                    cursor: "pointer",
-                    boxShadow:
-                      pipelineTemplate === "quality_control_only" && needsScaffold
-                        ? "0 0 8px var(--attention-orange-border)"
-                        : "none",
-                    transition: "all 0.15s ease",
-                  }}
-                  onClick={() => setPipelineTemplate("quality_control_only")}
-                >
-                  <div style={{ fontWeight: 700, fontSize: "13px", color: "var(--fg-bright)", marginBottom: "4px" }}>
-                    📊 Quality Control Only Pipeline
-                  </div>
-                  <div style={{ fontSize: "11.5px", color: "var(--muted)", lineHeight: 1.45 }}>
-                    Lean 3-phase inspection protocol (Phases 00–02): Inspect missing values, CV distribution, sample correlations, and produce publication-ready QC figures.
-                  </div>
-                </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "12px" }}>
+                {SCAFFOLD_OPTIONS.map((opt) => {
+                  const isSelected = pipelineTemplate === opt.id;
+                  return (
+                    <div
+                      key={opt.id}
+                      style={{
+                        border: `1px solid ${
+                          isSelected
+                            ? needsScaffold
+                              ? "var(--attention-orange)"
+                              : "var(--primary)"
+                            : "var(--border)"
+                        }`,
+                        background: isSelected
+                          ? needsScaffold
+                            ? "var(--attention-orange-bg)"
+                            : "rgba(59, 130, 246, 0.08)"
+                          : "var(--card-bg)",
+                        borderRadius: "8px",
+                        padding: "14px",
+                        cursor: "pointer",
+                        boxShadow:
+                          isSelected && needsScaffold
+                            ? "0 0 8px var(--attention-orange-border)"
+                            : "none",
+                        transition: "all 0.15s ease",
+                        display: "flex",
+                        flexDirection: "column",
+                      }}
+                      onClick={() => setPipelineTemplate(opt.id)}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "4px" }}>
+                        <div style={{ fontWeight: 700, fontSize: "13px", color: "var(--fg-bright)" }}>
+                          {opt.icon} {opt.title}
+                        </div>
+                        <span className="badge" style={{ fontSize: "10px", padding: "1px 5px", background: opt.badgeBg, color: opt.badgeColor }}>
+                          {opt.phases}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: "11.5px", color: "var(--muted)", lineHeight: 1.45, flex: 1 }}>
+                        {opt.description}
+                      </div>
+                      <div style={{ fontSize: "10.5px", color: "var(--fg-dim)", marginTop: "8px", fontWeight: 500 }}>
+                        {opt.timeEst}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
 
               <div>

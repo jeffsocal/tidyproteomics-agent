@@ -19,7 +19,7 @@ import { FollowonPhaseService } from "./agent/FollowonPhaseService";
 import { PerformanceReviewService } from "./agent/PerformanceReviewService";
 import { EvaluationService } from "./evaluation/EvaluationService";
 import { TierOptimizer } from "./evaluation/TierOptimizer";
-import { LLMConfig, PipelineState } from "./types";
+import { LLMConfig, PipelineId, PipelineState } from "./types";
 
 export interface FileTreeNode {
   name: string;
@@ -393,7 +393,7 @@ async function startServer() {
 
   async function initializeWorkspaceWithPipeline(
     targetRoot: string,
-    pipelineId: "differential_expression" | "quality_control_only" = "differential_expression"
+    pipelineId: PipelineId = "differential_expression"
   ): Promise<boolean> {
     if (!targetRoot) return false;
     if (!fs.existsSync(targetRoot)) {
@@ -615,8 +615,18 @@ async function startServer() {
   app.post("/api/workspace/init", async (req, res) => {
     try {
       const targetRoot = String(req.body?.workspaceRoot || workspaceRoot).trim();
-      const pipelineId =
-        req.body?.pipelineId === "quality_control_only" ? "quality_control_only" : "differential_expression";
+      const validPipelines: PipelineId[] = [
+        "differential_expression",
+        "rapid_expression",
+        "quality_control_only",
+        "multi_cohort_merge",
+        "biological_synthesis",
+        "peptide_analysis",
+      ];
+      const reqPipelineId = req.body?.pipelineId as PipelineId;
+      const pipelineId: PipelineId = validPipelines.includes(reqPipelineId)
+        ? reqPipelineId
+        : "differential_expression";
       if (!targetRoot) {
         return res.status(400).json({ ok: false, error: "No workspace directory selected." });
       }

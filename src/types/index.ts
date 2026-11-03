@@ -38,6 +38,14 @@ export interface LLMResponse {
 
 export type LLMProviderType = "anthropic" | "gemini" | "openai" | "openrouter" | "ollama";
 
+export type PipelineId =
+  | "differential_expression"
+  | "rapid_expression"
+  | "quality_control_only"
+  | "multi_cohort_merge"
+  | "biological_synthesis"
+  | "peptide_analysis";
+
 export type LLMRole = "utility" | "toolRunner" | "reasoner";
 
 export interface LLMTierConfig {

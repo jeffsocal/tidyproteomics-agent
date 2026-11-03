@@ -1184,24 +1184,24 @@ DO NOT repeat the identical failing command without structural fixes:
       }
     };
 
-    if (normPhase.includes("01_inspect")) {
+    if (normPhase.includes("inspect") || normPhase.includes("ingest") || normPhase.includes("import_table")) {
       const hasRds = await checkFile("data/tidyproteomics_data.rds");
       const hasCounts = await checkFile("data/*counts*.png");
       if (!hasRds && !hasCounts) missing.push("data/tidyproteomics_data.rds or data/*counts*.png");
-    } else if (normPhase.includes("02_normalize")) {
+    } else if (normPhase.includes("normalize")) {
       const hasRds = await checkFile("data/tidyproteomics_data.rds");
       if (!hasRds) missing.push("data/tidyproteomics_data.rds");
-    } else if (normPhase.includes("03_impute")) {
+    } else if (normPhase.includes("impute")) {
       const hasRds = await checkFile("data/tidyproteomics_data.rds");
       if (!hasRds) missing.push("data/tidyproteomics_data.rds");
-    } else if (normPhase.includes("04_expression")) {
+    } else if (normPhase.includes("expression")) {
       const hasRds = await checkFile("data/tidyproteomics_data.rds");
       const hasExpr = (await checkFile("data/table_*expression_*.tsv")) || (await checkFile("data/table_*expression_*.csv"));
       const hasVolcano = await checkFile("data/*volcano*.png");
       if (!hasRds) missing.push("data/tidyproteomics_data.rds");
       if (!hasExpr) missing.push("data/table_*expression_*.tsv or .csv");
       if (!hasVolcano) missing.push("data/*volcano*.png");
-    } else if (normPhase.includes("05_enrichment")) {
+    } else if (normPhase.includes("enrichment")) {
       const hasRds = await checkFile("data/tidyproteomics_data.rds");
       const hasEnrich = (await checkFile("data/table_*enrichment_*.tsv")) || (await checkFile("data/table_*enrichment_*.csv"));
       if (!hasRds) missing.push("data/tidyproteomics_data.rds");
@@ -1243,10 +1243,18 @@ DO NOT repeat the identical failing command without structural fixes:
       const hasActionable = await checkFile("data/actionable_synthesis.json");
       if (!hasWeb) missing.push("docs/websearch.md");
       if (!hasActionable) missing.push("data/actionable_synthesis.json");
-    } else if (normPhase.includes("10_figures")) {
+    } else if (normPhase.includes("02_replicate_qc") || normPhase.includes("replicate_qc")) {
+      const hasCvs = await checkFile("data/*cvs*.png");
+      const hasDynamic = await checkFile("data/*dynamic_range*.png");
+      if (!hasCvs && !hasDynamic) missing.push("data/*cvs*.png or data/*dynamic_range*.png");
+    } else if (normPhase.includes("03_cohort_diagnostics") || normPhase.includes("cohort_diagnostics")) {
+      const hasPca = await checkFile("data/*pca*.png");
+      const hasHeatmap = await checkFile("data/*heatmap*.png");
+      if (!hasPca && !hasHeatmap) missing.push("data/*pca*.png or data/*heatmap*.png");
+    } else if (normPhase.includes("figures")) {
       const hasFig = await checkFile("data/plot_*.png");
-      if (!hasFig) missing.push("data/plot_*.png (at least one discussion figure)");
-    } else if (normPhase.includes("11_synthesis")) {
+      if (!hasFig) missing.push("data/plot_*.png (at least one publication figure)");
+    } else if (normPhase.includes("synthesis")) {
       const hasManuscript = (await checkFile("manuscript.md")) || (await checkFile("docs/manuscript.md"));
       if (!hasManuscript) missing.push("manuscript.md or docs/manuscript.md");
     }

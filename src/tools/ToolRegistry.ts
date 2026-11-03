@@ -131,7 +131,11 @@ export class ToolRegistry {
         this.workspaceRoot ? path.join(this.workspaceRoot, phaseFileName.endsWith(".md") ? phaseFileName : `${phaseFileName}.md`) : "",
         this.workspaceRoot ? path.join(this.workspaceRoot, phaseFileName) : "",
         this.workspaceRoot ? path.join(this.workspaceRoot, "extension", "templates", "pipelines", "differential_expression", phaseFileName.endsWith(".md") ? phaseFileName : `${phaseFileName}.md`) : "",
+        this.workspaceRoot ? path.join(this.workspaceRoot, "extension", "templates", "pipelines", "rapid_expression", phaseFileName.endsWith(".md") ? phaseFileName : `${phaseFileName}.md`) : "",
         this.workspaceRoot ? path.join(this.workspaceRoot, "extension", "templates", "pipelines", "quality_control_only", phaseFileName.endsWith(".md") ? phaseFileName : `${phaseFileName}.md`) : "",
+        this.workspaceRoot ? path.join(this.workspaceRoot, "extension", "templates", "pipelines", "multi_cohort_merge", phaseFileName.endsWith(".md") ? phaseFileName : `${phaseFileName}.md`) : "",
+        this.workspaceRoot ? path.join(this.workspaceRoot, "extension", "templates", "pipelines", "biological_synthesis", phaseFileName.endsWith(".md") ? phaseFileName : `${phaseFileName}.md`) : "",
+        this.workspaceRoot ? path.join(this.workspaceRoot, "extension", "templates", "pipelines", "peptide_analysis", phaseFileName.endsWith(".md") ? phaseFileName : `${phaseFileName}.md`) : "",
       ].filter(Boolean);
 
       for (const p of candidatePaths) {

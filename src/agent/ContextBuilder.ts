@@ -78,10 +78,20 @@ export class ContextBuilder {
       phasePath = path.join(this.analysisDir, phaseFileName);
       const contentCheck = await this.readFileSafe(phasePath);
       if (!contentCheck) {
-        const tplPhase = path.join("extension", "templates", "pipelines", "differential_expression", phaseFileName);
-        const tplContent = await this.readFileSafe(tplPhase);
-        if (tplContent) {
-          phasePath = tplPhase;
+        for (const pipelineFolder of [
+          "differential_expression",
+          "rapid_expression",
+          "quality_control_only",
+          "multi_cohort_merge",
+          "biological_synthesis",
+          "peptide_analysis",
+        ]) {
+          const tplPhase = path.join("extension", "templates", "pipelines", pipelineFolder, phaseFileName);
+          const tplContent = await this.readFileSafe(tplPhase);
+          if (tplContent) {
+            phasePath = tplPhase;
+            break;
+          }
         }
       }
     }

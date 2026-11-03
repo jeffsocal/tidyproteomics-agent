@@ -174,6 +174,48 @@ TOOLS = [
         }
     },
     {
+        "name": "tpa_import_expression_table",
+        "description": "Imports a pre-computed external differential expression table (CSV/TSV from MaxQuant, MSstats, Perseus, or Limma) directly into a persistent tidyproteomics object. Constructs necessary analysis and metadata slots so functional annotation fetching (GO/Reactome), pathway enrichment, volcano plotting, and manuscript synthesis work immediately.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Path to the flat differential expression CSV or TSV file."
+                },
+                "comparison": {
+                    "type": "string",
+                    "description": "Comparison contrast string (e.g. 'treatment/control')."
+                },
+                "id_col": {
+                    "type": "string",
+                    "description": "Protein accession/identifier column name (auto-detected if omitted)."
+                },
+                "gene_name_col": {
+                    "type": "string",
+                    "description": "Gene name/symbol column name (auto-detected if omitted)."
+                },
+                "log2fc_col": {
+                    "type": "string",
+                    "description": "Log2 fold-change column name (auto-detected if omitted)."
+                },
+                "pvalue_col": {
+                    "type": "string",
+                    "description": "Raw p-value column name (auto-detected if omitted)."
+                },
+                "padj_col": {
+                    "type": "string",
+                    "description": "Adjusted p-value / FDR / q-value column name (auto-detected if omitted)."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Optional dataset ID in session memory (defaults to 'rdata')."
+                }
+            },
+            "required": ["file_path"]
+        }
+    },
+    {
         "name": "tpa_inspect",
         "description": "Introspects the active dataset: retrieves sample names, quantitation names, completed analyses, annotations, accounting columns or authoritative feature accounting breakdown, and experimental variables.",
         "inputSchema": {
@@ -873,6 +915,14 @@ TOOLS = [
                     "type": "string",
                     "description": "Cell line or tissue name (e.g. 'HeLa', 'lung tissue')."
                 },
+                "ncbi_taxon_id": {
+                    "type": "string",
+                    "description": "NCBI Taxonomy ID (e.g. 'NCBITaxon:9606' for human)."
+                },
+                "instrument_model": {
+                    "type": "string",
+                    "description": "Mass spectrometer model (e.g. 'Orbitrap Exploris 480', 'Q Exactive HF-X')."
+                },
                 "id": {
                     "type": "string",
                     "description": "Optional dataset ID."
@@ -1143,6 +1193,12 @@ def handle_tool_call(name, args):
         if res.get("success"):
             return f"Dataset '{res.get('id')}' loaded successfully!\n\n```\n{res.get('summary')}\n```"
         return f"Error loading data: {res.get('error')}"
+
+    elif name == "tpa_import_expression_table":
+        res = call_daemon("/import_expression_table", args)
+        if res.get("success"):
+            return f"### Expression Table Imported\n- Comparison: {res.get('comparison')}\n- Total Proteins: {res.get('n_proteins')}\n- Significant (|log2FC| >= 1, q <= 0.05): {res.get('n_significant')}\n\n{res.get('summary')}"
+        return f"Error importing expression table: {res.get('error')}"
 
     elif name == "tpa_inspect":
         res = call_daemon("/inspect", args)

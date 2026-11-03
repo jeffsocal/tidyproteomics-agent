@@ -1,6 +1,6 @@
 import React from "react";
 import { FlaskConical, Activity, FileText, Settings, X, BarChart3, Database, BookOpen } from "lucide-react";
-import { AppConfig, ExperimentSpec, FileTreeNode, LiteratureViewState, McpStatus, PipelineState, ViewerTab } from "../types";
+import { AppConfig, ExperimentSpec, FileTreeNode, LiteratureViewState, McpStatus, PipelineId, PipelineState, ViewerTab } from "../types";
 import { ExperimentFormTab } from "./ExperimentFormTab";
 import { PipelineProgressTab } from "./PipelineProgressTab";
 import { MarkdownViewer } from "./MarkdownViewer";
@@ -29,7 +29,7 @@ interface CenterViewerPaneProps {
   onSelectWorkspace?: (dir: string) => Promise<void>;
   onInitWorkspace?: (
     dir: string,
-    pipelineId: "differential_expression" | "quality_control_only"
+    pipelineId: PipelineId
   ) => Promise<void>;
   onReconnectMcp?: () => Promise<void>;
   onSaveExperimentForm: (patch: Partial<ExperimentSpec>) => Promise<void>;

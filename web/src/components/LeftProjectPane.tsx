@@ -16,7 +16,7 @@ import {
   BarChart3,
   AlertTriangle,
 } from "lucide-react";
-import { AppConfig, FileTreeNode, McpStatus, PipelineState } from "../types";
+import { AppConfig, FileTreeNode, McpStatus, PipelineId, PipelineState } from "../types";
 
 interface LeftProjectPaneProps {
   config?: AppConfig;
@@ -28,7 +28,7 @@ interface LeftProjectPaneProps {
   onSelectWorkspace: (workspaceRoot: string) => Promise<void>;
   onInitWorkspace: (
     workspaceRoot: string,
-    pipelineId: "differential_expression" | "quality_control_only"
+    pipelineId: PipelineId
   ) => Promise<void>;
   onReconnectMcp: () => Promise<void>;
   onOpenFile: (relPath: string) => void;

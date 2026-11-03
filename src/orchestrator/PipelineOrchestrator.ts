@@ -130,6 +130,11 @@ export class PipelineOrchestrator {
         const cfg = args?.config ? ` (config: ${path.basename(String(args.config))})` : "";
         return `[MCP Load] ${path.basename(String(src)) || src}${cfg}`;
       }
+      case "tpa_import_expression_table": {
+        const fp = args?.file_path ? path.basename(String(args.file_path)) : "table";
+        const comp = args?.comparison ? ` (${args.comparison})` : "";
+        return `[MCP Import Table] ${fp}${comp}`;
+      }
       case "tpa_export_config": {
         return `[MCP Export Config] ${args?.platform || "config"}${args?.analyte ? ` (${args.analyte})` : ""}`;
       }
@@ -207,6 +212,10 @@ export class PipelineOrchestrator {
         const src = args?.source || args?.load_local || "";
         const base = path.basename(String(src)) || "dataset";
         return `Loading quantitative dataset from \`${base}\` ...`;
+      }
+      case "tpa_import_expression_table": {
+        const fp = args?.file_path ? path.basename(String(args.file_path)) : "table";
+        return `Importing differential expression table from \`${fp}\` into tidyproteomics ...`;
       }
       case "tpa_export_config": {
         const plat = args?.platform || "platform";

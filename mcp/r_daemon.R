@@ -726,6 +726,141 @@ handle_request <- function(req) {
         list(success = TRUE, id = data_id, summary = summary_text)
       },
 
+      "/import_expression_table" = {
+        data_id <- if (!is.null(params$id) && nzchar(params$id)) params$id else "rdata"
+        file_path <- params$file_path
+        if (is.null(file_path) || !nzchar(file_path)) {
+          stop("file_path is required for import_expression_table")
+        }
+        if (!file.exists(file_path) && file.exists(file.path(STATE$output_dir, file_path))) {
+          file_path <- file.path(STATE$output_dir, file_path)
+        }
+        if (!file.exists(file_path)) {
+          stop(glue::glue("Expression table file not found: '{file_path}'"))
+        }
+
+        comparison <- if (!is.null(params$comparison) && nzchar(params$comparison)) params$comparison else "treatment/control"
+
+        # Read CSV or TSV
+        raw_df <- if (grepl("\\.csv$", file_path, ignore.case = TRUE)) {
+          read.csv(file_path, check.names = FALSE, stringsAsFactors = FALSE)
+        } else {
+          read.delim(file_path, check.names = FALSE, stringsAsFactors = FALSE)
+        }
+
+        col_names <- names(raw_df)
+
+        # 1. Identifier column
+        id_col <- params$id_col
+        if (is.null(id_col) || !nzchar(id_col) || !id_col %in% col_names) {
+          matched_id <- grep("^(protein|accession|protein_id|uniprot|id|identifier)$", col_names, ignore.case = TRUE, value = TRUE)
+          id_col <- if (length(matched_id) > 0) matched_id[1] else col_names[1]
+        }
+
+        # 2. Gene name column (optional)
+        gene_col <- params$gene_name_col
+        if (is.null(gene_col) || !nzchar(gene_col) || !gene_col %in% col_names) {
+          matched_gene <- grep("^(gene_name|gene|symbol|gene_symbol|genes)$", col_names, ignore.case = TRUE, value = TRUE)
+          gene_col <- if (length(matched_gene) > 0) matched_gene[1] else NULL
+        }
+
+        # 3. log2FC column
+        log2fc_col <- params$log2fc_col
+        if (is.null(log2fc_col) || !nzchar(log2fc_col) || !log2fc_col %in% col_names) {
+          matched_fc <- grep("^(log2_foldchange|log2fc|logfc|log2_fc|diff)$", col_names, ignore.case = TRUE, value = TRUE)
+          if (length(matched_fc) == 0) matched_fc <- grep("log2", col_names, ignore.case = TRUE, value = TRUE)
+          if (length(matched_fc) == 0) stop("Could not auto-detect log2_foldchange column. Please specify log2fc_col.")
+          log2fc_col <- matched_fc[1]
+        }
+
+        # 4. p-value column
+        pval_col <- params$pvalue_col
+        if (is.null(pval_col) || !nzchar(pval_col) || !pval_col %in% col_names) {
+          matched_p <- grep("^(p_value|pvalue|p.value|p-value|pval)$", col_names, ignore.case = TRUE, value = TRUE)
+          if (length(matched_p) > 0) pval_col <- matched_p[1] else pval_col <- NULL
+        }
+
+        # 5. adjusted p-value / FDR column
+        padj_col <- params$padj_col
+        if (is.null(padj_col) || !nzchar(padj_col) || !padj_col %in% col_names) {
+          matched_adj <- grep("^(adj_p_value|adj_pval|q_value|qvalue|fdr|adj.p.val|padj)$", col_names, ignore.case = TRUE, value = TRUE)
+          if (length(matched_adj) > 0) padj_col <- matched_adj[1] else padj_col <- NULL
+        }
+
+        # Format expression tibble
+        expr_tibble <- tibble::tibble(
+          protein = as.character(raw_df[[id_col]]),
+          log2_foldchange = as.numeric(raw_df[[log2fc_col]]),
+          p_value = if (!is.null(pval_col)) as.numeric(raw_df[[pval_col]]) else rep(NA_real_, nrow(raw_df)),
+          adj_p_value = if (!is.null(padj_col)) as.numeric(raw_df[[padj_col]]) else if (!is.null(pval_col)) p.adjust(as.numeric(raw_df[[pval_col]]), method = "BH") else rep(NA_real_, nrow(raw_df))
+        )
+        if (!is.null(gene_col)) {
+          expr_tibble$gene_name <- as.character(raw_df[[gene_col]])
+        }
+
+        # Deduplicate on protein if necessary
+        expr_tibble <- expr_tibble %>% dplyr::distinct(protein, .keep_all = TRUE)
+
+        # Parse comparison groups
+        parts <- strsplit(comparison, "/")[[1]]
+        trt <- if (length(parts) >= 1) parts[1] else "treatment"
+        ctl <- if (length(parts) >= 2) parts[2] else "control"
+
+        # Build annotations tibble
+        annot_list <- list()
+        if (!is.null(gene_col)) {
+          annot_list[[length(annot_list) + 1]] <- tibble::tibble(
+            protein = expr_tibble$protein,
+            term = "gene_name",
+            annotation = expr_tibble$gene_name
+          )
+        }
+
+        annotations_df <- if (length(annot_list) > 0) do.call(rbind, annot_list) else tibble::tibble(protein = character(0), term = character(0), annotation = character(0))
+
+        data <- list(
+          origin = "external_expression_table",
+          analyte = "proteins",
+          identifier = "protein",
+          quantitative_source = "raw",
+          operations = c(glue::glue("Imported external expression table from '{basename(file_path)}'")),
+          experiments = tibble::tibble(
+            sample_id = c("S1", "S2"),
+            sample = c(trt, ctl),
+            replicate = c("1", "1"),
+            sample_file = c(paste0(trt, "_rep1"), paste0(ctl, "_rep1")),
+            import_file = c(basename(file_path), basename(file_path))
+          ),
+          quantitative = tibble::tibble(
+            sample_id = rep(c("S1", "S2"), times = nrow(expr_tibble)),
+            sample = rep(c(trt, ctl), times = nrow(expr_tibble)),
+            replicate = rep(c("1", "1"), times = nrow(expr_tibble)),
+            protein = rep(expr_tibble$protein, each = 2),
+            abundance_raw = rep(100, nrow(expr_tibble) * 2)
+          ),
+          accounting = tibble::tibble(),
+          annotations = annotations_df,
+          analysis = list()
+        )
+        data$analysis[[comparison]] <- list(
+          expression = expr_tibble
+        )
+        class(data) <- c("tidyproteomics", "list")
+
+        set_active_data(data, data_id)
+        log_code(glue::glue("# Imported external expression table: {basename(file_path)}"))
+        log_code(glue::glue("# Comparison: {comparison} ({nrow(expr_tibble)} proteins)"))
+
+        list(
+          success = TRUE,
+          id = data_id,
+          comparison = comparison,
+          n_proteins = nrow(expr_tibble),
+          n_significant = sum(!is.na(expr_tibble$adj_p_value) & expr_tibble$adj_p_value <= 0.05 & abs(expr_tibble$log2_foldchange) >= 1.0, na.rm = TRUE),
+          summary = glue::glue("Successfully imported external expression table '{basename(file_path)}' ({nrow(expr_tibble)} proteins, comparison: '{comparison}'). Ready for annotation fetch, functional enrichment, and synthesis.")
+        )
+      },
+
       # ------------------------------------------------------------------------
       # Inspection & Introspection Getters
       # ------------------------------------------------------------------------
@@ -2224,6 +2359,9 @@ handle_request <- function(req) {
         replicates <- if ("replicate" %in% names(exp_df)) exp_df$replicate else seq_len(nrow(exp_df))
         samples <- if ("sample" %in% names(exp_df)) exp_df$sample else "sample"
 
+        instrument_arg <- if (!is.null(params$instrument_model) && nzchar(params$instrument_model)) params$instrument_model else NULL
+        taxon_arg <- if (!is.null(params$ncbi_taxon_id) && nzchar(params$ncbi_taxon_id)) params$ncbi_taxon_id else NULL
+
         sdrf_df <- data.frame(
           `source name` = source_names,
           `characteristics[organism]` = organism,
@@ -2232,9 +2370,18 @@ handle_request <- function(req) {
           `factor value[phenotype / perturbation]` = samples,
           `comment[data file]` = basename(files),
           `comment[fraction identifier]` = "1",
+          `comment[technical replicate]` = seq_len(nrow(exp_df)),
           check.names = FALSE,
           stringsAsFactors = FALSE
         )
+
+        if (!is.null(taxon_arg)) {
+          sdrf_df$`characteristics[organism ontology]` <- taxon_arg
+        }
+
+        if (!is.null(instrument_arg)) {
+          sdrf_df$`comment[instrument]` <- instrument_arg
+        }
 
         if ("batch" %in% names(exp_df)) {
           sdrf_df$`comment[batch identifier]` <- exp_df$batch

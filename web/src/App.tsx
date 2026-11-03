@@ -8,6 +8,7 @@ import {
   FileTreeNode,
   LiteratureViewState,
   McpStatus,
+  PipelineId,
   PipelineState,
   ViewerTab,
 } from "./types";
@@ -456,7 +457,7 @@ export const App: React.FC = () => {
 
   const handleInitWorkspace = async (
     workspaceRoot: string,
-    pipelineId: "differential_expression" | "quality_control_only"
+    pipelineId: PipelineId
   ) => {
     await fetch("/api/workspace/init", {
       method: "POST",

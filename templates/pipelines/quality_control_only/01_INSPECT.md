@@ -2,7 +2,7 @@
 tools: [tpa_health, tpa_input_audit, tpa_ingest_config, tpa_export_config, tpa_load, tpa_inspect, tpa_summary, tpa_plot, tpa_export_state, tpa_set_workspace]
 ---
 
-### Phase 1: Data Ingestion & Exploratory Quality Inspection
+### Phase 1: Data Ingestion & Library Quality Inspection
 
 Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/01_inspect.R` if offline). All tool executions and outputs are automatically recorded to `logs/01_inspect/console.log`. Upon satisfying all exploratory checkpoints, invoke `tpa_export_state` to generate `code/01_inspect.R` and save `data/tidyproteomics_data.rds`. You must strictly enforce all checkpoints below.
 
@@ -46,47 +46,35 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/01_i
   - *(Note: Running `overview` fulfills operations audit, quant names, sample group discovery, and annotation terms simultaneously. Do NOT run separate single-property calls).*
 - [ ] **Checkpoint 1.1**: Verify that `overview` prints the complete quantitative data object topology to stdout.
 
-#### Phase 1.2: Sample Quality, Replicate QC & Overlap Profiling
-- [ ] Profile sample preparation contaminants using `tpa_summary(contamination = "CRAP")`.
-- [ ] Run sample-level quality metrics using `tpa_summary(by = "sample")`.
-- [ ] Generate identification counts diagnostic plot using `tpa_plot(type = "counts")` (automatically saved to `data/`).
-- [ ] **Qualitative Binary Switch Detection & Feature Overlap Profiling**:
-  - Inspect condition-unique presence/absence (proteins detected exclusively in one biological group vs another prior to imputation) using `tpa_plot(type = "venn")` or `tpa_plot(type = "euler")` (automatically saved to `data/`).
-- [ ] **Checkpoint 1.2**: Verify that replicate counts, quantifiable fractions, replicate CV distributions, missingness metrics, and feature overlap / binary switch profiles are printed to stdout and recorded in `logs/01_inspect/console.log`.
+#### Phase 1.2: Contaminant Audit & Identification Depth
+- [ ] **Profile Sample Preparation Contaminants**:
+  - Run `tpa_summary(contamination = "CRAP")` to detect common laboratory background contaminants (e.g. keratin, trypsin, serum albumin, heat shock proteins).
+  - Record the fraction of total spectral or quantitative intensity attributed to contaminants.
+- [ ] **Identification Counts Diagnostic Plot**:
+  - Generate the primary identification depth plot: `tpa_plot(type = "counts")` (automatically saved to `data/plot_proteins_counts.png` or `data/plot_peptides_counts.png`).
+  - Verify that each sample exhibits adequate protein depth according to the experimental design.
+- [ ] **Checkpoint 1.2**: Verify that identification counts and contaminant fractions are recorded in stdout and logged to `logs/01_inspect/console.log`.
 
-#### Phase 1.3: State Persistence & Phase Gate Verification
-- [ ] Persist the imported dataset and generate reproducible R script:
+#### Phase 1.3: Experimental Alignment & Section 3 Scaffolding
+- [ ] **Inspect User Hypothesis & Parameters (`docs/experiment.md` Sections 1 & 2)**:
+  - Extract the working hypothesis, biological model, and investigated cohorts from Sections 1 and 2.
+  - **CRITICAL**: Never overwrite, modify, or delete Sections 1 or 2 of `docs/experiment.md` (reserved strictly for researcher input).
+- [ ] **Proactive Section 3 Scaffolding in `docs/experiment.md`**:
+  - Inspect Section 3 (`## 3. Bioinformatics Design`) in `docs/experiment.md`.
+  - If Section 3 contains `*(Pending Phase 1 data ingestion)*`, is missing, or contains unconfigured tables:
+    - Scaffold Section 3 with discovered sample groups:
+      1. Section 3.A: Label with `ℹ️ [AUTO-GENERATED REFERENCE - READ ONLY]:` and list all discovered sample groups with replicate counts, setting `- **Confirm Discovered Sample Groups**: FALSE`.
+      2. Section 3.B: Set `- **Confirm Normalization Strategy**: FALSE`.
+      3. Section 3.C: Set `- **Confirm Imputation Strategy**: FALSE`.
+      4. Section 3.D: Scaffold suggested **Sample Group Renaming & Pooling Map** table if batch/technical suffixes are present.
+      5. Section 3.E: Scaffold suggested **Target Contrasts**.
+      6. Section 3.F: Set `- **Batch Confounding Detected**: FALSE` (or `TRUE` if severe confounding is evident).
+- [ ] **State Persistence & Phase Gate Verification**:
   - Invoke `tpa_export_state(rds_path = "data/tidyproteomics_data.rds", script_path = "code/01_inspect.R")`.
 - [ ] **Checkpoint 1.3 (Phase Gate & Log Verification)**:
   1. `logs/01_inspect/console.log` exists on disk with non-zero file size.
   2. `data/tidyproteomics_data.rds` and `code/01_inspect.R` exist on disk with non-zero file size.
-  3. `overview` confirms exact sample groups (`ctl`, treatment cohorts) and functional annotation terms.
-  4. Count diagnostic plot (`data/plot_proteins_counts.png` or `data/plot_peptides_counts.png`) exists in `data/` with non-zero file size (along with optional `data/plot_*_venn.png` or `data/plot_*_euler.png` if generated).
-
-#### Phase 1.4: Experimental Alignment, Contrast Scaffolding & Hypothesis Verification
-- [ ] **Inspect User Hypothesis & Parameters (`docs/experiment.md` Sections 1 & 2)**:
-  - Extract the working hypothesis, biological model, and investigated target(s) / discovery scope from Sections 1 and 2.
-  - **CRITICAL**: Never overwrite, modify, or delete Sections 1 or 2 of `docs/experiment.md` (reserved strictly for researcher input).
-- [ ] **Sample Group & Batch Pattern Audit (`sample_names`)**:
-  - Inspect the discovered `sample_names` output from Phase 1.3.
-  - Check whether `sample_names` contain technical batch suffixes (e.g. `_batch\d+`, `_plate\d+`, `_run\d+`, `_rep\d+`), multiple technical replicates, or compound delimiters.
-- [ ] **Proactive Section 3 Scaffolding in `docs/experiment.md`**:
-  - Inspect Section 3 (`## 3. Bioinformatics Design`) in `docs/experiment.md`.
-  - If Section 3 contains `*(Pending Phase 1 data ingestion)*`, is missing, or contains unconfigured tables:
-    - *Targeting Edits*: Target concise unique anchor lines (e.g. replacing `- *(Pending Phase 1 data ingestion)*` in Section 3.A) rather than replacing large multi-paragraph comment blocks, ensuring `replace_file_content` succeeds reliably without whitespace mismatches.
-    - **Scaffold Section 3**: Update Section 3 of `docs/experiment.md` directly using standardized visual badges:
-      1. Section 3.A: Label with `ℹ️ [AUTO-GENERATED REFERENCE - READ ONLY]:` and list all discovered sample groups with replicate counts, setting `- **Confirm Discovered Sample Groups**: FALSE`.
-      2. Section 3.B: Label with `👉 [USER ACTION REQUIRED - CONFIGURE & CONFIRM NORMALIZATION STRATEGY]:`, setting `- **Normalization Methods**: default`, `- **Normalization Subset Filter**: NONE`, and `- **Confirm Normalization Strategy**: FALSE`.
-      3. Section 3.C: Label with `👉 [USER ACTION REQUIRED - CONFIRM IMPUTATION METHOD]:`, setting `- **Imputation Method**: randomforest_grouped` (or `none` if complete-case) and `- **Confirm Imputation Strategy**: FALSE`.
-      4. Section 3.D: Label with `👉 [USER REVIEW & EDIT TABLE]:`. If technical batch or replicate suffixes are detected, provide a suggested **Sample Group Renaming & Pooling Map** table proposing clean biological names, setting `- **Reassign Sample Names According to Pooling Map**: TRUE` and `- **Confirm Sample Pooling Map**: FALSE`.
-      5. Section 3.E: Label with `👉 [USER ACTION REQUIRED - DEFINE & CONFIRM TARGET CONTRASTS]:` and suggest logical **Target Contrasts**, setting `Status: PENDING` and `- **Confirm Target Contrasts**: FALSE`.
-      6. Section 3.F: Label with `⚠️ [PRE-FLIGHT GATE DECISION - EXPOSE ONLY IF BATCH CONFOUNDING DETECTED]:`. If batch confounding is detected across cohorts, set `- **Batch Confounding Detected**: TRUE`, `- **Proceed With Potential Batch Confounding**: FALSE`, and `- **Confirm Batch Confounding Authorization**: FALSE` to expose this gate for researcher review. If no confounding exists, set `- **Batch Confounding Detected**: FALSE`.
-  - If Section 3 already contains user-customized renaming or contrast definitions, preserve them exactly!
-  - **Enforce Clean Boolean Values & Badge Preservation**: Preserve visual badges (`ℹ️ [AUTO-GENERATED REFERENCE]`, `👉 [USER ACTION REQUIRED]`, `⚠️ [PRE-FLIGHT GATE DECISION]`) and keep all boolean configuration toggles (`- **Reassign Sample Names According to Pooling Map**: TRUE` and `- **Proceed With Potential Batch Confounding**: FALSE`) strictly as clean booleans without appending conversational notes or explanations. Any notes must be placed in markdown comments `<!-- ... -->`.
-- [ ] **Checkpoint 1.4 (Design Alignment Gate)**: 
-  - Verify that `sample_names` are confirmed, alignment with `docs/experiment.md` is verified, and Section 3 is scaffolded with discovered sample groups.
-  - Setting `- **Proceed With Potential Batch Confounding**: FALSE` is the scaffolded default awaiting researcher review and does NOT fail or halt Phase 1. Phase 1 must NEVER invoke `fail_phase` for pre-ingestion audit warnings, unmapped columns, discovered groups, batch suffixes, or confounding if `tpa_load` loads the data with quantified entities.
+  3. Count diagnostic plot (`data/plot_proteins_counts.png` or `data/plot_peptides_counts.png`) exists in `data/`.
 - [ ] **Complete Phase (Automated Blackboard Recording)**:
-  - Do NOT manually edit `docs/notes.md` via file tools; the orchestrator automatically records your `complete_phase` summary into `docs/notes.md`.
-  - Once `docs/experiment.md` Section 3 is scaffolded and QC plots are generated, invoke `complete_phase` with a comprehensive summary including quantified protein count, sample inventory, baseline quality stats, and detected upstream operations:
-    `complete_phase(phaseName = "01_INSPECT", summary = "Data ingestion complete (<N> proteins across <M> samples). Audited operations history (normalization and imputation status), verified sample groups in sample_names, scaffolded sample grouping and contrast template in docs/experiment.md Section 3, generated count diagnostic plot, and persisted data/tidyproteomics_data.rds.")`
+  - Invoke `complete_phase` with a summary of data ingestion, total proteins/samples, contaminant fraction, and scaffolded groups:
+    `complete_phase(phaseName = "01_INSPECT", summary = "Data ingestion and library quality inspection complete (<N> proteins across <M> samples). Ingestion topology verified, contaminant levels profiled (<C>% CRAP), identification counts plotted (data/plot_proteins_counts.png), and persisted data/tidyproteomics_data.rds.")`
