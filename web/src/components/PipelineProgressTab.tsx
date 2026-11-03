@@ -16,7 +16,6 @@ import {
   Award,
 } from "lucide-react";
 import { PhaseInfo, PipelineState, resolvePhaseVisualState } from "../types";
-import { SegmentedProgressBar } from "./SegmentedProgressBar";
 import { FollowonPhaseModal } from "./FollowonPhaseModal";
 
 interface PipelineProgressTabProps {
@@ -31,6 +30,7 @@ interface PipelineProgressTabProps {
   onStopPipeline: () => void;
   onResetPipeline: () => void;
   onConfirmGateAndResume: (phaseId: string) => void;
+  onContinuePhase?: (phaseId: string, additionalTurns?: number) => void;
   onOpenPerformanceReview?: () => void;
 }
 
@@ -41,6 +41,7 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
   onOpenFile,
   onOpenExperimentForm,
   onRunPhase,
+  onContinuePhase,
   onTogglePhase,
   onStartPipeline,
   onStopPipeline,
@@ -70,6 +71,27 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
       }
     }
   }, [focusedPhaseId]);
+
+  // Auto-expand any failed phase or human attention gate phase
+  useEffect(() => {
+    if (phases.length > 0) {
+      setExpandedPhases((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const p of phases) {
+          if (!p) continue;
+          const isFailed = p.status === "failed";
+          const isAwaitingHitl = p.status === "awaiting_hitl";
+          const isAttention = (p.status === "running" && Boolean(p.summary?.includes("ACTION REQUIRED"))) || isAwaitingHitl;
+          if ((isFailed || isAttention) && next[p.id] === undefined) {
+            next[p.id] = true;
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }
+  }, [phases]);
 
   // Live 1s timer when any phase is running
   useEffect(() => {
@@ -182,13 +204,11 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
 
         {isBenchmarkRunning && (
           <div
+            className="attention-banner-orange"
             style={{
-              background: "rgba(245, 158, 11, 0.12)",
-              border: "1px solid rgba(245, 158, 11, 0.35)",
-              borderRadius: "6px",
               padding: "8px 12px",
               fontSize: "12px",
-              color: "#fbbf24",
+              color: "var(--attention-orange-light)",
               display: "flex",
               alignItems: "center",
               gap: "8px",
@@ -199,12 +219,43 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
           </div>
         )}
 
-        {/* Full-Width Segmented Progress Bar with Legend */}
-        <SegmentedProgressBar
-          pipelineState={pipelineState}
-          onSelectPhase={(phaseId) => toggleExpand(phaseId)}
-          showLegend={true}
-        />
+        {/* Phase Status Legend */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            fontSize: "11px",
+            color: "var(--muted)",
+            padding: "4px 0",
+            flexWrap: "wrap",
+            gap: "10px",
+          }}
+        >
+          <span style={{ fontWeight: 600, color: "var(--fg-bright)" }}>
+            Phase Execution Status:
+          </span>
+          <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: "#10b981" }} /> Completed
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: "#3b82f6" }} /> Running
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: "var(--attention-orange)" }} /> Needs Attention
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: "#ef4444" }} /> Failed
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: "#a855f7" }} /> Queued
+            </span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: "#52525b" }} /> Pending
+            </span>
+          </div>
+        </div>
 
         {/* Aggregate Telemetry Strip */}
         <div
@@ -409,6 +460,7 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
                 completed: "#10b981",
                 running: "#3b82f6",
                 warning: "#f59e0b",
+                awaiting_hitl: "#f59e0b",
                 failed: "#ef4444",
                 queued: "#a855f7",
                 pending: "#52525b",
@@ -465,7 +517,7 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
                                   fontSize: "9.5px",
                                   color: p.modelSource === "phase" ? "#60a5fa" : p.modelSource === "tier" ? "#c084fc" : "var(--muted)",
                                   fontFamily: "var(--font-mono)",
-                                  background: p.modelSource === "phase" ? "rgba(59, 130, 246, 0.12)" : p.modelSource === "tier" ? "rgba(168, 85, 247, 0.1)" : "rgba(255, 255, 255, 0.05)",
+                                  background: p.modelSource === "phase" ? "rgba(59, 130, 246, 0.12)" : p.modelSource === "tier" ? "rgba(168, 85, 247, 0.1)" : "var(--code-bg)",
                                   padding: "1px 5px",
                                   borderRadius: "3px",
                                   border: `1px solid ${p.modelSource === "phase" ? "rgba(59, 130, 246, 0.35)" : p.modelSource === "tier" ? "rgba(168, 85, 247, 0.3)" : "var(--border)"}`,
@@ -502,7 +554,7 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
                     </td>
 
                     <td style={{ textAlign: "right", fontFamily: "var(--font-mono)" }}>
-                      {p.turnCount !== undefined ? p.turnCount : "—"}
+                      {p.turnCount !== undefined ? `${p.turnCount} / ${p.maxTurns || 30}` : "—"}
                     </td>
 
                     <td style={{ textAlign: "right", fontFamily: "var(--font-mono)" }}>
@@ -542,6 +594,27 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
                         >
                           <Terminal size={11} />
                         </button>
+                        {state === "failed" && onContinuePhase && (
+                          <button
+                            type="button"
+                            className="btn btn-primary btn-xs"
+                            disabled={anyRunning || isBenchmarkRunning}
+                            title={`Continue ${shortFileName} (+10 turns) without restarting`}
+                            onClick={() => onContinuePhase(p.id, 10)}
+                            style={{
+                              background: "#2563eb",
+                              borderColor: "#1d4ed8",
+                              color: "#fff",
+                              fontWeight: 700,
+                              padding: "2px 7px",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "3px",
+                            }}
+                          >
+                            <Play size={10} fill="#fff" /> +10
+                          </button>
+                        )}
                         <button
                           type="button"
                           className="btn btn-secondary btn-xs"
@@ -561,7 +634,7 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
                       <td
                         colSpan={7}
                         style={{
-                          background: "#151519",
+                          background: "var(--panel-bg)",
                           padding: "14px 18px",
                           borderLeft: `4px solid ${indicatorColor}`,
                           borderBottom: "1px solid var(--border-strong)",
@@ -631,7 +704,7 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
                                   : "Phase has not been executed yet. Click Run to start.")}
 
                               {(isAttention || state === "failed") && (
-                                <div style={{ display: "flex", gap: "8px", marginTop: "10px", flexWrap: "wrap" }}>
+                                <div style={{ display: "flex", gap: "8px", marginTop: "10px", flexWrap: "wrap", alignItems: "center" }}>
                                   {isAttention && (
                                     <button
                                       type="button"
@@ -640,6 +713,30 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
                                     >
                                       <Sparkles size={12} /> Confirm Study Design &amp; Proceed
                                     </button>
+                                  )}
+                                  {state === "failed" && onContinuePhase && (
+                                    <div style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                                      <button
+                                        type="button"
+                                        className="btn btn-primary btn-xs"
+                                        disabled={anyRunning || isBenchmarkRunning}
+                                        onClick={() => onContinuePhase(p.id, 10)}
+                                        title="Resume this phase from its saved checkpoint with +10 turns without starting over"
+                                        style={{ background: "#2563eb", borderColor: "#1d4ed8", color: "#fff", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: "4px" }}
+                                      >
+                                        <Play size={12} fill="#fff" /> Continue Phase (+10 Turns)
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="btn btn-secondary btn-xs"
+                                        disabled={anyRunning || isBenchmarkRunning}
+                                        onClick={() => onContinuePhase(p.id, 20)}
+                                        title="Resume this phase with +20 turns without starting over"
+                                        style={{ fontWeight: 600 }}
+                                      >
+                                        +20 Turns
+                                      </button>
+                                    </div>
                                   )}
                                   <button
                                     type="button"
@@ -653,8 +750,9 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
                                     className="btn btn-secondary btn-xs"
                                     disabled={anyRunning || isBenchmarkRunning}
                                     onClick={() => onRunPhase(p.id)}
+                                    title="Start this phase over from Turn 0"
                                   >
-                                    <RotateCcw size={12} /> Retry Phase
+                                    <RotateCcw size={12} /> Restart from Beginning
                                   </button>
                                 </div>
                               )}

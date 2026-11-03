@@ -1,5 +1,13 @@
 import { ChatMessage, LLMConfig, LLMProviderType, LLMRole, LLMResponse, LLMTierConfig, TokenUsage, ToolCall, ToolDefinition } from "../types";
 
+export interface ChatParams {
+  system: string;
+  messages: ChatMessage[];
+  tools: ToolDefinition[];
+  onToken?: (text: string) => void;
+  signal?: AbortSignal;
+}
+
 export class ProviderClient {
   private roleClients = new Map<LLMRole, ProviderClient>();
   private modelClients = new Map<string, ProviderClient>();
@@ -139,12 +147,17 @@ export class ProviderClient {
     return this.getTimeoutSeconds() * 1000;
   }
 
-  public async chat(params: {
-    system: string;
-    messages: ChatMessage[];
-    tools: ToolDefinition[];
-    onToken?: (text: string) => void;
-  }): Promise<LLMResponse> {
+  public createFetchSignal(userSignal?: AbortSignal): AbortSignal {
+    const timeoutSignal = AbortSignal.timeout(this.getTimeoutMs());
+    if (!userSignal) return timeoutSignal;
+    try {
+      return AbortSignal.any([timeoutSignal, userSignal]);
+    } catch {
+      return timeoutSignal;
+    }
+  }
+
+  public async chat(params: ChatParams): Promise<LLMResponse> {
     switch (this.config.provider) {
       case "anthropic":
         return this.chatAnthropic(params);
@@ -163,12 +176,7 @@ export class ProviderClient {
   /**
    * Anthropic Messages API with native Prompt Caching enabled on the static system prompt!
    */
-  private async chatAnthropic(params: {
-    system: string;
-    messages: ChatMessage[];
-    tools: ToolDefinition[];
-    onToken?: (text: string) => void;
-  }): Promise<LLMResponse> {
+  private async chatAnthropic(params: ChatParams): Promise<LLMResponse> {
     const url = "https://api.anthropic.com/v1/messages";
 
     // Format tools for Anthropic
@@ -278,10 +286,10 @@ export class ProviderClient {
           "anthropic-beta": "prompt-caching-2024-07-31",
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.getTimeoutMs()),
+        signal: this.createFetchSignal(params.signal),
       });
     } catch (err: any) {
-      this.handleFetchError(err, "Anthropic", url, timeoutSeconds);
+      this.handleFetchError(err, "Anthropic", url, timeoutSeconds, params.signal);
     }
 
     if (!res.ok) {
@@ -337,12 +345,7 @@ export class ProviderClient {
   /**
    * Google Gemini API implementation
    */
-  private async chatGemini(params: {
-    system: string;
-    messages: ChatMessage[];
-    tools: ToolDefinition[];
-    onToken?: (text: string) => void;
-  }): Promise<LLMResponse> {
+  private async chatGemini(params: ChatParams): Promise<LLMResponse> {
     const model = this.config.model || "gemini-1.5-pro";
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${this.config.apiKey}`;
 
@@ -440,10 +443,10 @@ export class ProviderClient {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.getTimeoutMs()),
+        signal: this.createFetchSignal(params.signal),
       });
     } catch (err: any) {
-      this.handleFetchError(err, "Gemini", url, timeoutSeconds);
+      this.handleFetchError(err, "Gemini", url, timeoutSeconds, params.signal);
     }
 
     if (!res.ok) {
@@ -499,12 +502,7 @@ export class ProviderClient {
   /**
    * OpenAI / Compatible API implementation
    */
-  private async chatOpenAI(params: {
-    system: string;
-    messages: ChatMessage[];
-    tools: ToolDefinition[];
-    onToken?: (text: string) => void;
-  }): Promise<LLMResponse> {
+  private async chatOpenAI(params: ChatParams): Promise<LLMResponse> {
     const baseUrl = this.config.baseUrl || "https://api.openai.com/v1";
     const url = `${baseUrl}/chat/completions`;
 
@@ -565,10 +563,10 @@ export class ProviderClient {
           Authorization: `Bearer ${this.config.apiKey}`,
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.getTimeoutMs()),
+        signal: this.createFetchSignal(params.signal),
       });
     } catch (err: any) {
-      this.handleFetchError(err, "OpenAI", url, timeoutSeconds);
+      this.handleFetchError(err, "OpenAI", url, timeoutSeconds, params.signal);
     }
 
     if (!res.ok) {
@@ -629,12 +627,7 @@ export class ProviderClient {
   /**
    * OpenRouter API implementation (Unified gateway for Claude, DeepSeek, Llama, Qwen, etc.)
    */
-  private async chatOpenRouter(params: {
-    system: string;
-    messages: ChatMessage[];
-    tools: ToolDefinition[];
-    onToken?: (text: string) => void;
-  }): Promise<LLMResponse> {
+  private async chatOpenRouter(params: ChatParams): Promise<LLMResponse> {
     const baseUrl = (this.config.baseUrl || "https://openrouter.ai/api/v1").replace(/\/+$/, "");
     const url = `${baseUrl}/chat/completions`;
 
@@ -715,10 +708,10 @@ export class ProviderClient {
           "X-Title": "TidyProteomicsAgent",
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.getTimeoutMs()),
+        signal: this.createFetchSignal(params.signal),
       });
     } catch (err: any) {
-      this.handleFetchError(err, "OpenRouter", url, timeoutSeconds);
+      this.handleFetchError(err, "OpenRouter", url, timeoutSeconds, params.signal);
     }
 
     if (!res.ok) {
@@ -782,12 +775,7 @@ export class ProviderClient {
   /**
    * Remote Hosted Ollama API implementation (OpenAI-compatible endpoint with function calling)
    */
-  private async chatOllama(params: {
-    system: string;
-    messages: ChatMessage[];
-    tools: ToolDefinition[];
-    onToken?: (text: string) => void;
-  }): Promise<LLMResponse> {
+  private async chatOllama(params: ChatParams): Promise<LLMResponse> {
     let baseUrl = (this.config.baseUrl || "http://localhost:11434").replace(/\/+$/, "");
     if (!baseUrl.endsWith("/v1")) {
       baseUrl += "/v1";
@@ -861,10 +849,10 @@ export class ProviderClient {
         method: "POST",
         headers,
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.getTimeoutMs()),
+        signal: this.createFetchSignal(params.signal),
       });
     } catch (err: any) {
-      this.handleFetchError(err, "Remote Ollama", url, timeoutSeconds);
+      this.handleFetchError(err, "Remote Ollama", url, timeoutSeconds, params.signal);
     }
 
     if (!res.ok) {
@@ -925,7 +913,14 @@ export class ProviderClient {
   /**
    * Translates low-level fetch/network/timeout errors into actionable diagnostic Error objects.
    */
-  private handleFetchError(err: any, providerLabel: string, url: string, timeoutSeconds: number): never {
+  private handleFetchError(err: any, providerLabel: string, url: string, timeoutSeconds: number, userSignal?: AbortSignal): never {
+    if (userSignal?.aborted || (err.name === "AbortError" && !err.isTimeout)) {
+      const e = new Error("Execution cancelled by user.");
+      (e as any).isAborted = true;
+      (e as any).isRetryable = false;
+      throw e;
+    }
+
     const isTimeout =
       err.name === "TimeoutError" ||
       err.name === "AbortError" ||

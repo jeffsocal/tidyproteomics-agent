@@ -139,7 +139,7 @@ export const MultiModelSettingsSection: React.FC<MultiModelSettingsSectionProps>
       style={{
         border: "1px solid var(--border)",
         borderRadius: "8px",
-        background: "rgba(255, 255, 255, 0.015)",
+        background: "var(--card-bg)",
         padding: "16px",
         display: "flex",
         flexDirection: "column",
@@ -260,7 +260,7 @@ export const MultiModelSettingsSection: React.FC<MultiModelSettingsSectionProps>
           </div>
 
           {/* Quick 1-Click Presets */}
-          <div style={{ background: "#15151a", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
+          <div style={{ background: "var(--panel-bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
             <div style={{ fontSize: "10.5px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--muted)", marginBottom: "8px" }}>
               Quick Presets
             </div>
@@ -311,7 +311,7 @@ export const MultiModelSettingsSection: React.FC<MultiModelSettingsSectionProps>
           {/* Tier 1 Card: Fast Utility & Ingestion */}
           <div
             style={{
-              background: "#16161d",
+              background: "var(--panel-bg)",
               border: "1px solid var(--border)",
               borderRadius: "6px",
               padding: "12px 14px",
@@ -405,7 +405,7 @@ export const MultiModelSettingsSection: React.FC<MultiModelSettingsSectionProps>
           {/* Tier 2 Card: Tool Runner & Code Orchestrator */}
           <div
             style={{
-              background: "#16161d",
+              background: "var(--panel-bg)",
               border: "1px solid var(--border)",
               borderRadius: "6px",
               padding: "12px 14px",
@@ -499,7 +499,7 @@ export const MultiModelSettingsSection: React.FC<MultiModelSettingsSectionProps>
           {/* Tier 3 Card: Frontier Scientific Reasoner */}
           <div
             style={{
-              background: "#16161d",
+              background: "var(--panel-bg)",
               border: "1px solid var(--border)",
               borderRadius: "6px",
               padding: "12px 14px",
@@ -593,7 +593,7 @@ export const MultiModelSettingsSection: React.FC<MultiModelSettingsSectionProps>
           {/* Phase-Specific Model Assignments (Granular Overrides) */}
           <div
             style={{
-              background: "#15151a",
+              background: "var(--panel-bg)",
               border: "1px solid var(--border)",
               borderRadius: "6px",
               overflow: "hidden",
@@ -609,7 +609,7 @@ export const MultiModelSettingsSection: React.FC<MultiModelSettingsSectionProps>
                 justifyContent: "space-between",
                 padding: "10px 14px",
                 cursor: "pointer",
-                background: showPhaseOverrides ? "rgba(255, 255, 255, 0.04)" : "transparent",
+                background: showPhaseOverrides ? "var(--card-hover)" : "transparent",
                 transition: "background 0.2s ease",
               }}
             >
@@ -705,8 +705,8 @@ export const MultiModelSettingsSection: React.FC<MultiModelSettingsSectionProps>
                           justifyContent: "space-between",
                           padding: "6px 10px",
                           borderRadius: "4px",
-                          background: isCustom ? "rgba(59, 130, 246, 0.07)" : "rgba(255, 255, 255, 0.02)",
-                          border: `1px solid ${isCustom ? "rgba(59, 130, 246, 0.3)" : "rgba(255, 255, 255, 0.05)"}`,
+                          background: isCustom ? "rgba(59, 130, 246, 0.07)" : "var(--card-bg)",
+                          border: `1px solid ${isCustom ? "rgba(59, 130, 246, 0.3)" : "var(--border)"}`,
                           gap: "10px",
                           flexWrap: "wrap",
                         }}
@@ -723,7 +723,7 @@ export const MultiModelSettingsSection: React.FC<MultiModelSettingsSectionProps>
                               fontSize: "9.5px",
                               padding: "1px 6px",
                               borderRadius: "4px",
-                              background: "rgba(0, 0, 0, 0.4)",
+                              background: `${tierColor}18`,
                               border: `1px solid ${tierColor}44`,
                               color: tierColor,
                               fontWeight: 600,

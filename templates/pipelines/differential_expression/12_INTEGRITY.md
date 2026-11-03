@@ -40,6 +40,8 @@ To ensure full reproducibility and auditable provenance:
    - **Protein Count Inconsistencies**: Ensure that total quantified protein count across Abstract and Results strictly matches the authoritative post-filter count in `data/manuscript_digest.json:total_quantified` (e.g. 1,941), and that raw ingest counts (e.g. 2,209) are not conflated with the quantified proteome.
    - **Primary Volcano Alignment**: Ensure Section 3.2 embeds the primary contrast volcano plot, not an exploratory or secondary contrast (e.g. `m-control`).
    - **Significance Overclaims**: Proteins asserted as "significant" when $q > 0.05$ without hedging.
+   - **Missingness & Denominator Audit**: Verify that stated missingness percentage matches `data/table_feature_accounting.tsv:matrix_missingness_percentage` (e.g. 15.1% true matrix missingness rather than Phase 1 pre-filter 9.1%), and ensure that the experimental design distinguishes raw data files (e.g. 23) from biological condition groups (e.g. 6).
+   - **Filter Completeness Audit**: Ensure Methods states the unique-peptide filter (e.g. $\ge 2$ unique peptides) and contaminant filtering.
    - **Missing Figures**: References to figures not present in `data/`.
    - **Ungrounded Citations**: DOIs or PMIDs not present in literature logs.
 
@@ -51,7 +53,8 @@ To ensure full reproducibility and auditable provenance:
    - Determine whether the finding is a **confirmed defect** (e.g. inverted sign convention) or a **verifier false positive** (e.g. "decreased degradation" of an accumulated protein).
 2. Apply targeted edits using `replace_file_content` to `docs/manuscript_rev_01.md` and `docs/manuscript.md`:
    - **Fix Direction Errors**: If a protein has $log_2\text{FC} > 0$, ensure text describes it as *accumulated, increased, elevated, or stabilized*—never "decreased", "depleted", or "downregulated". If $log_2\text{FC} < 0$, describe as *depleted, decreased, or reduced*.
-   - **Fix Numeric Discrepancies**: Replace incorrect fold-changes or p/q-values with true table values.
+   - **Fix Numeric Discrepancies & Missingness**: Replace incorrect fold-changes, p/q-values, or missingness percentages with true table values.
+   - **Fix Denominator Ambiguities**: Ensure text refers to replicate MS files ($n=23$) vs biological condition groups ($n=6$) without conflating them.
    - **Add Hedging**: Add appropriate hedging to any marginal findings ($q > 0.05$).
    - Harmonize any adjacent narrative reasoning or mechanistic conclusions that relied on the inverted direction.
 

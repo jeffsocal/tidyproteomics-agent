@@ -25,6 +25,12 @@ export interface ExperimentSpec {
   batchConfoundingAuthorized: boolean;
   batchConfoundingConfirmed: boolean;
   batchConfoundingRationale?: string;
+  annotationSource: string;
+  annotationFilePath: string;
+  annotationTaxonId: string;
+  annotationOntologies: string;
+  annotationValidationStatus: string;
+  annotationConfirmed: boolean;
   missingInitialFields: ("PATH_TO_DATA_FILE" | "PLATFORM" | "ANALYTE" | "DESCRIPTION")[];
 }
 
@@ -106,6 +112,15 @@ export class ExperimentManager {
 - **Batch Confounding Detected**: FALSE
 - **Proceed With Potential Batch Confounding**: FALSE
 - **Confirm Batch Confounding Authorization**: FALSE
+
+### G. Functional Annotation Strategy
+<!-- Configures functional ontology annotation (GO terms, KEGG, Reactome) for pathway enrichment -->
+- **Annotation Source**: uniprot
+- **Annotation File Path**: NONE
+- **Taxon / Organism ID**: 9606
+- **Annotation Ontologies**: biological_process, cellular_component, molecular_function, reactome_pathway
+- **Annotation Validation Status**: PENDING
+- **Confirm Functional Annotation Strategy**: FALSE
 `;
     }
 
@@ -141,6 +156,12 @@ export class ExperimentManager {
         batchConfoundingDetected: false,
         batchConfoundingAuthorized: false,
         batchConfoundingConfirmed: false,
+        annotationSource: "uniprot",
+        annotationFilePath: "NONE",
+        annotationTaxonId: "9606",
+        annotationOntologies: "biological_process, cellular_component, molecular_function, reactome_pathway",
+        annotationValidationStatus: "PENDING",
+        annotationConfirmed: false,
         missingInitialFields: ["PATH_TO_DATA_FILE", "PLATFORM", "ANALYTE", "DESCRIPTION"],
       };
     }
@@ -328,6 +349,24 @@ export class ExperimentManager {
       batchConfoundingRationale = rationaleMatch[1].trim();
     }
 
+    // 3.G Functional Annotation Strategy & Confirmation
+    const annotSourceMatch = content.match(/-\s*\*\*Annotation Source\*\*:\s*([^\n\r]+)/i);
+    const annotationSource = annotSourceMatch ? annotSourceMatch[1].trim().toLowerCase() : "uniprot";
+
+    const annotFileMatch = content.match(/-\s*\*\*Annotation File Path\*\*:\s*([^\n\r]+)/i);
+    const annotationFilePath = annotFileMatch ? annotFileMatch[1].trim() : "NONE";
+
+    const annotTaxonMatch = content.match(/-\s*\*\*Taxon \/ Organism ID\*\*:\s*([^\n\r]+)/i);
+    const annotationTaxonId = annotTaxonMatch ? annotTaxonMatch[1].trim() : "9606";
+
+    const annotOntMatch = content.match(/-\s*\*\*Annotation Ontologies\*\*:\s*([^\n\r]+)/i);
+    const annotationOntologies = annotOntMatch ? annotOntMatch[1].trim() : "biological_process, cellular_component, molecular_function, reactome_pathway";
+
+    const annotStatusMatch = content.match(/-\s*\*\*Annotation Validation Status\*\*:\s*([^\n\r]+)/i);
+    const annotationValidationStatus = annotStatusMatch ? annotStatusMatch[1].trim() : "PENDING";
+
+    const annotationConfirmed = /-\s*\*\*Confirm Functional Annotation Strategy\*\*:\s*TRUE/i.test(content);
+
     return {
       exists: true,
       pathToDataFile,
@@ -351,6 +390,12 @@ export class ExperimentManager {
       batchConfoundingAuthorized,
       batchConfoundingConfirmed,
       batchConfoundingRationale,
+      annotationSource,
+      annotationFilePath,
+      annotationTaxonId,
+      annotationOntologies,
+      annotationValidationStatus,
+      annotationConfirmed,
       missingInitialFields: missing,
     };
   }
@@ -854,9 +899,81 @@ export class ExperimentManager {
         patch.batchConfoundingConfirmed ?? patch.batchConfoundingAuthorized ?? true
       );
     }
+    if (
+      patch.annotationSource !== undefined ||
+      patch.annotationFilePath !== undefined ||
+      patch.annotationTaxonId !== undefined ||
+      patch.annotationOntologies !== undefined ||
+      patch.annotationValidationStatus !== undefined ||
+      patch.annotationConfirmed !== undefined
+    ) {
+      const current = await this.readSpec();
+      await this.setAnnotationStrategy(
+        patch.annotationSource ?? current.annotationSource,
+        patch.annotationFilePath ?? current.annotationFilePath,
+        patch.annotationTaxonId ?? current.annotationTaxonId,
+        patch.annotationOntologies ?? current.annotationOntologies,
+        patch.annotationValidationStatus ?? current.annotationValidationStatus,
+        patch.annotationConfirmed ?? current.annotationConfirmed
+      );
+    }
     const spec = await this.readSpec();
     const raw = await fs.readFile(this.getExperimentPath(), "utf-8");
     return { spec, raw };
+  }
+
+  public async setAnnotationStrategy(
+    source?: string,
+    filePath?: string,
+    taxonId?: string,
+    ontologies?: string,
+    validationStatus?: string,
+    confirmed?: boolean
+  ): Promise<void> {
+    await this.ensureExperimentDoc();
+    const expPath = this.getExperimentPath();
+    let content = await fs.readFile(expPath, "utf-8");
+
+    const spec = await this.readSpec();
+    const finalSource = source ?? spec.annotationSource ?? "uniprot";
+    const finalFile = filePath ?? spec.annotationFilePath ?? "NONE";
+    const finalTaxon = taxonId ?? spec.annotationTaxonId ?? "9606";
+    const finalOnt = ontologies ?? spec.annotationOntologies ?? "biological_process, cellular_component, molecular_function, reactome_pathway";
+    const finalStatus = validationStatus ?? spec.annotationValidationStatus ?? "PENDING";
+    const finalConfirmed = confirmed !== undefined ? confirmed : spec.annotationConfirmed;
+    const confirmStr = finalConfirmed ? "TRUE" : "FALSE";
+
+    const sectionRegex = /###\s*(?:3\.G|G)\.?\s*Functional Annotation Strategy[\s\S]*?(?=\n###|\n##|$)/i;
+    const sectionBody = `### G. Functional Annotation Strategy
+<!-- Configures functional ontology annotation (GO terms, KEGG, Reactome) for pathway enrichment -->
+- **Annotation Source**: ${finalSource}
+- **Annotation File Path**: ${finalFile}
+- **Taxon / Organism ID**: ${finalTaxon}
+- **Annotation Ontologies**: ${finalOnt}
+- **Annotation Validation Status**: ${finalStatus}
+- **Confirm Functional Annotation Strategy**: ${confirmStr}`;
+
+    if (sectionRegex.test(content)) {
+      content = content.replace(sectionRegex, sectionBody);
+    } else {
+      content = content.trimEnd() + "\n\n" + sectionBody + "\n";
+    }
+
+    await fs.writeFile(expPath, content, "utf-8");
+  }
+
+  public async setAnnotationConfirmed(confirmed: boolean): Promise<void> {
+    await this.ensureExperimentDoc();
+    const expPath = this.getExperimentPath();
+    let content = await fs.readFile(expPath, "utf-8");
+    const confirmStr = confirmed ? "TRUE" : "FALSE";
+
+    if (/-\s*\*\*Confirm Functional Annotation Strategy\*\*:/i.test(content)) {
+      content = content.replace(/(-\s*\*\*Confirm Functional Annotation Strategy\*\*:\s*)(TRUE|FALSE)/i, `$1${confirmStr}`);
+      await fs.writeFile(expPath, content, "utf-8");
+    } else {
+      await this.setAnnotationStrategy(undefined, undefined, undefined, undefined, undefined, confirmed);
+    }
   }
 
   /**
@@ -867,6 +984,7 @@ export class ExperimentManager {
    * - 3.D Sample Group Renaming & Pooling Map (if mapped, enables reassignment)
    * - 3.E Target Contrasts
    * - 3.F Confounded Batch & Exploratory Comparison Gate (if detected)
+   * - 3.G Functional Annotation Strategy
    */
   public async confirmContrastAndAuthorizeConfounding(contrasts?: string[]): Promise<string[]> {
     await this.ensureExperimentDoc();
@@ -910,6 +1028,9 @@ export class ExperimentManager {
     if (spec.batchConfoundingDetected || spec.batchConfoundingAuthorized) {
       await this.setBatchConfounding(true, true, true);
     }
+
+    // Confirm 3.G Functional Annotation Strategy
+    await this.setAnnotationConfirmed(true);
 
     return finalContrasts;
   }

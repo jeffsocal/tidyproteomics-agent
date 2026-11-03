@@ -351,8 +351,8 @@ export const TierSuggestionModal: React.FC<TierSuggestionModalProps> = ({
                 {/* Tier 1 Card */}
                 <div
                   style={{
-                    background: "#16161d",
-                    border: "1px solid var(--border, #2d2d38)",
+                    background: "var(--panel-bg, #16161d)",
+                    border: "1px solid var(--border)",
                     borderRadius: "8px",
                     padding: "12px 14px",
                   }}
@@ -387,8 +387,8 @@ export const TierSuggestionModal: React.FC<TierSuggestionModalProps> = ({
                 {/* Tier 2 Card */}
                 <div
                   style={{
-                    background: "#16161d",
-                    border: "1px solid var(--border, #2d2d38)",
+                    background: "var(--panel-bg, #16161d)",
+                    border: "1px solid var(--border)",
                     borderRadius: "8px",
                     padding: "12px 14px",
                   }}
@@ -423,8 +423,8 @@ export const TierSuggestionModal: React.FC<TierSuggestionModalProps> = ({
                 {/* Tier 3 Card */}
                 <div
                   style={{
-                    background: "#16161d",
-                    border: "1px solid var(--border, #2d2d38)",
+                    background: "var(--panel-bg, #16161d)",
+                    border: "1px solid var(--border)",
                     borderRadius: "8px",
                     padding: "12px 14px",
                   }}
@@ -460,8 +460,8 @@ export const TierSuggestionModal: React.FC<TierSuggestionModalProps> = ({
               {/* LLM Biological Advisor Rationale Box */}
               <div
                 style={{
-                  background: "#141419",
-                  border: "1px solid var(--border, #2d2d38)",
+                  background: "var(--panel-bg, #141419)",
+                  border: "1px solid var(--border)",
                   borderRadius: "8px",
                   padding: "14px",
                 }}

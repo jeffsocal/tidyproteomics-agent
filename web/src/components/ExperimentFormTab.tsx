@@ -81,6 +81,14 @@ export const ExperimentFormTab: React.FC<ExperimentFormTabProps> = ({
   const [normalizationSubsetFilter, setNormalizationSubsetFilter] = useState("NONE");
   const [normalizationConfirmed, setNormalizationConfirmed] = useState(false);
 
+  // 3.G Annotation Strategy state
+  const [annotationSource, setAnnotationSource] = useState("uniprot");
+  const [annotationFilePath, setAnnotationFilePath] = useState("NONE");
+  const [annotationTaxonId, setAnnotationTaxonId] = useState("9606");
+  const [annotationOntologies, setAnnotationOntologies] = useState("biological_process, cellular_component, molecular_function, reactome_pathway");
+  const [annotationValidationStatus, setAnnotationValidationStatus] = useState("PENDING");
+  const [annotationConfirmed, setAnnotationConfirmed] = useState(false);
+
   const [rawText, setRawText] = useState(rawMarkdown || "");
   const [saveBanner, setSaveBanner] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -104,6 +112,12 @@ export const ExperimentFormTab: React.FC<ExperimentFormTabProps> = ({
     setNormalizationMethods(spec.normalizationMethods || "default");
     setNormalizationSubsetFilter(spec.normalizationSubsetFilter || "NONE");
     setNormalizationConfirmed(!!spec.normalizationConfirmed);
+    setAnnotationSource(spec.annotationSource || "uniprot");
+    setAnnotationFilePath(spec.annotationFilePath || "NONE");
+    setAnnotationTaxonId(spec.annotationTaxonId || "9606");
+    setAnnotationOntologies(spec.annotationOntologies || "biological_process, cellular_component, molecular_function, reactome_pathway");
+    setAnnotationValidationStatus(spec.annotationValidationStatus || "PENDING");
+    setAnnotationConfirmed(!!spec.annotationConfirmed);
 
     const mapEntries = Object.entries(spec.sampleRenamingMap || {}).map(([raw, clean]) => ({
       raw,
@@ -201,6 +215,12 @@ export const ExperimentFormTab: React.FC<ExperimentFormTabProps> = ({
       batchConfoundingDetected,
       batchConfoundingAuthorized,
       batchConfoundingConfirmed,
+      annotationSource,
+      annotationFilePath,
+      annotationTaxonId,
+      annotationOntologies,
+      annotationValidationStatus,
+      annotationConfirmed,
     };
   };
 
@@ -235,6 +255,7 @@ export const ExperimentFormTab: React.FC<ExperimentFormTabProps> = ({
       patch.imputationConfirmed = true;
       patch.samplePoolingConfirmed = true;
       patch.contrastConfirmed = true;
+      patch.annotationConfirmed = true;
       if (spec?.batchConfoundingDetected || batchConfoundingDetected || patch.batchConfoundingAuthorized) {
         patch.batchConfoundingAuthorized = true;
         patch.batchConfoundingConfirmed = true;
@@ -295,6 +316,7 @@ export const ExperimentFormTab: React.FC<ExperimentFormTabProps> = ({
   const hasValidContrast = contrastRows.some((c) => c.treatment.trim() && c.control.trim());
   const needs3E = hasPreliminaryData && (!contrastConfirmed || !hasValidContrast);
   const needs3F = isBatchConfoundingIssue && !batchConfoundingAuthorized;
+  const needs3G = !annotationConfirmed;
 
   const hitlActionCount = [
     needsDataFile,
@@ -307,6 +329,7 @@ export const ExperimentFormTab: React.FC<ExperimentFormTabProps> = ({
     needs3D,
     needs3E,
     needs3F,
+    needs3G,
   ].filter(Boolean).length;
 
   return (
@@ -1120,7 +1143,7 @@ export const ExperimentFormTab: React.FC<ExperimentFormTabProps> = ({
                   className={needs3F ? "hitl-highlight-orange" : ""}
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                    <label className="field-label" style={{ margin: 0, color: "#f59e0b" }}>
+                    <label className="field-label" style={{ margin: 0, color: "var(--attention-orange)" }}>
                       ⚠️ 3.F Confounded Batch &amp; Exploratory Comparison Gate
                     </label>
                     {needs3F && (
@@ -1130,10 +1153,8 @@ export const ExperimentFormTab: React.FC<ExperimentFormTabProps> = ({
                     )}
                   </div>
                   <div
+                    className="attention-banner-orange"
                     style={{
-                      background: "rgba(245, 158, 11, 0.08)",
-                      border: "1px solid rgba(245, 158, 11, 0.25)",
-                      borderRadius: "6px",
                       padding: "12px 14px",
                     }}
                   >
@@ -1159,6 +1180,143 @@ export const ExperimentFormTab: React.FC<ExperimentFormTabProps> = ({
                   </div>
                 </div>
               ) : null}
+
+              {/* 3.G Functional Annotation Strategy */}
+              <div
+                style={{
+                  background: "var(--bg)",
+                  border: "1px solid var(--border)",
+                  borderRadius: "6px",
+                  padding: "12px 14px",
+                  marginBottom: "14px",
+                }}
+                className={needs3G ? "hitl-highlight-orange" : ""}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                  <label className="field-label" style={{ margin: 0 }}>
+                    🧬 3.G Functional Annotation Strategy
+                  </label>
+                  {needs3G && (
+                    <span className="hitl-highlight-badge">
+                      <AlertCircle size={10} /> Action Required
+                    </span>
+                  )}
+                </div>
+
+                <div style={{ fontSize: "11px", color: "var(--muted)", marginBottom: "10px", lineHeight: "1.4" }}>
+                  Choose whether to autonomously fetch Gene Ontology (GO) and pathway annotations from UniProt KB, provide a custom annotation table, or bypass enrichment.
+                </div>
+
+                {/* Source Selection Radiogroup */}
+                <div style={{ display: "flex", gap: "16px", marginBottom: "12px", flexWrap: "wrap" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px" }}>
+                    <input
+                      type="radio"
+                      name="annotSource"
+                      value="uniprot"
+                      checked={annotationSource === "uniprot"}
+                      onChange={() => setAnnotationSource("uniprot")}
+                      style={{ accentColor: "var(--primary)" }}
+                    />
+                    <span style={{ fontWeight: 600, color: "var(--fg-bright)" }}>
+                      🌐 Autonomous Remote Fetch (UniProt KB)
+                    </span>
+                  </label>
+
+                  <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px" }}>
+                    <input
+                      type="radio"
+                      name="annotSource"
+                      value="file"
+                      checked={annotationSource === "file"}
+                      onChange={() => setAnnotationSource("file")}
+                      style={{ accentColor: "var(--primary)" }}
+                    />
+                    <span style={{ fontWeight: 600, color: "var(--fg-bright)" }}>
+                      📁 Custom Annotation File (Local TSV / CSV)
+                    </span>
+                  </label>
+
+                  <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "12px" }}>
+                    <input
+                      type="radio"
+                      name="annotSource"
+                      value="none"
+                      checked={annotationSource === "none"}
+                      onChange={() => setAnnotationSource("none")}
+                      style={{ accentColor: "var(--primary)" }}
+                    />
+                    <span style={{ fontWeight: 600, color: "var(--fg-bright)" }}>
+                      ⚡ Bypass Pathway Enrichment
+                    </span>
+                  </label>
+                </div>
+
+                {/* Source == 'uniprot' parameters */}
+                {annotationSource === "uniprot" && (
+                  <div style={{ background: "var(--panel-bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px", marginBottom: "12px" }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: "12px", alignItems: "center" }}>
+                      <div>
+                        <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--fg)" }}>Organism / Taxon ID</span>
+                        <select
+                          className="input"
+                          style={{ marginTop: "4px", fontSize: "11.5px" }}
+                          value={annotationTaxonId}
+                          onChange={(e) => setAnnotationTaxonId(e.target.value)}
+                        >
+                          <option value="9606">9606 - Homo sapiens (Human)</option>
+                          <option value="10090">10090 - Mus musculus (Mouse)</option>
+                          <option value="10116">10116 - Rattus norvegicus (Rat)</option>
+                          <option value="559292">559292 - S. cerevisiae (Yeast)</option>
+                          <option value="7227">7227 - Drosophila melanogaster</option>
+                          <option value="6239">6239 - C. elegans</option>
+                        </select>
+                      </div>
+                      <div>
+                        <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--fg)" }}>Target Ontologies</span>
+                        <input
+                          type="text"
+                          className="input"
+                          style={{ marginTop: "4px", fontSize: "11.5px" }}
+                          value={annotationOntologies}
+                          onChange={(e) => setAnnotationOntologies(e.target.value)}
+                          placeholder="biological_process, cellular_component, molecular_function, reactome_pathway"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Source == 'file' parameters */}
+                {annotationSource === "file" && (
+                  <div style={{ background: "var(--panel-bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px", marginBottom: "12px" }}>
+                    <div>
+                      <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--fg)" }}>Local Annotation File Path</span>
+                      <input
+                        type="text"
+                        className="input"
+                        style={{ marginTop: "4px", fontSize: "11.5px" }}
+                        value={annotationFilePath === "NONE" ? "" : annotationFilePath}
+                        onChange={(e) => setAnnotationFilePath(e.target.value || "NONE")}
+                        placeholder="e.g. data/annotations.tsv"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Confirmation Checkbox */}
+                <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "12px" }}>
+                  <input
+                    type="checkbox"
+                    checked={annotationConfirmed}
+                    onChange={(e) => setAnnotationConfirmed(e.target.checked)}
+                    style={{ accentColor: "var(--primary)" }}
+                  />
+                  <span style={{ fontWeight: 500, color: annotationConfirmed ? "var(--fg-bright)" : "var(--attention-orange)" }}>
+                    Confirm Functional Annotation Strategy (<code>Confirm Functional Annotation Strategy: TRUE</code>)
+                  </span>
+                </label>
+              </div>
             </section>
           </div>
         )}

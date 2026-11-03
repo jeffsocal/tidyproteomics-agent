@@ -1,7 +1,7 @@
 import * as fs from "fs/promises";
 import * as fsSync from "fs";
 import * as path from "path";
-import { ChatMessage, TokenUsage } from "../types";
+import { ChatMessage, TokenUsage, ToolCall } from "../types";
 import { ContextBundle } from "./ContextBuilder";
 import { ToolRegistry } from "../tools/ToolRegistry";
 import { ProviderClient } from "../llm/ProviderClient";
@@ -15,6 +15,18 @@ export interface LoopResult {
   turnCount: number;
 }
 
+export interface AgentLoopState {
+  phaseName: string;
+  phaseTitle: string;
+  turn: number;
+  maxTurns: number;
+  messages: ChatMessage[];
+  totalUsage: TokenUsage;
+  isComplete: boolean;
+  completedSummary?: string;
+  startTimeMs: number;
+}
+
 export class AgentLoop {
   private messages: ChatMessage[] = [];
   private totalUsage: TokenUsage = {
@@ -23,6 +35,12 @@ export class AgentLoop {
     totalTokens: 0,
     cachedPromptTokens: 0,
   };
+  private currentTurn = 0;
+  private currentMaxTurns = 30;
+  private startTimeMs = 0;
+  private isComplete = false;
+  private completedSummary?: string;
+  private isExplicitlyAborted = false;
 
   constructor(
     private phaseName: string,
@@ -35,15 +53,272 @@ export class AgentLoop {
       data: any;
     }) => void,
     private chatLogger?: ChatLogger,
-    private isCancelled?: () => boolean
-  ) {}
+    private isCancelled?: () => boolean,
+    initialState?: AgentLoopState,
+    private abortSignal?: AbortSignal
+  ) {
+    if (initialState) {
+      this.currentTurn = initialState.turn;
+      this.currentMaxTurns = initialState.maxTurns;
+      this.messages = [...initialState.messages];
+      this.totalUsage = { ...initialState.totalUsage };
+      this.startTimeMs = initialState.startTimeMs || Date.now();
+      this.isComplete = initialState.isComplete;
+      this.completedSummary = initialState.completedSummary;
+    }
+  }
 
   public getTotalUsage(): TokenUsage {
     return { ...this.totalUsage };
   }
 
+  public getState(): AgentLoopState {
+    return {
+      phaseName: this.phaseName,
+      phaseTitle: this.phaseTitle,
+      turn: this.currentTurn,
+      maxTurns: this.currentMaxTurns,
+      messages: this.messages,
+      totalUsage: { ...this.totalUsage },
+      isComplete: this.isComplete,
+      completedSummary: this.completedSummary,
+      startTimeMs: this.startTimeMs,
+    };
+  }
+
+  public abort() {
+    this.isExplicitlyAborted = true;
+  }
+
+  public isAborted(): boolean {
+    return this.checkCancelled();
+  }
+
+  private checkCancelled(): boolean {
+    return (
+      this.isExplicitlyAborted ||
+      (this.abortSignal?.aborted ?? false) ||
+      (this.isCancelled ? this.isCancelled() : false)
+    );
+  }
+
+  private getCheckpointStatePath(): string {
+    const wsRoot = this.tools.getWorkspaceRoot() || process.cwd();
+    const tag = path.basename(this.phaseName).replace(/\.md$/i, "").toLowerCase();
+    return path.join(wsRoot, "logs", tag, "checkpoint_state.json");
+  }
+
+  public async saveCheckpointState(isComplete = false, completedSummary?: string): Promise<void> {
+    try {
+      this.isComplete = isComplete;
+      if (completedSummary) this.completedSummary = completedSummary;
+      const filePath = this.getCheckpointStatePath();
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      const stateData = this.getState();
+      await fs.writeFile(filePath, JSON.stringify(stateData, null, 2), "utf-8");
+    } catch (err) {
+      console.warn(`[AgentLoop] Failed to save checkpoint state for ${this.phaseName}:`, err);
+    }
+  }
+
+  public static async loadCheckpointState(wsRoot: string, phaseName: string): Promise<AgentLoopState | null> {
+    try {
+      const tag = path.basename(phaseName).replace(/\.md$/i, "").toLowerCase();
+      const filePath = path.join(wsRoot, "logs", tag, "checkpoint_state.json");
+      if (fsSync.existsSync(filePath)) {
+        const content = await fs.readFile(filePath, "utf-8");
+        return JSON.parse(content) as AgentLoopState;
+      }
+
+      // Fallback: Check if logs/<tag>/chat.md exists and parse it to re-hydrate the trajectory
+      const chatMdPath = path.join(wsRoot, "logs", tag, "chat.md");
+      if (fsSync.existsSync(chatMdPath)) {
+        const chatContent = await fs.readFile(chatMdPath, "utf-8");
+        const parsed = AgentLoop.parseChatMd(chatContent, phaseName);
+        if (parsed) {
+          // Persist reconstructed state so subsequent loads are immediate
+          try {
+            await fs.mkdir(path.dirname(filePath), { recursive: true });
+            await fs.writeFile(filePath, JSON.stringify(parsed, null, 2), "utf-8");
+          } catch (_) {}
+          return parsed;
+        }
+      }
+
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  public static parseChatMd(chatContent: string, phaseName: string): AgentLoopState | null {
+    if (!chatContent || typeof chatContent !== "string") return null;
+
+    // 1. Phase Title
+    let phaseTitle = phaseName;
+    const titleMatch = chatContent.match(/Phase (?:Start|FAILED|COMPLETED):\s*([^\n\r]+)/i);
+    if (titleMatch) {
+      phaseTitle = titleMatch[1].trim();
+    }
+
+    // 2. Is Complete & Summary
+    const isComplete = /Phase COMPLETED/i.test(chatContent);
+    let completedSummary: string | undefined;
+    const summaryMatch = chatContent.match(/\*\*Summary\*\*:\s*\n([\s\S]*?)(?:\n---|\n###|$)/i);
+    if (summaryMatch) {
+      completedSummary = summaryMatch[1].trim();
+    }
+
+    // 3. Turns
+    let maxTurn = 0;
+    const turnMatches = [...chatContent.matchAll(/Agent \(Turn\s+(\d+)\)/gi)];
+    for (const tm of turnMatches) {
+      const t = parseInt(tm[1], 10);
+      if (t > maxTurn) maxTurn = t;
+    }
+    const totalTurnsMatch = chatContent.match(/\*\*Total Turns\*\*:\s*(\d+)/i);
+    if (totalTurnsMatch) {
+      const t = parseInt(totalTurnsMatch[1], 10);
+      if (t > maxTurn) maxTurn = t;
+    }
+
+    // 4. Cumulative Usage
+    let totalUsage: TokenUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedPromptTokens: 0 };
+    const cumMatch = chatContent.match(/(?:Cumulative Tokens|\*\*Cumulative Tokens\*\*):\s*Total:\s*\*\*([\d,]+)\*\*\s*\|\s*Prompt:\s*([\d,]+)\s*\|\s*Completion:\s*([\d,]+)(?:\s*\|\s*Cached:\s*([\d,]+))?/i);
+    if (cumMatch) {
+      totalUsage = {
+        totalTokens: parseInt(cumMatch[1].replace(/,/g, ""), 10),
+        promptTokens: parseInt(cumMatch[2].replace(/,/g, ""), 10),
+        completionTokens: parseInt(cumMatch[3].replace(/,/g, ""), 10),
+        cachedPromptTokens: cumMatch[4] ? parseInt(cumMatch[4].replace(/,/g, ""), 10) : 0,
+      };
+    }
+
+    // 5. Start Time
+    let startTimeMs = Date.now();
+    const startMatch = chatContent.match(/\[([\d\-:T\.Z]+)\]\s+Phase Start:/i);
+    if (startMatch) {
+      const parsed = Date.parse(startMatch[1]);
+      if (!isNaN(parsed)) startTimeMs = parsed;
+    }
+
+    // 6. Messages
+    const messages: ChatMessage[] = [
+      {
+        role: "user",
+        content: `[Phase Directive]: Re-hydrated trajectory for phase ${phaseName}`,
+        turn: 0,
+      },
+    ];
+
+    const turnRegex = /###\s+\[([\d\-:T\.Z]+)\]\s+Agent \(Turn (\d+)\)([\s\S]*?)(?=(?:###\s+\[[\d\-:T\.Z]+\]\s+(?:Agent|Phase)|$))/g;
+    let match;
+    while ((match = turnRegex.exec(chatContent)) !== null) {
+      const turnNum = parseInt(match[2], 10);
+      const body = match[3];
+
+      const toolResultSplitIndex = body.search(/####\s+\[/);
+      const assistantPart = toolResultSplitIndex !== -1 ? body.slice(0, toolResultSplitIndex) : body;
+      const toolResultsPart = toolResultSplitIndex !== -1 ? body.slice(toolResultSplitIndex) : "";
+
+      const toolCalls: ToolCall[] = [];
+      const tcRegex = /-\s+\*\*`([^`]+)`\*\*\s*\(id:\s*`([^`]+)`\)\s*```json\s*([\s\S]*?)\s*```/g;
+      let tcMatch;
+      while ((tcMatch = tcRegex.exec(assistantPart)) !== null) {
+        let args = {};
+        try {
+          args = JSON.parse(tcMatch[3]);
+        } catch (_) {}
+        toolCalls.push({
+          name: tcMatch[1],
+          id: tcMatch[2],
+          args,
+        });
+      }
+
+      let assistantText = assistantPart
+        .replace(/\*\*Tool Calls\*\*:\s*[\s\S]*?(?=(?:> \*\*Metrics\*\*|$))/i, "")
+        .replace(/> \*\*Metrics\*\*:[^\n\r]*/gi, "")
+        .trim();
+
+      if (assistantText.length > 0 || toolCalls.length > 0) {
+        messages.push({
+          role: "assistant",
+          content: assistantText,
+          tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+          turn: turnNum,
+        });
+      }
+
+      if (toolResultsPart) {
+        const trRegex = /####\s+\[[\d\-:T\.Z]+\]\s+Tool Result:\s*`([^`]+)`\s*\[(SUCCESS|FAILED)\]\s*\(id:\s*`([^`]+)`\)([\s\S]*?)(?=(?:####\s+\[|$))/g;
+        let trMatch;
+        const seenCallIds = new Set<string>();
+        while ((trMatch = trRegex.exec(toolResultsPart)) !== null) {
+          const tName = trMatch[1];
+          const tCallId = trMatch[3];
+          let tResultBody = trMatch[4].trim();
+
+          const codeBlockMatch = tResultBody.match(/^```(?:\w+)?\n([\s\S]*?)\n```$/m);
+          if (codeBlockMatch) {
+            tResultBody = codeBlockMatch[1];
+          }
+
+          seenCallIds.add(tCallId);
+          messages.push({
+            role: "tool",
+            tool_name: tName,
+            tool_call_id: tCallId,
+            content: tResultBody,
+          });
+        }
+
+        for (const tc of toolCalls) {
+          if (!seenCallIds.has(tc.id)) {
+            messages.push({
+              role: "tool",
+              tool_name: tc.name,
+              tool_call_id: tc.id,
+              content: `Tool ${tc.name} executed.`,
+            });
+          }
+        }
+      } else if (toolCalls.length > 0) {
+        for (const tc of toolCalls) {
+          messages.push({
+            role: "tool",
+            tool_name: tc.name,
+            tool_call_id: tc.id,
+            content: `Tool ${tc.name} executed.`,
+          });
+        }
+      }
+    }
+
+    return {
+      phaseName,
+      phaseTitle,
+      turn: maxTurn,
+      maxTurns: Math.max(maxTurn, 30),
+      messages,
+      totalUsage,
+      isComplete,
+      completedSummary,
+      startTimeMs,
+    };
+  }
+
   public async run(maxTurns = 30): Promise<LoopResult> {
-    const startTimeMs = Date.now();
+    this.startTimeMs = Date.now();
+    this.currentMaxTurns = maxTurns;
+    this.currentTurn = 0;
+    this.messages = [];
+    this.totalUsage = {
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      cachedPromptTokens: 0,
+    };
 
     // Set active phase on tools for log mirroring and phase scoping
     this.tools.setActivePhase(this.phaseName);
@@ -78,10 +353,69 @@ export class AgentLoop {
       });
     }
 
-    let turn = 0;
+    return this.executeLoop();
+  }
+
+  public async continue(additionalTurns = 10): Promise<LoopResult> {
+    const priorTurn = this.currentTurn;
+    this.currentMaxTurns = this.currentTurn + Math.max(1, additionalTurns);
+    if (!this.startTimeMs) this.startTimeMs = Date.now();
+
+    // If turn 0 was a placeholder from re-hydration, update it with the rich context prompt if available
+    if (this.messages.length > 0 && this.messages[0].role === "user" && this.context?.phasePrompt) {
+      if (this.messages[0].content.startsWith("[Phase Directive]: Re-hydrated")) {
+        this.messages[0].content = this.context.phasePrompt;
+      }
+    }
+
+    // Set active phase on tools for log mirroring and phase scoping
+    this.tools.setActivePhase(this.phaseName);
+
+    if (this.chatLogger) {
+      this.chatLogger.setPhase(this.phaseName);
+      await this.chatLogger.logPhaseResume({
+        turn: priorTurn,
+        newMaxTurns: this.currentMaxTurns,
+        additionalTurns,
+      });
+    }
+
+    // Check disk deliverable status to summarize for the model
+    const gateErrors = await this.verifyPhaseGateDeliverables(this.phaseName);
+    const gateStatusNotice =
+      gateErrors.length === 0
+        ? "✓ ALL REQUIRED DELIVERABLES ARE ALREADY PRESENT ON DISK AND NON-EMPTY."
+        : `Pending deliverables on disk:\n${gateErrors.map((e) => `• ${e}`).join("\n")}`;
+
+    const continuationDirective = [
+      `⚠️ [SYSTEM NOTICE - PHASE CONTINUATION]:`,
+      `You have been granted ${additionalTurns} additional turns to complete phase '${this.phaseTitle || this.phaseName}'.`,
+      `- Resumed at Turn: ${priorTurn}`,
+      `- Current Turn Budget: ${priorTurn + 1} to ${this.currentMaxTurns}`,
+      `- Gate Status: ${gateStatusNotice}`,
+      `Cease open-ended exploratory actions. Verify remaining files or call complete_phase immediately to finalize this phase.`,
+    ].join("\n");
+
+    this.messages.push({
+      role: "user",
+      content: continuationDirective,
+      turn: priorTurn,
+    });
+
+    this.onProgress({
+      type: "thought",
+      data: `Resuming phase '${this.phaseName}' at turn ${priorTurn + 1}/${this.currentMaxTurns} (+${additionalTurns} turns granted)...`,
+    });
+
+    return this.executeLoop();
+  }
+
+  private async executeLoop(): Promise<LoopResult> {
+    const startTimeMs = this.startTimeMs || Date.now();
     let completedSummary = "";
     let consecutiveNoToolTurns = 0;
     let consecutiveTransitionAnnouncements = 0;
+    let consecutiveEmptyCompletions = 0;
     let consecutiveCommandFailures = 0;
     let lastFailedCommand = "";
     let consecutiveToolFailures = 0;
@@ -90,9 +424,10 @@ export class AgentLoop {
     let lastToolCallSignature = "";
     let totalSearchCalls = 0;
 
-    while (turn < maxTurns) {
-      if (this.isCancelled && this.isCancelled()) {
+    while (this.currentTurn < this.currentMaxTurns) {
+      if (this.checkCancelled()) {
         const stopSummary = "Execution stopped by user.";
+        await this.saveCheckpointState(false, stopSummary);
         if (this.chatLogger) {
           const durationSeconds = Math.round((Date.now() - startTimeMs) / 1000);
           await this.chatLogger.logPhaseEnd({
@@ -102,7 +437,7 @@ export class AgentLoop {
             summary: stopSummary,
             durationSeconds,
             tokensUsed: this.totalUsage,
-            turnCount: turn,
+            turnCount: this.currentTurn,
           });
         }
         return {
@@ -110,11 +445,13 @@ export class AgentLoop {
           summary: stopSummary,
           tokensUsed: this.totalUsage,
           phaseName: this.phaseName,
-          turnCount: turn,
+          turnCount: this.currentTurn,
         };
       }
 
-      turn++;
+      this.currentTurn++;
+      const turn = this.currentTurn;
+      const maxTurns = this.currentMaxTurns;
       this.onProgress({ type: "thought", data: `Starting Turn ${turn}/${maxTurns}...` });
 
       // Low-turn alert when 5 turns remain to guide model to finalize deliverables
@@ -146,7 +483,7 @@ export class AgentLoop {
 
       while (attempt <= maxRetries) {
         attempt++;
-        if (this.isCancelled && this.isCancelled()) {
+        if (this.checkCancelled()) {
           break;
         }
 
@@ -158,28 +495,31 @@ export class AgentLoop {
             onToken: (text) => {
               this.onProgress({ type: "text", data: text });
             },
+            signal: this.abortSignal,
           });
           lastError = null;
           break; // Success!
         } catch (err: any) {
           lastError = err;
+          if (err.isAborted || this.checkCancelled()) {
+            break;
+          }
           const isRetryable =
             err.isRetryable === true ||
             err.isTimeout === true ||
             err.isNetworkError === true ||
             err.name === "TimeoutError" ||
-            err.name === "AbortError" ||
             (err.status === 429) ||
             (err.status >= 500 && err.status <= 504) ||
-            /timeout|aborted|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|ConnectTimeoutError|fetch failed|rate limit|temporar/i.test(
+            /timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|ConnectTimeoutError|fetch failed|rate limit|temporar/i.test(
               err.message || ""
             ) ||
             (err.cause &&
-              /timeout|aborted|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|ConnectTimeoutError/i.test(
+              /timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|ConnectTimeoutError/i.test(
                 (err.cause.name || "") + " " + (err.cause.code || "") + " " + (err.cause.message || "")
               ));
 
-          if (isRetryable && attempt <= maxRetries && (!this.isCancelled || !this.isCancelled())) {
+          if (isRetryable && attempt <= maxRetries && !this.checkCancelled()) {
             const backoffMs = attempt * 3000;
             const shortReason = err.message ? (err.message.length > 80 ? err.message.slice(0, 77) + "..." : err.message) : "Network/API glitch";
             this.onProgress({
@@ -194,9 +534,10 @@ export class AgentLoop {
       }
 
       if (!response) {
-        const errorSummary = lastError
-          ? `LLM API Error during turn ${turn}: ${lastError.message}`
-          : "Execution stopped by user.";
+        const wasCancelled = this.checkCancelled() || (lastError as any)?.isAborted;
+        const errorSummary = wasCancelled
+          ? "Execution stopped by user."
+          : (lastError ? `LLM API Error during turn ${turn}: ${lastError.message}` : "Execution stopped by user.");
         if (this.chatLogger) {
           const durationSeconds = Math.round((Date.now() - startTimeMs) / 1000);
           await this.chatLogger.logPhaseEnd({
@@ -226,11 +567,50 @@ export class AgentLoop {
       this.totalUsage.cachedPromptTokens =
         (this.totalUsage.cachedPromptTokens || 0) + (response.usage.cachedPromptTokens || 0);
 
+      const trimmedContent = (response.content || "").trim();
+      const isEmptyResponse = !trimmedContent && (!response.tool_calls || response.tool_calls.length === 0);
+
+      if (isEmptyResponse) {
+        consecutiveEmptyCompletions++;
+        if (consecutiveEmptyCompletions >= 4) {
+          const emptySummary = `Execution halted: Upstream LLM provider returned empty completions 4 consecutive times without content or tool calls.`;
+          await this.saveCheckpointState(false, emptySummary);
+          if (this.chatLogger) {
+            const durationSeconds = Math.round((Date.now() - startTimeMs) / 1000);
+            await this.chatLogger.logPhaseEnd({
+              phaseTitle: this.phaseTitle || this.phaseName,
+              phaseFileName: this.phaseName,
+              success: false,
+              summary: emptySummary,
+              durationSeconds,
+              tokensUsed: this.totalUsage,
+              turnCount: this.currentTurn,
+            });
+          }
+          return {
+            success: false,
+            summary: emptySummary,
+            tokensUsed: this.totalUsage,
+            phaseName: this.phaseName,
+            turnCount: this.currentTurn,
+          };
+        }
+        this.onProgress({
+          type: "thought",
+          data: `⚠️ [Transient API Glitch]: Upstream provider returned empty completion (attempt ${consecutiveEmptyCompletions}/4). Retrying turn ${this.currentTurn}...`,
+        });
+        await new Promise((r) => setTimeout(r, 2000 * consecutiveEmptyCompletions));
+        // Decrement turn so empty provider response does NOT burn turn budget
+        this.currentTurn--;
+        continue;
+      }
+      consecutiveEmptyCompletions = 0;
+
       // Real-time token notification for UI updates
       this.onProgress({
         type: "tokens",
         data: {
-          turn,
+          turn: this.currentTurn,
           turnUsage: response.usage,
           totalUsage: { ...this.totalUsage },
         },
@@ -241,18 +621,21 @@ export class AgentLoop {
         role: "assistant",
         content: response.content,
         tool_calls: response.tool_calls,
-        turn,
+        turn: this.currentTurn,
       });
 
       // Log assistant response to llm_chat.log
       if (this.chatLogger) {
         await this.chatLogger.logAssistantResponse(
-          turn,
+          this.currentTurn,
           response.content,
           response.tool_calls,
           response.usage
         );
       }
+
+      // Persist active trajectory state after each turn
+      await this.saveCheckpointState(false);
 
       // Check for output limit truncation
       if (response.truncationDetected) {
@@ -275,6 +658,9 @@ export class AgentLoop {
         consecutiveNoToolTurns = 0;
         consecutiveTransitionAnnouncements = 0;
         for (const tc of response.tool_calls) {
+          if (this.checkCancelled()) {
+            break;
+          }
           this.onProgress({
             type: "tool_start",
             data: { name: tc.name, args: tc.args },
@@ -521,6 +907,8 @@ DO NOT repeat the identical failing command without structural fixes:
             completedSummary = tc.args.summary || response.content;
             const durationSeconds = Math.round((Date.now() - startTimeMs) / 1000);
 
+            await this.saveCheckpointState(true, completedSummary);
+
             if (this.chatLogger) {
               await this.chatLogger.logPhaseEnd({
                 phaseTitle: this.phaseTitle || this.phaseName,
@@ -529,7 +917,7 @@ DO NOT repeat the identical failing command without structural fixes:
                 summary: completedSummary,
                 durationSeconds,
                 tokensUsed: this.totalUsage,
-                turnCount: turn,
+                turnCount: this.currentTurn,
               });
             }
 
@@ -538,13 +926,12 @@ DO NOT repeat the identical failing command without structural fixes:
               summary: completedSummary,
               tokensUsed: this.totalUsage,
               phaseName: this.phaseName,
-              turnCount: turn,
+              turnCount: this.currentTurn,
             };
           }
         }
       } else {
         const trimmedContent = (response.content || "").trim();
-        const isEmptyResponse = !trimmedContent && (!response.tool_calls || response.tool_calls.length === 0);
 
         // Detect conversational transition phrasing ("Turn 1 complete. Ready for Turn 2", "Let me create the script", etc.)
         const isTransitionAnnouncement =
@@ -564,17 +951,12 @@ DO NOT repeat the identical failing command without structural fixes:
             role: "user",
             content: "[System Directive]: Do not pause or emit conversational announcements or plans between steps. Execute the required tool call (e.g. write_file, replace_file_content, or execute_command) immediately in this turn.",
           });
-        } else if (isEmptyResponse) {
-          // Do not penalize transient blank API completions as intentional user halts
-          this.messages.push({
-            role: "user",
-            content: "[System Directive]: Upstream provider returned an empty completion without tool calls. Please proceed with the required tool calls (e.g. replace_file_content or write_file) to complete this phase.",
-          });
         } else {
           consecutiveNoToolTurns++;
           // If model didn't call any tools, check if text indicates completion
           if (response.content.includes("PHASE_COMPLETED") || response.content.includes("CHECKPOINT_PASSED")) {
             const durationSeconds = Math.round((Date.now() - startTimeMs) / 1000);
+            await this.saveCheckpointState(true, response.content);
             if (this.chatLogger) {
               await this.chatLogger.logPhaseEnd({
                 phaseTitle: this.phaseTitle || this.phaseName,
@@ -583,7 +965,7 @@ DO NOT repeat the identical failing command without structural fixes:
                 summary: response.content,
                 durationSeconds,
                 tokensUsed: this.totalUsage,
-                turnCount: turn,
+                turnCount: this.currentTurn,
               });
             }
 
@@ -592,11 +974,12 @@ DO NOT repeat the identical failing command without structural fixes:
               summary: response.content,
               tokensUsed: this.totalUsage,
               phaseName: this.phaseName,
-              turnCount: turn,
+              turnCount: this.currentTurn,
             };
           } else if (this.isPhaseFailureOrHalt(response.content)) {
             // Model output text indicating a pre-flight gate failure, blocked phase, or halt directive
             const durationSeconds = Math.round((Date.now() - startTimeMs) / 1000);
+            await this.saveCheckpointState(false, response.content);
             if (this.chatLogger) {
               await this.chatLogger.logPhaseEnd({
                 phaseTitle: this.phaseTitle || this.phaseName,
@@ -605,7 +988,7 @@ DO NOT repeat the identical failing command without structural fixes:
                 summary: response.content,
                 durationSeconds,
                 tokensUsed: this.totalUsage,
-                turnCount: turn,
+                turnCount: this.currentTurn,
               });
             }
 
@@ -614,12 +997,13 @@ DO NOT repeat the identical failing command without structural fixes:
               summary: response.content,
               tokensUsed: this.totalUsage,
               phaseName: this.phaseName,
-              turnCount: turn,
+              turnCount: this.currentTurn,
             };
           } else if (consecutiveNoToolTurns >= 3) {
             // Model repeatedly returned conversational text without tool actions; halt to avoid burning tokens in a loop
             const summary = `Execution halted: Agent stopped calling tools and provided instructions to user:\n\n${response.content}`;
             const durationSeconds = Math.round((Date.now() - startTimeMs) / 1000);
+            await this.saveCheckpointState(false, summary);
             if (this.chatLogger) {
               await this.chatLogger.logPhaseEnd({
                 phaseTitle: this.phaseTitle || this.phaseName,
@@ -628,7 +1012,7 @@ DO NOT repeat the identical failing command without structural fixes:
                 summary,
                 durationSeconds,
                 tokensUsed: this.totalUsage,
-                turnCount: turn,
+                turnCount: this.currentTurn,
               });
             }
 
@@ -637,7 +1021,7 @@ DO NOT repeat the identical failing command without structural fixes:
               summary,
               tokensUsed: this.totalUsage,
               phaseName: this.phaseName,
-              turnCount: turn,
+              turnCount: this.currentTurn,
             };
           } else if (response.truncationDetected) {
             // If response was truncated and tool call failed to parse, notify the model explicitly
@@ -658,27 +1042,35 @@ DO NOT repeat the identical failing command without structural fixes:
 
     const durationSeconds = Math.round((Date.now() - startTimeMs) / 1000);
 
-    // Graceful recovery: If turn limit was reached, check if the phase's primary report artifact was produced
+    // Graceful recovery: If turn limit was reached, check if all required phase deliverables were produced on disk
     const wsRoot = this.tools.getWorkspaceRoot();
     let recoveredSuccess = false;
     let recoveredSummary = "";
-    if (this.phaseName?.includes("13_") || this.phaseName?.includes("critique")) {
-      const repPath = path.join(wsRoot, "docs", "report_critique.md");
-      const revPath = path.join(wsRoot, "docs", "manuscript_rev_02.md");
-      if (fsSync.existsSync(repPath) && fsSync.statSync(repPath).size > 500 && fsSync.existsSync(revPath)) {
-        recoveredSuccess = true;
-        recoveredSummary = `Phase completed: Report (docs/report_critique.md) and revised manuscript (docs/manuscript_rev_02.md) were successfully finalized on disk before turn budget expired.`;
-      }
-    } else if (this.phaseName?.includes("12_") || this.phaseName?.includes("integrity")) {
-      const repPath = path.join(wsRoot, "docs", "report_integrity.md");
-      const revPath = path.join(wsRoot, "docs", "manuscript_rev_01.md");
-      if (fsSync.existsSync(repPath) && fsSync.statSync(repPath).size > 500 && fsSync.existsSync(revPath)) {
-        recoveredSuccess = true;
-        recoveredSummary = `Phase completed: Integrity report (docs/report_integrity.md) and corrected manuscript (docs/manuscript_rev_01.md) were successfully finalized on disk before turn budget expired.`;
+
+    const gateErrors = await this.verifyPhaseGateDeliverables(this.phaseName);
+    if (gateErrors.length === 0) {
+      recoveredSuccess = true;
+      recoveredSummary = `Phase completed: All required checkpoint deliverables were successfully generated and verified on disk before turn budget expired.`;
+    } else {
+      if (this.phaseName?.includes("13_") || this.phaseName?.includes("critique")) {
+        const repPath = path.join(wsRoot, "docs", "report_critique.md");
+        const revPath = path.join(wsRoot, "docs", "manuscript_rev_02.md");
+        if (fsSync.existsSync(repPath) && fsSync.statSync(repPath).size > 500 && fsSync.existsSync(revPath)) {
+          recoveredSuccess = true;
+          recoveredSummary = `Phase completed: Report (docs/report_critique.md) and revised manuscript (docs/manuscript_rev_02.md) were successfully finalized on disk before turn budget expired.`;
+        }
+      } else if (this.phaseName?.includes("12_") || this.phaseName?.includes("integrity")) {
+        const repPath = path.join(wsRoot, "docs", "report_integrity.md");
+        const revPath = path.join(wsRoot, "docs", "manuscript_rev_01.md");
+        if (fsSync.existsSync(repPath) && fsSync.statSync(repPath).size > 500 && fsSync.existsSync(revPath)) {
+          recoveredSuccess = true;
+          recoveredSummary = `Phase completed: Integrity report (docs/report_integrity.md) and corrected manuscript (docs/manuscript_rev_01.md) were successfully finalized on disk before turn budget expired.`;
+        }
       }
     }
 
     if (recoveredSuccess) {
+      await this.saveCheckpointState(true, recoveredSummary);
       if (this.chatLogger) {
         await this.chatLogger.logPhaseEnd({
           phaseTitle: this.phaseTitle || this.phaseName,
@@ -687,7 +1079,7 @@ DO NOT repeat the identical failing command without structural fixes:
           summary: recoveredSummary,
           durationSeconds,
           tokensUsed: this.totalUsage,
-          turnCount: maxTurns,
+          turnCount: this.currentTurn,
         });
       }
       return {
@@ -695,11 +1087,12 @@ DO NOT repeat the identical failing command without structural fixes:
         summary: recoveredSummary,
         tokensUsed: this.totalUsage,
         phaseName: this.phaseName,
-        turnCount: maxTurns,
+        turnCount: this.currentTurn,
       };
     }
 
-    const failureSummary = `Turn limit reached (${maxTurns} turns) without completing phase checkpoints.`;
+    const failureSummary = `Turn limit reached (${this.currentMaxTurns} turns) without completing phase checkpoints.`;
+    await this.saveCheckpointState(false, failureSummary);
 
     if (this.chatLogger) {
       await this.chatLogger.logPhaseEnd({
@@ -709,7 +1102,7 @@ DO NOT repeat the identical failing command without structural fixes:
         summary: failureSummary,
         durationSeconds,
         tokensUsed: this.totalUsage,
-        turnCount: maxTurns,
+        turnCount: this.currentTurn,
       });
     }
 
@@ -718,7 +1111,7 @@ DO NOT repeat the identical failing command without structural fixes:
       summary: failureSummary,
       tokensUsed: this.totalUsage,
       phaseName: this.phaseName,
-      turnCount: maxTurns,
+      turnCount: this.currentTurn,
     };
   }
 

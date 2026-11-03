@@ -112,12 +112,29 @@ export interface RunTables {
   bySymbol: Map<string, ExpressionRecord[]>;
   expressionFiles: string[];
   enrichmentFiles: string[];
+  accounting?: Map<string, string>;
 }
 
 export function loadRunTables(runRoot: string): RunTables {
   const dataDir = path.join(runRoot, "data");
   const exprTables = loadTables(dataDir, /^table_proteins_expression_.*\.(tsv|csv)$/i);
   const enrTables = loadTables(dataDir, /^table_proteins_enrichment_.*\.(tsv|csv)$/i);
+
+  const accPath = path.join(dataDir, "table_feature_accounting.tsv");
+  const accounting = new Map<string, string>();
+  if (fsSync.existsSync(accPath)) {
+    try {
+      const rawAcc = fsSync.readFileSync(accPath, "utf-8");
+      const accRows = parseDelimited(rawAcc, "\t");
+      for (const r of accRows) {
+        if (r.metric && r.value) {
+          accounting.set(r.metric.trim(), r.value.trim());
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
 
   const expression: ExpressionRecord[] = [];
   for (const t of exprTables) {
@@ -167,6 +184,7 @@ export function loadRunTables(runRoot: string): RunTables {
     bySymbol,
     expressionFiles: exprTables.map((t) => t.file),
     enrichmentFiles: enrTables.map((t) => t.file),
+    accounting,
   };
 }
 

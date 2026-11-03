@@ -103,6 +103,7 @@ export function readLiteratureConfig(workspaceRoot: string): LiteratureConfig {
       activeLiterature: active,
       activeCorpus: active,
       useInSynthesis: !!parsed.useInSynthesis,
+      bypassLiterature: !!parsed.bypassLiterature,
       updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : undefined,
     };
   } catch {
@@ -113,12 +114,12 @@ export const readCorpusConfig = readLiteratureConfig;
 
 /**
  * Returns the workspace-relative path of the active literature database if it exists AND the
- * synthesis toggle is enabled; otherwise undefined.
+ * synthesis toggle is enabled and not bypassed; otherwise undefined.
  */
 export function getActiveSynthesisLiterature(workspaceRoot: string): { relPath: string; absPath: string } | undefined {
   const cfg = readLiteratureConfig(workspaceRoot);
   const active = cfg.activeLiterature || cfg.activeCorpus;
-  if (!cfg.useInSynthesis || !active) return undefined;
+  if (cfg.bypassLiterature || !cfg.useInSynthesis || !active) return undefined;
 
   const litDir = getLiteratureDir(workspaceRoot);
   let absPath = path.join(litDir, active);
@@ -264,6 +265,7 @@ export class LiteratureService {
       activeLiterature: active,
       activeCorpus: active,
       useInSynthesis: !!config.useInSynthesis,
+      bypassLiterature: !!config.bypassLiterature,
       activeLiteratureInfo: activeInfo,
       activeCorpusInfo: activeInfo,
       ingestFolder: this.ingestFolder,
@@ -305,7 +307,13 @@ export class LiteratureService {
 
     this.syncWorkspaceScripts();
     const cfg = this.getConfig();
-    this.writeConfig({ ...cfg, activeLiterature: fileName, activeCorpus: fileName });
+    this.writeConfig({
+      ...cfg,
+      activeLiterature: fileName,
+      activeCorpus: fileName,
+      useInSynthesis: true,
+      bypassLiterature: false,
+    });
     const info = this.listDatabases().find((c) => c.fileName === fileName);
     if (!info) throw new Error("Literature database was initialized but could not be found on disk.");
     return info;
@@ -323,7 +331,10 @@ export class LiteratureService {
     }
     const cfg = this.getConfig();
     const base = fileName ? path.basename(fileName) : undefined;
-    this.writeConfig({ ...cfg, activeLiterature: base, activeCorpus: base });
+    // When a database is explicitly chosen, automatically engage synthesis and un-bypass
+    const useInSynthesis = base ? true : cfg.useInSynthesis;
+    const bypassLiterature = base ? false : cfg.bypassLiterature;
+    this.writeConfig({ ...cfg, activeLiterature: base, activeCorpus: base, useInSynthesis, bypassLiterature });
     this.syncWorkspaceScripts();
   }
 
@@ -335,6 +346,16 @@ export class LiteratureService {
     const cfg = this.getConfig();
     this.writeConfig({ ...cfg, useInSynthesis: !!enabled });
     if (enabled) this.syncWorkspaceScripts();
+  }
+
+  public setBypassLiterature(bypass: boolean) {
+    const cfg = this.getConfig();
+    this.writeConfig({
+      ...cfg,
+      bypassLiterature: !!bypass,
+      useInSynthesis: bypass ? false : Boolean(cfg.activeLiterature || cfg.activeCorpus),
+    });
+    this.syncWorkspaceScripts();
   }
 
   /** Ensures the active literature schema is current (idempotent). */

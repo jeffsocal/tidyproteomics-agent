@@ -1,11 +1,13 @@
 import React from "react";
-import { FlaskConical, Activity, FileText, Settings, X, BarChart3 } from "lucide-react";
+import { FlaskConical, Activity, FileText, Settings, X, BarChart3, Database, BookOpen } from "lucide-react";
 import { AppConfig, ExperimentSpec, FileTreeNode, LiteratureViewState, McpStatus, PipelineState, ViewerTab } from "../types";
 import { ExperimentFormTab } from "./ExperimentFormTab";
 import { PipelineProgressTab } from "./PipelineProgressTab";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { SettingsTab } from "./SettingsTab";
 import { AIEvaluationTab } from "./AIEvaluationTab";
+import { LibrarySettingsSection } from "./LibrarySettingsSection";
+import { GuidesTab } from "./GuidesTab";
 
 interface CenterViewerPaneProps {
   tabs: ViewerTab[];
@@ -34,11 +36,14 @@ interface CenterViewerPaneProps {
   onSaveExperimentRaw: (raw: string) => Promise<void>;
   onConfirmAndProceed: (contrasts?: string[], phaseId?: string) => Promise<void>;
   onRunPhase: (phaseId: string) => void;
+  onContinuePhase?: (phaseId: string, additionalTurns?: number) => void;
   onTogglePhase: (phaseId: string, enabled: boolean) => void;
   onStartPipeline: () => void;
   onStopPipeline: () => void;
   onResetPipeline: () => void;
   onOpenPerformanceReview?: () => void;
+  settingsInitialSection?: "workspace" | "provider" | "mcp";
+  howtoInitialGuide?: "operations" | "scientific";
 }
 
 export const CenterViewerPane: React.FC<CenterViewerPaneProps> = ({
@@ -65,11 +70,14 @@ export const CenterViewerPane: React.FC<CenterViewerPaneProps> = ({
   onSaveExperimentRaw,
   onConfirmAndProceed,
   onRunPhase,
+  onContinuePhase,
   onTogglePhase,
   onStartPipeline,
   onStopPipeline,
   onResetPipeline,
   onOpenPerformanceReview,
+  settingsInitialSection,
+  howtoInitialGuide,
 }) => {
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
 
@@ -120,6 +128,10 @@ export const CenterViewerPane: React.FC<CenterViewerPaneProps> = ({
                 <Activity size={13} color={isActive ? "var(--success)" : "currentColor"} />
               ) : tab.kind === "evaluation" ? (
                 <BarChart3 size={13} color={isActive ? "#60a5fa" : "currentColor"} />
+              ) : tab.kind === "library" ? (
+                <Database size={13} color={isActive ? "#a855f7" : "currentColor"} />
+              ) : tab.kind === "howto" || tab.kind === "guides" ? (
+                <BookOpen size={13} color={isActive ? "#38bdf8" : "currentColor"} />
               ) : tab.kind === "settings" ? (
                 <Settings size={13} color={isActive ? "var(--warning)" : "currentColor"} />
               ) : (
@@ -172,6 +184,7 @@ export const CenterViewerPane: React.FC<CenterViewerPaneProps> = ({
             onOpenFile={onOpenFile}
             onOpenExperimentForm={() => onSelectTab("experiment")}
             onRunPhase={onRunPhase}
+            onContinuePhase={onContinuePhase}
             onTogglePhase={onTogglePhase}
             onStartPipeline={onStartPipeline}
             onStopPipeline={onStopPipeline}
@@ -188,18 +201,28 @@ export const CenterViewerPane: React.FC<CenterViewerPaneProps> = ({
             pipelineState={pipelineState}
           />
         </div>
+        <div style={{ display: activeTab?.kind === "library" ? "flex" : "none", height: "100%", width: "100%", flexDirection: "column", overflowY: "auto" }}>
+          <LibrarySettingsSection
+            workspaceRoot={config?.workspaceRoot}
+            literatureState={literatureState}
+            onOpenFile={onOpenFile}
+            onRefreshState={onRefreshLiteratureState}
+          />
+        </div>
+        <div style={{ display: activeTab?.kind === "howto" || activeTab?.kind === "guides" ? "flex" : "none", height: "100%", width: "100%", flexDirection: "column", overflow: "hidden" }}>
+          <GuidesTab initialGuide={howtoInitialGuide} />
+        </div>
         <div style={{ display: activeTab?.kind === "settings" ? "flex" : "none", height: "100%", width: "100%", flexDirection: "column", overflow: "hidden" }}>
           <SettingsTab
             config={config}
+            pipelineState={pipelineState}
             mcpStatus={mcpStatus}
-            literatureState={literatureState}
-            onOpenFile={onOpenFile}
-            onRefreshLiteratureState={onRefreshLiteratureState}
-            onUpdateConfig={onUpdateConfig || (async () => {})}
-            onSelectWorkspace={onSelectWorkspace || (async () => {})}
-            onInitWorkspace={onInitWorkspace || (async () => {})}
-            onReconnectMcp={onReconnectMcp || (async () => {})}
+            onUpdateConfig={onUpdateConfig || (async () => { })}
+            onSelectWorkspace={onSelectWorkspace || (async () => { })}
+            onInitWorkspace={onInitWorkspace || (async () => { })}
+            onReconnectMcp={onReconnectMcp || (async () => { })}
             onOpenPerformanceReview={onOpenPerformanceReview}
+            initialSection={settingsInitialSection}
           />
         </div>
         {activeTab?.relPath && (

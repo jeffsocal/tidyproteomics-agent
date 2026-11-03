@@ -24,6 +24,23 @@ A standalone modern web application for autonomous quantitative proteomics workf
 - `pubmed_search`: Direct NCBI Entrez E-utilities PubMed search returning PMIDs, titles, journals, DOIs, and abstracts.
 - `uniprot_search`: Direct UniProtKB REST API search returning accessions, gene symbols, organisms, and curated functional annotations.
 
+### 3. Comprehensive Built-In Documentation, Reference Manuals & Agentic Knowledge Base
+- **[Operations Guide](reference/operations.md)**: Exhaustive manual detailing the 3-pane studio architecture, workspace directory layout (`docs/` for working project deliverables, `reference/` for platform reference manuals, `data/`, `code/`, `logs/`, `analysis/`, `literature/`), visual semantics (status color codes, telemetry metrics, orange HITL action borders), Human-in-the-Loop gates (Phase 2.1b study design gate, sample pooling map, target contrast builder), and follow-on phase workflows.
+- **[Scientific Guide to Normalization & Imputation](reference/scientific.md)**: In-depth scientific manual explaining:
+  - **Normalization**: Linear models (`scaled`, `median`, `linear`, `limma`), non-linear models (`loess`, `svm`, `randomforest`), invariant sub-population normalization (`subset_filter` and the mathematical extrapolation constraint), CV reduction benchmarking, PCA clustering, and sensitivity testing with peer-reviewed literature citations (*Välikangas et al. 2018*, *Callister et al. 2006*, *Bolstad et al. 2003*, *Ritchie et al. 2015*).
+  - **Imputation**: Taxonomy of missingness (MCAR, MAR, MNAR), within-condition Random Forest (`randomforest_grouped` for MAR, preserving qualitative switches), Limit of Detection minimum (`min_column` for CRISPR knockouts/MNAR, enabling continuous `limma` DE modeling), complete-case bypass (`none`), and downstream modeling risks with supporting publications (*Karpievitch et al. 2012*, *Lazar et al. 2016*, *Stekhoven & Bühlmann 2012*, *Webb-Robertson et al. 2015*).
+- **High-Level Workspace Tabs**:
+  - `Experiment Setup` (permanent pinned tab)
+  - `Pipeline Progress` (permanent pinned tab)
+  - `Settings` (closeable with left-panel `[Settings]` quick button)
+  - `Literature Library` (closeable with left-panel `[Library]` quick button)
+  - `AI Evaluation` (closeable with left-panel `[Evaluation]` quick button)
+  - `Guides` (closeable with left-panel `[Guides]` quick button)
+  - Quick exposure buttons (`[Settings]`, `[Library]`, `[Evaluation]`, `[Guides]`) are arranged in a 2x2 grid directly below the app title in the left panel to immediately focus or reopen any tab.
+- **Dedicated Guides Tab**: Built-in interactive reader in the **Guides** tab (`GuidesTab`) with instant search highlighting, guide selection, and PDF export.
+- **In-Document Markdown Search & Highlighting**: Fast real-time text search inside the `MarkdownViewer` with highlight tags and match counters.
+- **Conversational Right-Side Agent Integration**: Ask the agent directly about app operations, where to find files, what status indicators mean, or request normalization and imputation recommendations with literature links. Quick action chips like `📖 Operations Guide ↗` and `🔬 Scientific Guide ↗` open documents with one click.
+
 ---
 
 ## Quick Start (Local Development / Host Runtime)

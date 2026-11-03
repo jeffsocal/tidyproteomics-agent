@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Play,
   Square,
   Send,
   Trash2,
@@ -19,7 +18,8 @@ import {
   Clock,
   ExternalLink,
 } from "lucide-react";
-import { marked } from "marked";
+import { Marked } from "marked";
+import { renderBlockquoteWithAlerts } from "../utils/markdownAlerts";
 import {
   AgentMessage,
   ChatSessionSearchResult,
@@ -27,7 +27,19 @@ import {
   PipelineState,
   resolvePhaseVisualState,
 } from "../types";
-import { SegmentedProgressBar } from "./SegmentedProgressBar";
+
+const chatMarked = new Marked({
+  gfm: true,
+  breaks: true,
+});
+
+chatMarked.use({
+  renderer: {
+    blockquote(token: any) {
+      return renderBlockquoteWithAlerts(token, this.parser);
+    },
+  },
+});
 
 interface RightChatPaneProps {
   pipelineState?: PipelineState;
@@ -44,11 +56,12 @@ interface RightChatPaneProps {
   onNewChat?: () => void;
   onLoadChat?: (sessionId: string) => void;
   onSearchChats?: (query: string) => Promise<ChatSessionSearchResult[]>;
-  onStartPipeline: () => void;
-  onStopPipeline: () => void;
-  onSelectPhaseSegment: (phaseId: string) => void;
+  onStartPipeline?: () => void;
+  onStopPipeline?: () => void;
+  onSelectPhaseSegment?: (phaseId: string) => void;
   onOpenFile: (relPath: string) => void;
   onOpenExperimentForm: () => void;
+  onOpenDocumentation?: (guide: "operations" | "scientific") => void;
 }
 
 export function stripTimestamp(line: string): string {
@@ -60,7 +73,7 @@ export function stripTimestamp(line: string): string {
 
 function parseMarkdownSafe(text: string): string {
   try {
-    return marked.parse(text, { breaks: true, gfm: true }) as string;
+    return chatMarked.parse(text) as string;
   } catch {
     return text;
   }
@@ -96,6 +109,7 @@ export const RightChatPane: React.FC<RightChatPaneProps> = ({
   onSelectPhaseSegment,
   onOpenFile,
   onOpenExperimentForm,
+  onOpenDocumentation,
 }) => {
   const [input, setInput] = useState("");
   const [expandedClusters, setExpandedClusters] = useState<Record<string, boolean>>({});
@@ -110,17 +124,6 @@ export const RightChatPane: React.FC<RightChatPaneProps> = ({
   const anyRunning =
     !!pipelineState?.isRunning || phases.some((p) => p && p.status === "running");
   const runningPhase = phases.find((p) => p && p.status === "running");
-
-  let overallBadge = { label: "IDLE", cls: "badge-completed" };
-  if (anyRunning) {
-    overallBadge = { label: "RUNNING", cls: "badge-running" };
-  } else if (phases.some((p) => resolvePhaseVisualState(p).state === "warning")) {
-    overallBadge = { label: "ATTENTION", cls: "badge-warning" };
-  } else if (phases.some((p) => p.status === "failed")) {
-    overallBadge = { label: "FAILED", cls: "badge-failed" };
-  } else if (phases.length > 0 && phases.every((p) => !p.enabled || p.status === "completed")) {
-    overallBadge = { label: "COMPLETE", cls: "badge-completed" };
-  }
 
   // Auto-scroll stream to bottom when content changes
   useEffect(() => {
@@ -185,6 +188,41 @@ export const RightChatPane: React.FC<RightChatPaneProps> = ({
       chip === "Review docs/scientific_report.md ↗"
     ) {
       onOpenFile("docs/manuscript.md");
+    } else if (
+      chip === "📖 Operations Guide ↗" ||
+      chip === "Review reference/operations.md ↗" ||
+      chip === "View reference/operations.md ↗" ||
+      chip === "Review guides/operations.md ↗" ||
+      chip === "View guides/operations.md ↗" ||
+      chip === "Review docs/README_OPERATIONS.md ↗" ||
+      chip === "Operations Guide ↗"
+    ) {
+      if (onOpenDocumentation) {
+        onOpenDocumentation("operations");
+      } else {
+        onOpenFile("reference/operations.md");
+      }
+    } else if (
+      chip === "🔬 Scientific Guide ↗" ||
+      chip === "Review reference/scientific.md ↗" ||
+      chip === "View reference/scientific.md ↗" ||
+      chip === "Review guides/scientific.md ↗" ||
+      chip === "View guides/scientific.md ↗" ||
+      chip === "Review docs/README_SCIENTIFIC.md ↗" ||
+      chip === "Scientific Guide ↗"
+    ) {
+      if (onOpenDocumentation) {
+        onOpenDocumentation("scientific");
+      } else {
+        onOpenFile("reference/scientific.md");
+      }
+    } else if (chip.endsWith(" ↗")) {
+      const match = chip.match(/(?:Review|View|Open)\s+([a-zA-Z0-9_\-./]+\.md)\s*↗/);
+      if (match) {
+        onOpenFile(match[1]);
+      } else {
+        handleSend(chip);
+      }
     } else {
       handleSend(chip);
     }
@@ -328,41 +366,7 @@ export const RightChatPane: React.FC<RightChatPaneProps> = ({
               <span style={{ fontSize: "10px" }}>New</span>
             </button>
           )}
-
-          {/* Run / Stop Pipeline Button */}
-          {anyRunning ? (
-            <button type="button" className="btn btn-danger btn-xs" onClick={onStopPipeline}>
-              <Square size={11} /> Stop
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn btn-success btn-xs"
-              onClick={onStartPipeline}
-              disabled={phases.length === 0 || isBenchmarkRunning}
-              title={isBenchmarkRunning ? "AI Benchmark is running. Main pipeline is locked." : "Run Pipeline"}
-            >
-              <Play size={11} /> Run
-            </button>
-          )}
-          <span className={`badge ${overallBadge.cls}`}>{overallBadge.label}</span>
         </div>
-      </div>
-
-      {/* 2nd Topmost Item: Pipeline Progress Segmented Bar */}
-      <div
-        style={{
-          padding: "6px 10px 8px 10px",
-          borderBottom: "1px solid var(--border)",
-          background: "var(--tabbar-bg)",
-          flexShrink: 0,
-        }}
-      >
-        <SegmentedProgressBar
-          pipelineState={pipelineState}
-          onSelectPhase={onSelectPhaseSegment}
-          showLegend={false}
-        />
       </div>
 
       {/* Chat History & Search Popover Overlay */}
@@ -393,7 +397,7 @@ export const RightChatPane: React.FC<RightChatPaneProps> = ({
           </div>
 
           {/* Search bar inside history popover */}
-          <div style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)", background: "#16161b" }}>
+          <div style={{ padding: "6px 8px", borderBottom: "1px solid var(--border)", background: "var(--card-bg)" }}>
             <div
               style={{
                 display: "flex",

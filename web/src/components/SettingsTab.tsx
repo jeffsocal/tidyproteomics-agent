@@ -12,22 +12,19 @@ import {
   Eye,
   EyeOff,
   Sparkles,
-  BookOpen,
   Award,
   FileText,
   Palette,
+  AlertTriangle,
 } from "lucide-react";
-import { AppConfig, LLMProviderType, LLMTierConfig, LiteratureViewState, McpStatus } from "../types";
-import { LibrarySettingsSection } from "./LibrarySettingsSection";
+import { AppConfig, LLMProviderType, LLMTierConfig, McpStatus, PipelineState } from "../types";
 import { MultiModelSettingsSection } from "./MultiModelSettingsSection";
 import { ThemeToggle } from "./ThemeToggle";
 
 interface SettingsTabProps {
   config?: AppConfig;
+  pipelineState?: PipelineState;
   mcpStatus?: McpStatus;
-  literatureState?: LiteratureViewState;
-  onOpenFile?: (relPath: string) => void;
-  onRefreshLiteratureState?: () => Promise<void>;
   onUpdateConfig: (patch: Partial<AppConfig>) => Promise<void>;
   onSelectWorkspace: (dir: string) => Promise<void>;
   onInitWorkspace: (
@@ -36,6 +33,7 @@ interface SettingsTabProps {
   ) => Promise<void>;
   onReconnectMcp: () => Promise<void>;
   onOpenPerformanceReview?: () => void;
+  initialSection?: "workspace" | "provider" | "mcp";
 }
 
 const POWER_OF_TWO_TOKENS = [
@@ -50,17 +48,26 @@ const POWER_OF_TWO_TOKENS = [
 
 export const SettingsTab: React.FC<SettingsTabProps> = ({
   config,
+  pipelineState,
   mcpStatus,
-  literatureState,
-  onOpenFile,
-  onRefreshLiteratureState,
   onUpdateConfig,
   onSelectWorkspace,
   onInitWorkspace,
   onReconnectMcp,
   onOpenPerformanceReview,
+  initialSection,
 }) => {
-  const [activeSection, setActiveSection] = useState<"workspace" | "provider" | "mcp" | "library">("workspace");
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
+  const providerRef = useRef<HTMLDivElement | null>(null);
+  const mcpRef = useRef<HTMLDivElement | null>(null);
+
+  // Workspace readiness state
+  const hasWorkspace = Boolean(config?.workspaceRoot && config.workspaceRoot.trim().length > 0);
+  const needsScaffold =
+    hasWorkspace &&
+    (Boolean(pipelineState?.isAnalysisMissingOrEmpty) ||
+      (pipelineState?.phases || []).length === 0);
+  const needsWorkspaceSelect = !hasWorkspace;
 
   // Provider inputs
   const [provider, setProvider] = useState<LLMProviderType>("anthropic");
@@ -130,6 +137,16 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       setPhaseModels(config.phaseModels || {});
     }
   }, [config]);
+
+  useEffect(() => {
+    if (initialSection === "workspace") {
+      workspaceRef.current?.scrollIntoView({ behavior: "smooth" });
+    } else if (initialSection === "provider") {
+      providerRef.current?.scrollIntoView({ behavior: "smooth" });
+    } else if (initialSection === "mcp") {
+      mcpRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [initialSection]);
 
   const handleApplyPreset = (presetKey: string) => {
     switch (presetKey) {
@@ -306,84 +323,18 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
         </div>
       </div>
 
-      {/* Navigation Sub-Tabs */}
-      <div
-        style={{
-          padding: "10px 24px",
-          borderBottom: "1px solid var(--border)",
-          background: "var(--tabbar-bg)",
-          display: "flex",
-          gap: "8px",
-          flexShrink: 0,
-        }}
-      >
-        <button
-          type="button"
-          className="btn btn-sm"
-          style={{
-            background: activeSection === "workspace" ? "var(--primary)" : "transparent",
-            color: activeSection === "workspace" ? "#fff" : "var(--muted)",
-            border: activeSection === "workspace" ? "none" : "1px solid var(--border)",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "6px",
-          }}
-          onClick={() => setActiveSection("workspace")}
-        >
-          <FolderOpen size={13} /> Workspace &amp; Pipeline Template
-        </button>
-        <button
-          type="button"
-          className="btn btn-sm"
-          style={{
-            background: activeSection === "provider" ? "var(--primary)" : "transparent",
-            color: activeSection === "provider" ? "#fff" : "var(--muted)",
-            border: activeSection === "provider" ? "none" : "1px solid var(--border)",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "6px",
-          }}
-          onClick={() => setActiveSection("provider")}
-        >
-          <Cpu size={13} /> LLM Provider &amp; Model
-        </button>
-        <button
-          type="button"
-          className="btn btn-sm"
-          style={{
-            background: activeSection === "mcp" ? "var(--primary)" : "transparent",
-            color: activeSection === "mcp" ? "#fff" : "var(--muted)",
-            border: activeSection === "mcp" ? "none" : "1px solid var(--border)",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "6px",
-          }}
-          onClick={() => setActiveSection("mcp")}
-        >
-          <Layers size={13} /> MCP Engine &amp; Web Search
-        </button>
-        <button
-          type="button"
-          className="btn btn-sm"
-          style={{
-            background: activeSection === "library" ? "var(--primary)" : "transparent",
-            color: activeSection === "library" ? "#fff" : "var(--muted)",
-            border: activeSection === "library" ? "none" : "1px solid var(--border)",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "6px",
-          }}
-          onClick={() => setActiveSection("library")}
-        >
-          <BookOpen size={13} /> Literature Library &amp; PDF Ingestion
-        </button>
-      </div>
-
-      {/* Main Content Area */}
-      <div style={{ padding: "24px", maxWidth: "960px", width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: "20px" }}>
+      {/* Main Content Area: Consolidated Single Page */}
+      <div style={{ padding: "24px", maxWidth: "960px", width: "100%", margin: "0 auto", display: "flex", flexDirection: "column", gap: "28px" }}>
         {/* SECTION 1: Workspace & Pipeline Template */}
-        {activeSection === "workspace" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+        <div ref={workspaceRef} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", borderBottom: "1px solid var(--border)", paddingBottom: "8px" }}>
+            <FolderOpen size={16} color="var(--primary)" />
+            <h2 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "var(--fg-bright)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+              Workspace &amp; Pipeline Template
+            </h2>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
             {/* Theme & Appearance Box */}
             <div className="card" style={{ padding: "16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div>
@@ -391,14 +342,43 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   <Palette size={15} color="var(--primary)" /> Theme &amp; Color Scheme
                 </h3>
                 <div style={{ fontSize: "12px", color: "var(--muted)", marginTop: "2px" }}>
-                  Select your preferred interface appearance: Deep Dark, Dim Slate, or Light mode.
+                  Select your preferred workspace color mode: Dark, Twilight, Cloudy, Dawn, or Bright.
                 </div>
               </div>
               <ThemeToggle />
             </div>
 
             {/* Active Workspace Box */}
-            <div className="card" style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "10px" }}>
+            <div
+              className={`card ${needsWorkspaceSelect ? "attention-card-orange" : ""}`}
+              style={{
+                padding: "16px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "10px",
+                border: needsWorkspaceSelect ? undefined : "1px solid var(--border)",
+                transition: "all 0.2s ease",
+              }}
+            >
+              {needsWorkspaceSelect && (
+                <div
+                  className="attention-banner-orange"
+                  style={{
+                    padding: "8px 12px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    fontSize: "12px",
+                    color: "var(--attention-orange-light)",
+                  }}
+                >
+                  <AlertTriangle size={15} style={{ flexShrink: 0 }} />
+                  <span>
+                    <strong>Action Required:</strong> No workspace directory selected. Click <strong>Browse &amp; Switch Directory</strong> to select or create a project folder.
+                  </span>
+                </div>
+              )}
+
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
                   <h3 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "var(--fg-bright)" }}>
@@ -408,7 +388,11 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     Where experimental datasets (<code>data/raw/</code>), pipelines (<code>analysis/</code>), and R scripts reside.
                   </div>
                 </div>
-                <button type="button" className="btn btn-secondary btn-sm" onClick={openWorkspaceModal}>
+                <button
+                  type="button"
+                  className={`btn ${needsWorkspaceSelect ? "btn-warning" : "btn-secondary"} btn-sm`}
+                  onClick={openWorkspaceModal}
+                >
                   <FolderOpen size={13} /> Browse &amp; Switch Directory...
                 </button>
               </div>
@@ -430,13 +414,51 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
             </div>
 
             {/* Pipeline Template Setup */}
-            <div className="card" style={{ padding: "16px", display: "flex", flexDirection: "column", gap: "14px" }}>
-              <div>
-                <h3 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "var(--fg-bright)" }}>
-                  Pipeline Workflow Template
-                </h3>
-                <div style={{ fontSize: "12px", color: "var(--muted)" }}>
-                  Select an autonomous proteomics analytical protocol to scaffold into this workspace.
+            <div
+              className={`card ${needsScaffold ? "attention-card-orange" : ""}`}
+              style={{
+                padding: "16px",
+                display: "flex",
+                flexDirection: "column",
+                gap: "14px",
+                border: needsScaffold ? undefined : "1px solid var(--border)",
+                transition: "all 0.2s ease",
+              }}
+            >
+              {needsScaffold && (
+                <div
+                  className="attention-banner-orange"
+                  style={{
+                    padding: "10px 14px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                    fontSize: "12px",
+                    color: "var(--attention-orange-light)",
+                  }}
+                >
+                  <AlertTriangle size={16} style={{ flexShrink: 0 }} />
+                  <div>
+                    <strong>Action Required: Workspace Uninitialized.</strong> This directory is missing the standard analytical pipeline files. Select a workflow template below and click <strong>Scaffold Template into Project</strong> to generate standard folders (<code>analysis/</code>, <code>code/</code>, <code>data/</code>, <code>docs/</code>) and phase directives.
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "8px" }}>
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <h3 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "var(--fg-bright)" }}>
+                      Pipeline Workflow Template
+                    </h3>
+                    {needsScaffold && (
+                      <span className="badge badge-warning" style={{ fontSize: "10px", fontWeight: 700 }}>
+                        ACTION REQUIRED
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: "12px", color: "var(--muted)", marginTop: "2px" }}>
+                    Select an autonomous proteomics analytical protocol to scaffold into this workspace.
+                  </div>
                 </div>
               </div>
 
@@ -444,13 +466,26 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 <div
                   style={{
                     border: `1px solid ${
-                      pipelineTemplate === "differential_expression" ? "var(--primary)" : "var(--border)"
+                      pipelineTemplate === "differential_expression"
+                        ? needsScaffold
+                          ? "var(--attention-orange)"
+                          : "var(--primary)"
+                        : "var(--border)"
                     }`,
                     background:
-                      pipelineTemplate === "differential_expression" ? "rgba(59, 130, 246, 0.08)" : "var(--card-bg)",
+                      pipelineTemplate === "differential_expression"
+                        ? needsScaffold
+                          ? "var(--attention-orange-bg)"
+                          : "rgba(59, 130, 246, 0.08)"
+                        : "var(--card-bg)",
                     borderRadius: "8px",
                     padding: "14px",
                     cursor: "pointer",
+                    boxShadow:
+                      pipelineTemplate === "differential_expression" && needsScaffold
+                        ? "0 0 8px var(--attention-orange-border)"
+                        : "none",
+                    transition: "all 0.15s ease",
                   }}
                   onClick={() => setPipelineTemplate("differential_expression")}
                 >
@@ -465,13 +500,26 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 <div
                   style={{
                     border: `1px solid ${
-                      pipelineTemplate === "quality_control_only" ? "var(--primary)" : "var(--border)"
+                      pipelineTemplate === "quality_control_only"
+                        ? needsScaffold
+                          ? "var(--attention-orange)"
+                          : "var(--primary)"
+                        : "var(--border)"
                     }`,
                     background:
-                      pipelineTemplate === "quality_control_only" ? "rgba(59, 130, 246, 0.08)" : "var(--card-bg)",
+                      pipelineTemplate === "quality_control_only"
+                        ? needsScaffold
+                          ? "var(--attention-orange-bg)"
+                          : "rgba(59, 130, 246, 0.08)"
+                        : "var(--card-bg)",
                     borderRadius: "8px",
                     padding: "14px",
                     cursor: "pointer",
+                    boxShadow:
+                      pipelineTemplate === "quality_control_only" && needsScaffold
+                        ? "0 0 8px var(--attention-orange-border)"
+                        : "none",
+                    transition: "all 0.15s ease",
                   }}
                   onClick={() => setPipelineTemplate("quality_control_only")}
                 >
@@ -487,7 +535,11 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               <div>
                 <button
                   type="button"
-                  className="btn btn-success btn-sm"
+                  className={needsScaffold ? "btn btn-warning btn-sm" : "btn btn-success btn-sm"}
+                  style={{
+                    fontWeight: 700,
+                    boxShadow: needsScaffold ? "var(--attention-orange-glow)" : "none",
+                  }}
                   onClick={handleInitPipeline}
                   disabled={isInitializing || !config?.workspaceRoot}
                 >
@@ -504,17 +556,24 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               </div>
             </div>
           </div>
-        )}
+        </div>
 
         {/* SECTION 2: LLM Provider Configuration */}
-        {activeSection === "provider" && (
+        <div ref={providerRef} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", borderBottom: "1px solid var(--border)", paddingBottom: "8px" }}>
+            <Cpu size={16} color="var(--primary)" />
+            <h2 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "var(--fg-bright)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+              Language Model &amp; Reasoning Provider
+            </h2>
+          </div>
+
           <div className="card" style={{ padding: "18px", display: "flex", flexDirection: "column", gap: "16px" }}>
             <div>
               <h3 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "var(--fg-bright)" }}>
-                Language Model &amp; Reasoning Provider
+                Provider &amp; Model Architecture
               </h3>
               <div style={{ fontSize: "12px", color: "var(--muted)" }}>
-                Configure the LLM client that powers the autonomous agent and analytical turns.
+                Configure the primary inference client and role-specialized models (Utility, Tool Runner, Reasoner).
               </div>
             </div>
 
@@ -690,83 +749,135 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               </button>
             </div>
           </div>
-        )}
+        </div>
 
         {/* SECTION 3: MCP Engine & Web Search */}
-        {activeSection === "mcp" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+        <div ref={mcpRef} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", borderBottom: "1px solid var(--border)", paddingBottom: "8px" }}>
+            <Layers size={16} color="var(--primary)" />
+            <h2 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "var(--fg-bright)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+              MCP Engine &amp; Web Search
+            </h2>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
             {/* MCP Section */}
-            <div className="card" style={{ padding: "18px", display: "flex", flexDirection: "column", gap: "16px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "var(--fg-bright)" }}>
-                    Model Context Protocol (MCP) R Session
-                  </h3>
-                  <div style={{ fontSize: "12px", color: "var(--muted)" }}>
-                    In-memory persistent R engine executing tidyproteomics commands.
+            {(() => {
+              const needsMcpReconnect = Boolean(!mcpStatus?.connected);
+              return (
+                <div
+                  className={`card ${needsMcpReconnect ? "attention-card-orange" : ""}`}
+                  style={{
+                    padding: "18px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "16px",
+                    border: needsMcpReconnect ? undefined : "1px solid var(--border)",
+                    transition: "all 0.2s ease",
+                  }}
+                >
+                  {needsMcpReconnect && (
+                    <div
+                      className="attention-banner-orange"
+                      style={{
+                        padding: "10px 14px",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "10px",
+                        fontSize: "12px",
+                        color: "var(--attention-orange-light)",
+                      }}
+                    >
+                      <AlertTriangle size={16} style={{ flexShrink: 0 }} />
+                      <div>
+                        <strong>Action Required: Model Context Protocol (MCP) R Session Disconnected.</strong> The persistent background R Daemon executing <code>tidyproteomics</code> commands is offline. Click <strong>Reconnect</strong> to initialize or re-bind the MCP engine.
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <h3 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "var(--fg-bright)" }}>
+                          Model Context Protocol (MCP) R Session
+                        </h3>
+                        {needsMcpReconnect && (
+                          <span className="badge badge-warning" style={{ fontSize: "10px", fontWeight: 700 }}>
+                            ACTION REQUIRED
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: "12px", color: "var(--muted)", marginTop: "2px" }}>
+                        In-memory persistent R engine executing tidyproteomics commands.
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <span
+                        className={`badge ${mcpStatus?.connected ? "badge-completed" : "badge-failed"}`}
+                        style={{ fontSize: "10px" }}
+                      >
+                        {mcpStatus?.connected
+                          ? `Connected (${mcpStatus.toolsCount} tools)`
+                          : "Disconnected"}
+                      </span>
+                      <button
+                        type="button"
+                        className={needsMcpReconnect ? "btn btn-warning btn-xs" : "btn btn-secondary btn-xs"}
+                        style={{
+                          fontWeight: 700,
+                          boxShadow: needsMcpReconnect ? "var(--attention-orange-glow)" : "none",
+                        }}
+                        onClick={handleReconnect}
+                        disabled={isReconnecting}
+                      >
+                        <RefreshCw size={11} className={isReconnecting ? "activity-spinner" : ""} /> {isReconnecting ? "Reconnecting..." : "Reconnect"}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+                    <div>
+                      <label className="field-label" style={{ marginBottom: "6px" }}>Execution Mode</label>
+                      <select
+                        className="select"
+                        style={{ width: "100%", padding: "7px 10px" }}
+                        value={mcpMode}
+                        onChange={(e) => setMcpMode(e.target.value as "local" | "docker")}
+                      >
+                        <option value="local">Local Native R Daemon</option>
+                        <option value="docker">Docker Container Sandbox</option>
+                      </select>
+                    </div>
+
+                    {mcpMode === "docker" ? (
+                      <div>
+                        <label className="field-label" style={{ marginBottom: "6px" }}>Docker Image Tag</label>
+                        <input
+                          type="text"
+                          className="input"
+                          style={{ width: "100%", padding: "7px 10px" }}
+                          value={dockerImage}
+                          onChange={(e) => setDockerImage(e.target.value)}
+                        />
+                      </div>
+                    ) : (
+                      <div>
+                        <label className="field-label" style={{ marginBottom: "6px" }}>Rscript Executable Path</label>
+                        <input
+                          type="text"
+                          className="input"
+                          style={{ width: "100%", padding: "7px 10px" }}
+                          value={rscriptPath}
+                          onChange={(e) => setRscriptPath(e.target.value)}
+                          placeholder="Rscript or /usr/local/bin/Rscript"
+                        />
+                      </div>
+                    )}
                   </div>
                 </div>
-
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span
-                    className={`badge ${mcpStatus?.connected ? "badge-completed" : "badge-failed"}`}
-                    style={{ fontSize: "10px" }}
-                  >
-                    {mcpStatus?.connected
-                      ? `Connected (${mcpStatus.toolsCount} tools)`
-                      : "Disconnected"}
-                  </span>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-xs"
-                    onClick={handleReconnect}
-                    disabled={isReconnecting}
-                  >
-                    <RefreshCw size={11} className={isReconnecting ? "activity-spinner" : ""} /> Reconnect
-                  </button>
-                </div>
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
-                <div>
-                  <label className="field-label" style={{ marginBottom: "6px" }}>Execution Mode</label>
-                  <select
-                    className="select"
-                    style={{ width: "100%", padding: "7px 10px" }}
-                    value={mcpMode}
-                    onChange={(e) => setMcpMode(e.target.value as "local" | "docker")}
-                  >
-                    <option value="local">Local Native R Daemon</option>
-                    <option value="docker">Docker Container Sandbox</option>
-                  </select>
-                </div>
-
-                {mcpMode === "docker" ? (
-                  <div>
-                    <label className="field-label" style={{ marginBottom: "6px" }}>Docker Image Tag</label>
-                    <input
-                      type="text"
-                      className="input"
-                      style={{ width: "100%", padding: "7px 10px" }}
-                      value={dockerImage}
-                      onChange={(e) => setDockerImage(e.target.value)}
-                    />
-                  </div>
-                ) : (
-                  <div>
-                    <label className="field-label" style={{ marginBottom: "6px" }}>Rscript Executable Path</label>
-                    <input
-                      type="text"
-                      className="input"
-                      style={{ width: "100%", padding: "7px 10px" }}
-                      value={rscriptPath}
-                      onChange={(e) => setRscriptPath(e.target.value)}
-                      placeholder="Rscript or /usr/local/bin/Rscript"
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
+              );
+            })()}
 
             {/* Web Search Section */}
             <div className="card" style={{ padding: "18px", display: "flex", flexDirection: "column", gap: "16px" }}>
@@ -829,17 +940,41 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               </div>
             </div>
           </div>
-        )}
+        </div>
 
-        {/* SECTION 4: Literature Library & PDF Ingestion */}
-        {activeSection === "library" && (
-          <LibrarySettingsSection
-            workspaceRoot={config?.workspaceRoot}
-            literatureState={literatureState}
-            onOpenFile={onOpenFile}
-            onRefreshState={onRefreshLiteratureState}
-          />
-        )}
+        {/* Bottom Save All Changes Bar */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            padding: "16px 20px",
+            background: "var(--panel-bg)",
+            border: "1px solid var(--border)",
+            borderRadius: "8px",
+            marginTop: "10px",
+          }}
+        >
+          <div style={{ fontSize: "12px", color: "var(--muted)" }}>
+            Review all workspace, LLM model tier, and MCP execution settings above.
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={handleSaveSettings}
+            style={{ display: "flex", alignItems: "center", gap: "6px" }}
+          >
+            {savedNotice ? (
+              <>
+                <Check size={14} /> Saved Successfully!
+              </>
+            ) : (
+              <>
+                <Sliders size={14} /> Save All Changes
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Directory Browser Modal */}

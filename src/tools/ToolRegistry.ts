@@ -229,6 +229,54 @@ export class ToolRegistry {
     }
   }
 
+  private async assertNotSelfConfirmingGate(filePath: string, targetContent?: string, replacementContent?: string): Promise<void> {
+    const root = this.workspaceRoot || "";
+    const resolved = path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(root, filePath);
+    const normalizedRel = root ? path.relative(path.resolve(root), resolved).replace(/\\/g, "/") : filePath.replace(/\\/g, "/");
+
+    const isExperimentMd = normalizedRel === "docs/experiment.md" || normalizedRel.endsWith("/docs/experiment.md");
+    if (!isExperimentMd || !replacementContent) return;
+
+    // Check if targetContent is explicitly trying to replace FALSE with TRUE
+    if (targetContent && /\b(?:Confirm\s+[A-Za-z0-9\s&]+|Proceed\s+With\s+Potential\s+Batch\s+Confounding)\s*:\s*FALSE\b/i.test(targetContent)) {
+      if (/\b(?:Confirm\s+[A-Za-z0-9\s&]+|Proceed\s+With\s+Potential\s+Batch\s+Confounding)\s*:\s*TRUE\b/i.test(replacementContent)) {
+        throw new Error(
+          `Security Policy Violation: Autonomous agents are strictly prohibited from self-confirming Human-in-the-Loop (HITL) gates in '${filePath}'. Changing 'Confirm ...: FALSE' to 'TRUE' must be performed by the human researcher via interactive chat action chips or the Experiment Setup tab. Please scaffold suggested settings into Section 3 with 'Confirm ...: FALSE' and invoke 'fail_phase' to pause for human verification.`
+        );
+      }
+    }
+
+    // For write_file or general replacement: check if existing file on disk has FALSE and new content flips it to TRUE
+    try {
+      if (fsSync.existsSync(resolved)) {
+        const existing = await fs.readFile(resolved, "utf-8");
+        const gateKeys = [
+          "Confirm Discovered Sample Groups",
+          "Confirm Normalization Strategy",
+          "Confirm Imputation Strategy",
+          "Confirm Sample Pooling Map",
+          "Confirm Target Contrasts",
+          "Confirm Batch Confounding Authorization",
+          "Proceed With Potential Batch Confounding",
+          "Confirm Functional Annotation Strategy",
+        ];
+        for (const key of gateKeys) {
+          const falseRegex = new RegExp(`-\\s*\\*\\*${key}\\*\\*\\s*:\\s*FALSE`, "i");
+          const trueRegex = new RegExp(`-\\s*\\*\\*${key}\\*\\*\\s*:\\s*TRUE`, "i");
+          if (falseRegex.test(existing) && trueRegex.test(replacementContent)) {
+            throw new Error(
+              `Security Policy Violation: Autonomous agents are strictly prohibited from self-confirming Human-in-the-Loop (HITL) gates in '${filePath}'. Changing '${key}: FALSE' to 'TRUE' must be performed by the human researcher via interactive chat action chips or the Experiment Setup tab. Please scaffold suggested settings into Section 3 with 'FALSE' and invoke 'fail_phase' to pause for human verification.`
+            );
+          }
+        }
+      }
+    } catch (err: any) {
+      if (err.message?.includes("Security Policy Violation")) {
+        throw err;
+      }
+    }
+  }
+
   private registerDefaultTools() {
     // 1. execute_command
     this.tools.set("execute_command", {
@@ -363,6 +411,7 @@ export class ToolRegistry {
       },
       execute: async (args) => {
         this.assertNotProtected(args.filePath);
+        await this.assertNotSelfConfirmingGate(args.filePath, undefined, args.content);
         const fullPath = this.resolvePath(args.filePath);
         await fs.mkdir(path.dirname(fullPath), { recursive: true });
         await fs.writeFile(fullPath, args.content, "utf-8");
@@ -396,6 +445,7 @@ export class ToolRegistry {
       },
       execute: async (args) => {
         this.assertNotProtected(args.filePath);
+        await this.assertNotSelfConfirmingGate(args.filePath, args.targetContent, args.replacementContent);
         const fullPath = this.resolvePath(args.filePath);
         const content = await fs.readFile(fullPath, "utf-8");
 

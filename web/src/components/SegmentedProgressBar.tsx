@@ -107,7 +107,7 @@ export const SegmentedProgressBar: React.FC<SegmentedProgressBarProps> = ({
             <span style={{ width: 8, height: 8, borderRadius: 2, background: "#3b82f6" }} /> Running
           </span>
           <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }} title="Needs researcher confirmation or input">
-            <span style={{ width: 8, height: 8, borderRadius: 2, background: "#f59e0b" }} /> Needs Attention
+            <span style={{ width: 8, height: 8, borderRadius: 2, background: "var(--attention-orange)" }} /> Needs Attention
           </span>
           <span style={{ display: "inline-flex", alignItems: "center", gap: "4px" }} title="Phase failed or encountered an error">
             <span style={{ width: 8, height: 8, borderRadius: 2, background: "#ef4444" }} /> Failed

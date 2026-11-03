@@ -39,3 +39,13 @@
 - **Batch Confounding Detected**: FALSE
 - **Proceed With Potential Batch Confounding**: FALSE
 - **Confirm Batch Confounding Authorization**: FALSE
+
+### G. Functional Annotation Strategy
+<!-- Configures functional ontology annotation (GO terms, KEGG, Reactome) for pathway enrichment -->
+- **Annotation Source**: uniprot
+- **Annotation File Path**: NONE
+- **Taxon / Organism ID**: 9606
+- **Annotation Ontologies**: biological_process, cellular_component, molecular_function, reactome_pathway
+- **Annotation Validation Status**: PENDING
+- **Confirm Functional Annotation Strategy**: FALSE
+

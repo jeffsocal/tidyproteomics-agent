@@ -1,6 +1,34 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { marked } from "marked";
-import { Edit3, Eye, Save, Download, RefreshCw, Search, Printer } from "lucide-react";
+import { Marked } from "marked";
+import { Edit3, Eye, Save, Download, RefreshCw, Search, Printer, X } from "lucide-react";
+import { renderBlockquoteWithAlerts } from "../utils/markdownAlerts";
+
+function slugifyHeading(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/<[^>]+>/g, "")
+    .replace(/[^\w\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, (match) => "-".repeat(match.length));
+}
+
+const customMarked = new Marked({
+  gfm: true,
+  breaks: false,
+});
+
+customMarked.use({
+  renderer: {
+    heading({ tokens, depth, text }) {
+      const slug = slugifyHeading(text);
+      const innerHtml = this.parser ? this.parser.parseInline(tokens) : text;
+      return `<h${depth} id="${slug}">${innerHtml}</h${depth}>\n`;
+    },
+    blockquote(token: any) {
+      return renderBlockquoteWithAlerts(token, this.parser);
+    },
+  },
+});
 
 interface MarkdownViewerProps {
   relPath: string;
@@ -41,6 +69,7 @@ export const MarkdownViewer: React.FC<MarkdownViewerProps> = ({ relPath, onOpenF
   const [editBuffer, setEditBuffer] = useState("");
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [tableFilter, setTableFilter] = useState("");
+  const [docSearchQuery, setDocSearchQuery] = useState("");
 
   const ext = relPath.split(".").pop()?.toLowerCase() || "";
   const isMarkdown = ext === "md";
@@ -71,6 +100,7 @@ export const MarkdownViewer: React.FC<MarkdownViewerProps> = ({ relPath, onOpenF
 
   useEffect(() => {
     setIsEditing(false);
+    setDocSearchQuery("");
     fetchFile();
   }, [relPath]);
 
@@ -107,8 +137,41 @@ export const MarkdownViewer: React.FC<MarkdownViewerProps> = ({ relPath, onOpenF
         return `![${alt}](/api/workspace/raw?path=${encodeURIComponent(resolved)})`;
       }
     );
-    return marked.parse(processed, { async: false }) as string;
+    return customMarked.parse(processed) as string;
   }, [content, isMarkdown, relPath]);
+
+  const { displayHtml, matchCount } = useMemo(() => {
+    if (!renderedHtml) return { displayHtml: "", matchCount: 0 };
+    const query = docSearchQuery.trim();
+    if (!query) return { displayHtml: renderedHtml, matchCount: 0 };
+
+    const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    let count = 0;
+    const parts = renderedHtml.split(/(<[^>]+>)/g);
+    const regex = new RegExp(`(${escaped})`, "gi");
+    const highlightedParts = parts.map((part) => {
+      if (part.startsWith("<") && part.endsWith(">")) {
+        return part;
+      }
+      const matches = part.match(regex);
+      if (matches) {
+        count += matches.length;
+        return part.replace(regex, '<mark style="background: #fde047; color: #0f172a; border-radius: 2px; padding: 0 2px; font-weight: 600;">$1</mark>');
+      }
+      return part;
+    });
+
+    return { displayHtml: highlightedParts.join(""), matchCount: count };
+  }, [renderedHtml, docSearchQuery]);
+
+  useEffect(() => {
+    if (docSearchQuery.trim() && matchCount > 0) {
+      const firstMark = contentContainerRef.current?.querySelector("mark");
+      if (firstMark) {
+        firstMark.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }
+  }, [docSearchQuery, matchCount]);
 
   const handleExportPdf = () => {
     const printWindow = window.open("", "_blank", "width=900,height=1000");
@@ -273,6 +336,58 @@ export const MarkdownViewer: React.FC<MarkdownViewerProps> = ({ relPath, onOpenF
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          {isMarkdown && !isEditing && (
+            <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+              <Search size={12} style={{ position: "absolute", left: "8px", color: "var(--muted)" }} />
+              <input
+                type="text"
+                className="input"
+                style={{
+                  paddingLeft: "24px",
+                  paddingRight: docSearchQuery ? "22px" : "8px",
+                  width: "180px",
+                  height: "26px",
+                  fontSize: "11px",
+                }}
+                placeholder="Search in document..."
+                value={docSearchQuery}
+                onChange={(e) => setDocSearchQuery(e.target.value)}
+              />
+              {docSearchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setDocSearchQuery("")}
+                  style={{
+                    position: "absolute",
+                    right: "4px",
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                    padding: "2px",
+                    display: "flex",
+                    alignItems: "center",
+                    color: "var(--muted)",
+                  }}
+                  title="Clear search"
+                >
+                  <X size={11} />
+                </button>
+              )}
+              {docSearchQuery.trim() && (
+                <span
+                  style={{
+                    marginLeft: "6px",
+                    fontSize: "11px",
+                    whiteSpace: "nowrap",
+                    color: matchCount > 0 ? "var(--fg-bright)" : "var(--muted)",
+                  }}
+                >
+                  {matchCount > 0 ? `${matchCount} found` : "No matches"}
+                </span>
+              )}
+            </div>
+          )}
+
           {isTabular && !isEditing && (
             <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
               <Search size={12} style={{ position: "absolute", left: "8px", color: "var(--muted)" }} />
@@ -392,14 +507,41 @@ export const MarkdownViewer: React.FC<MarkdownViewerProps> = ({ relPath, onOpenF
               const anchor = target.closest("a");
               if (anchor) {
                 const href = anchor.getAttribute("href") || "";
-                if (href && !href.startsWith("http://") && !href.startsWith("https://") && !href.startsWith("#")) {
+                if (href.startsWith("#")) {
+                  e.preventDefault();
+                  const rawTargetId = href.slice(1);
+                  if (rawTargetId && contentContainerRef.current) {
+                    const targetId = decodeURIComponent(rawTargetId);
+                    let targetElem: HTMLElement | null = null;
+                    try {
+                      targetElem =
+                        contentContainerRef.current.querySelector(`[id="${CSS.escape(rawTargetId)}"]`) ||
+                        contentContainerRef.current.querySelector(`[id="${CSS.escape(targetId)}"]`) ||
+                        null;
+                    } catch {}
+                    if (!targetElem) {
+                      const headings = contentContainerRef.current.querySelectorAll("h1, h2, h3, h4, h5, h6");
+                      const normTarget = targetId.toLowerCase().replace(/[^a-z0-9]/g, "");
+                      for (const h of Array.from(headings)) {
+                        const hId = (h.getAttribute("id") || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+                        if (hId === normTarget) {
+                          targetElem = h as HTMLElement;
+                          break;
+                        }
+                      }
+                    }
+                    if (targetElem) {
+                      targetElem.scrollIntoView({ behavior: "smooth", block: "start" });
+                    }
+                  }
+                } else if (!href.startsWith("http://") && !href.startsWith("https://")) {
                   e.preventDefault();
                   const resolved = resolveRelativeWorkspacePath(relPath, href);
                   onOpenFile(resolved);
                 }
               }
             }}
-            dangerouslySetInnerHTML={{ __html: renderedHtml }}
+            dangerouslySetInnerHTML={{ __html: displayHtml }}
           />
         ) : isTabular && parsedTable ? (
           <div>

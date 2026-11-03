@@ -121,7 +121,10 @@ async function startServer() {
       agentService?.handlePhaseCompleted(phase);
       evaluationService.handlePhaseCompleted(phase);
     },
-    (state) => agentService?.handlePipelineFinished(state)
+    (state) => agentService?.handlePipelineFinished(state),
+    (phase, reason) => {
+      agentService?.handlePhaseHalted(phase);
+    }
   );
 
   const ingestionRunner = new IngestionRunner(
@@ -155,6 +158,7 @@ async function startServer() {
     client,
     async () => orchestrator.getState(),
     async (phaseId?: string) => {
+      if (orchestrator.isBusy()) return;
       await syncModelSummary();
       if (phaseId) {
         orchestrator.resumePipeline(phaseId).catch((err) => appendLog(`[Error] ${err.message}`));
@@ -173,17 +177,29 @@ async function startServer() {
     },
     APP_ROOT,
     async (fromPhaseId?: string) => {
+      if (orchestrator.isBusy()) return;
       await syncModelSummary();
       await orchestrator.resumePipeline(fromPhaseId);
     },
-    () => {
-      orchestrator.stop();
+    async () => {
+      await orchestrator.stop();
     },
     async () => {
+      if (orchestrator.isBusy()) return;
       await syncModelSummary();
       await orchestrator.restartPipeline();
     }
   );
+
+  agentService.setStatusProvider(async () => {
+    return {
+      config: configStore.getAll(),
+      mcpStatus: executionManager.getStatus(),
+      literatureState: literatureService.getViewState(ingestionRunner.getIsRunning() ? "ingesting" : undefined),
+      pipelineState: await orchestrator.getState(),
+      experimentSpec: await agentService.getExperimentManager().readSpec(),
+    };
+  });
 
   async function syncModelSummary() {
     if (!workspaceRoot) return;
@@ -389,7 +405,7 @@ async function startServer() {
       throw new Error(`Templates directory not found at ${templateBase}`);
     }
 
-    const standardDirs = ["analysis", "agent", "code", "data", path.join("data", "raw"), "docs", "logs", "tools", "literature"];
+    const standardDirs = ["analysis", "agent", "code", "data", path.join("data", "raw"), "docs", "reference", "logs", "tools", "literature"];
     for (const d of standardDirs) {
       const fullDir = path.join(targetRoot, d);
       if (!fs.existsSync(fullDir)) {
@@ -418,9 +434,22 @@ async function startServer() {
           }
         }
       }
-      copyFileSafe(path.join(sharedDir, "docs", "experiment.md"), path.join(targetRoot, "docs", "experiment.md"), false);
-      copyFileSafe(path.join(sharedDir, "docs", "notes.md"), path.join(targetRoot, "docs", "notes.md"), false);
-      copyFileSafe(path.join(sharedDir, "docs", "concept.md"), path.join(targetRoot, "docs", "concept.md"), false);
+      const docsTemplatesDir = path.join(sharedDir, "docs");
+      if (fs.existsSync(docsTemplatesDir)) {
+        for (const df of fs.readdirSync(docsTemplatesDir)) {
+          if (df.endsWith(".md")) {
+            copyFileSafe(path.join(docsTemplatesDir, df), path.join(targetRoot, "docs", df), false);
+          }
+        }
+      }
+      const referenceTemplatesDir = path.join(sharedDir, "reference");
+      if (fs.existsSync(referenceTemplatesDir)) {
+        for (const rf of fs.readdirSync(referenceTemplatesDir)) {
+          if (rf.endsWith(".md")) {
+            copyFileSafe(path.join(referenceTemplatesDir, rf), path.join(targetRoot, "reference", rf), true);
+          }
+        }
+      }
       copyFileSafe(path.join(sharedDir, ".gitignore"), path.join(targetRoot, ".gitignore"), false);
       copyFileSafe(path.join(sharedDir, "logs", ".gitkeep"), path.join(targetRoot, "logs", ".gitkeep"), false);
       copyFileSafe(path.join(sharedDir, "data", "raw", ".gitkeep"), path.join(targetRoot, "data", "raw", ".gitkeep"), false);
@@ -667,6 +696,55 @@ async function startServer() {
     }
   });
 
+  // 7b. Serve built-in application documentation & scientific guides
+  app.get("/api/docs/:guideId", async (req, res) => {
+    try {
+      const { guideId } = req.params;
+      const cleanId = String(guideId || "").toLowerCase();
+
+      let targetFile = "";
+      let title = "";
+
+      if (cleanId === "operations" || cleanId === "operations_guide" || cleanId === "readme_operations" || cleanId === "howto" || cleanId === "guides") {
+        const candidates = [
+          workspaceRoot ? path.join(workspaceRoot, "reference", "operations.md") : "",
+          path.join(APP_ROOT, "reference", "operations.md"),
+          path.join(APP_ROOT, "templates", "shared", "reference", "operations.md"),
+        ].filter(Boolean);
+        targetFile = candidates.find((f) => fs.existsSync(f)) || candidates[0];
+        title = "Operations Guide & Application Manual";
+      } else if (cleanId === "scientific" || cleanId === "scientific_guide" || cleanId === "readme_scientific") {
+        const candidates = [
+          workspaceRoot ? path.join(workspaceRoot, "reference", "scientific.md") : "",
+          path.join(APP_ROOT, "reference", "scientific.md"),
+          path.join(APP_ROOT, "templates", "shared", "reference", "scientific.md"),
+        ].filter(Boolean);
+        targetFile = candidates.find((f) => fs.existsSync(f)) || candidates[0];
+        title = "Scientific Guide: Quantitative Analysis & Methodology";
+      } else {
+        return res.status(404).json({ ok: false, error: `Unknown documentation guide '${guideId}'` });
+      }
+
+      if (!fs.existsSync(targetFile)) {
+        return res.status(404).json({ ok: false, error: `Guide file not found on server at ${targetFile}` });
+      }
+
+      const content = fs.readFileSync(targetFile, "utf-8");
+      const stat = fs.statSync(targetFile);
+
+      return res.json({
+        ok: true,
+        guideId: cleanId.startsWith("sci") ? "scientific" : "operations",
+        title,
+        content,
+        sizeBytes: stat.size,
+        lastModified: stat.mtime.toISOString(),
+      });
+    } catch (err: any) {
+      return res.status(500).json({ ok: false, error: err.message || "Failed to load documentation" });
+    }
+  });
+
   // 8. Serve raw file (for embedded images in Markdown, Plot tabs, and downloads)
   app.get("/api/workspace/raw", (req, res) => {
     try {
@@ -752,6 +830,9 @@ async function startServer() {
         : "Confirmed study design & parameters in docs/experiment.md";
       agentService.addUserMessage(detail);
 
+      if (orchestrator.isBusy()) {
+        return res.status(409).json({ ok: false, error: "A pipeline or phase is currently running or stopping. Please wait or stop it first." });
+      }
       await syncModelSummary();
       if (resumePhaseId) {
         orchestrator.resumePipeline(String(resumePhaseId)).catch((err) => appendLog(`[Error] ${err.message}`));
@@ -771,6 +852,9 @@ async function startServer() {
       if (evaluationService.getActiveSuite()?.status === "running") {
         return res.status(409).json({ ok: false, error: "Cannot start pipeline: AI Evaluation benchmark is actively running." });
       }
+      if (orchestrator.isBusy()) {
+        return res.status(409).json({ ok: false, error: "A pipeline or phase is already running or stopping. Please wait or stop it first." });
+      }
       await syncModelSummary();
       orchestrator.runFullPipeline(false).catch((err) => appendLog(`[Pipeline Error] ${err.message}`));
       res.json({ ok: true });
@@ -784,6 +868,9 @@ async function startServer() {
       if (evaluationService.getActiveSuite()?.status === "running") {
         return res.status(409).json({ ok: false, error: "Cannot restart pipeline: AI Evaluation benchmark is actively running." });
       }
+      if (orchestrator.isBusy()) {
+        return res.status(409).json({ ok: false, error: "A pipeline or phase is already running or stopping. Please wait or stop it first." });
+      }
       await syncModelSummary();
       orchestrator.restartPipeline().catch((err) => appendLog(`[Pipeline Error] ${err.message}`));
       res.json({ ok: true });
@@ -796,6 +883,9 @@ async function startServer() {
     try {
       if (evaluationService.getActiveSuite()?.status === "running") {
         return res.status(409).json({ ok: false, error: "Cannot resume pipeline: AI Evaluation benchmark is actively running." });
+      }
+      if (orchestrator.isBusy()) {
+        return res.status(409).json({ ok: false, error: "A pipeline or phase is already running or stopping. Please wait or stop it first." });
       }
       const phaseId = req.body?.phaseId ? String(req.body.phaseId) : undefined;
       await syncModelSummary();
@@ -811,6 +901,9 @@ async function startServer() {
       if (evaluationService.getActiveSuite()?.status === "running") {
         return res.status(409).json({ ok: false, error: "Cannot run phase: AI Evaluation benchmark is actively running." });
       }
+      if (orchestrator.isBusy()) {
+        return res.status(409).json({ ok: false, error: "A pipeline or phase is already running or stopping. Please wait or stop it first." });
+      }
       const phaseId = String(req.body?.phaseId || "").trim();
       if (!phaseId) return res.status(400).json({ ok: false, error: "phaseId required" });
       await syncModelSummary();
@@ -821,9 +914,44 @@ async function startServer() {
     }
   });
 
-  app.post("/api/pipeline/stop", (_req, res) => {
-    orchestrator.stop();
-    res.json({ ok: true });
+  app.post("/api/pipeline/continue-phase", async (req, res) => {
+    try {
+      if (evaluationService.getActiveSuite()?.status === "running") {
+        return res.status(409).json({ ok: false, error: "Cannot continue phase: AI Evaluation benchmark is actively running." });
+      }
+      if (orchestrator.isBusy()) {
+        return res.status(409).json({ ok: false, error: "A pipeline or phase is already running or stopping. Please wait or stop it first." });
+      }
+      const phaseId = String(req.body?.phaseId || "").trim();
+      const additionalTurns = Number(req.body?.additionalTurns || 10);
+      if (!phaseId) return res.status(400).json({ ok: false, error: "phaseId required" });
+      await syncModelSummary();
+      orchestrator.continuePhase(phaseId, additionalTurns).catch((err) => appendLog(`[Phase Continuation Error] ${err.message}`));
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  app.post("/api/pipeline/phase-turns", async (req, res) => {
+    try {
+      const phaseId = String(req.body?.phaseId || "").trim();
+      const maxTurns = Number(req.body?.maxTurns || 30);
+      if (!phaseId) return res.status(400).json({ ok: false, error: "phaseId required" });
+      orchestrator.setPhaseMaxTurns(phaseId, maxTurns);
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  app.post("/api/pipeline/stop", async (_req, res) => {
+    try {
+      await orchestrator.stop();
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
   });
 
   app.post("/api/pipeline/toggle-phase", async (req, res) => {
@@ -1383,6 +1511,17 @@ async function startServer() {
     try {
       const enabled = Boolean(req.body?.enabled);
       literatureService.setUseInSynthesis(enabled);
+      broadcastLiteratureState();
+      res.json({ ok: true, state: literatureService.getViewState() });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  app.post("/api/literature/toggle-bypass", (req, res) => {
+    try {
+      const bypass = Boolean(req.body?.bypass);
+      literatureService.setBypassLiterature(bypass);
       broadcastLiteratureState();
       res.json({ ok: true, state: literatureService.getViewState() });
     } catch (err: any) {

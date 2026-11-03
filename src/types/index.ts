@@ -64,7 +64,7 @@ export interface LLMConfig {
   phaseModels?: Record<string, string>;
 }
 
-export type PhaseStatus = "pending" | "running" | "completed" | "failed";
+export type PhaseStatus = "pending" | "running" | "completed" | "failed" | "awaiting_hitl";
 
 export interface PhaseInfo {
   id: string;
@@ -77,6 +77,8 @@ export interface PhaseInfo {
   endTime?: string;
   durationSeconds?: number;
   turnCount?: number;
+  maxTurns?: number;
+  canContinue?: boolean;
   tokenUsage?: TokenUsage;
   summary?: string;
   error?: string;
@@ -155,6 +157,8 @@ export interface LiteratureConfig {
   activeLiterature?: string;
   /** When true, the active literature path is injected into prompt-phasing context. */
   useInSynthesis: boolean;
+  /** When true, literature corroboration is explicitly bypassed (non-blocking). */
+  bypassLiterature?: boolean;
   updatedAt?: string;
   /** @deprecated Backwards compatibility alias for activeLiterature */
   activeCorpus?: string;
@@ -197,6 +201,7 @@ export interface LiteratureViewState {
   config: LiteratureConfig;
   activeLiterature?: string;
   useInSynthesis?: boolean;
+  bypassLiterature?: boolean;
   activeLiteratureInfo?: LiteratureInfo;
   ingestFolder?: string;
   queue: IngestQueueItem[];

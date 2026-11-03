@@ -29,6 +29,7 @@ export interface AppConfig {
   tierToolRunner?: LLMTierConfig;
   tierReasoner?: LLMTierConfig;
   phaseModels?: Record<string, string>;
+  phaseMaxTurns?: Record<string, number>;
 }
 
 export function getDefaultTiersForProvider(provider: LLMProviderType): {

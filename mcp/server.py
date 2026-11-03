@@ -301,7 +301,7 @@ TOOLS = [
                 "duplicates": {
                     "type": "string",
                     "enum": ["replace", "merge", "leave"],
-                    "description": "Action on duplicates (default: 'replace')."
+                    "description": "Action on duplicates (default: 'merge')."
                 },
                 "id": {
                     "type": "string",
@@ -309,6 +309,89 @@ TOOLS = [
                 }
             },
             "required": ["file_path"]
+        }
+    },
+    {
+        "name": "tpa_audit_annotations",
+        "description": "Audits a local annotation file or active dataset annotations for schema compatibility, column synonyms, and protein identifier overlap percentage.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Optional path to CSV/TSV table. If omitted, audits active in-memory annotations on the dataset."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Optional dataset ID."
+                }
+            }
+        }
+    },
+    {
+        "name": "tpa_integrate_annotations",
+        "description": "Integrates external biological annotations from a CSV/TSV/delimited file into the active dataset with delimiter sniffing and column synonym mapping.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Path to CSV/TSV table containing identifier, term, and annotation columns."
+                },
+                "duplicates": {
+                    "type": "string",
+                    "enum": ["merge", "replace", "leave"],
+                    "description": "Action on duplicates (default: 'merge')."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Optional dataset ID."
+                }
+            },
+            "required": ["file_path"]
+        }
+    },
+    {
+        "name": "tpa_fetch_annotations",
+        "description": "Autonomously fetches biological annotations (GO terms, Reactome pathways, KEGG) from UniProt KB REST API for active dataset accessions, caches to data/annotations_<source>.tsv, and attaches to dataset.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "enum": ["uniprot"],
+                    "description": "Remote database provider (default: 'uniprot')."
+                },
+                "taxon_id": {
+                    "type": "string",
+                    "description": "NCBI Taxonomy ID (e.g. '9606' for Human, '10090' for Mouse). Optional."
+                },
+                "categories": {
+                    "type": "string",
+                    "description": "Comma-separated target ontologies (e.g. 'biological_process, cellular_component, molecular_function, reactome_pathway, kegg')."
+                },
+                "output_file": {
+                    "type": "string",
+                    "description": "Local workspace TSV path to cache annotations (default: 'data/annotations_uniprot.tsv')."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Optional dataset ID."
+                }
+            }
+        }
+    },
+    {
+        "name": "tpa_list_annotations",
+        "description": "Lists attached biological annotation ontologies, annotation counts per category, and protein coverage metrics for the active dataset.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "Optional dataset ID."
+                }
+            }
         }
     },
     {
@@ -1091,12 +1174,30 @@ def handle_tool_call(name, args):
             return f"Match-Between-Runs removed!\n\n```\n{res.get('summary')}\n```"
         return f"Error in rm_mbr: {res.get('error')}"
 
-    elif name == "tpa_annotate":
+    elif name == "tpa_audit_annotations":
+        res = call_daemon("/audit_annotations", args)
+        if res.get("success"):
+            return res.get("summary", "Annotation audit completed.")
+        return f"Error in audit_annotations: {res.get('error')}"
+
+    elif name in ["tpa_annotate", "tpa_integrate_annotations"]:
         res = call_daemon("/annotate", args)
         if res.get("success"):
             terms = ", ".join(res.get("available_terms", []))
-            return f"Annotations added successfully! Available terms: {terms}"
+            return res.get("summary", f"Annotations added successfully! Available terms: {terms}")
         return f"Error in annotate: {res.get('error')}"
+
+    elif name == "tpa_fetch_annotations":
+        res = call_daemon("/fetch_annotations", args)
+        if res.get("success"):
+            return res.get("summary", "UniProt annotations fetched successfully.")
+        return f"Error in fetch_annotations: {res.get('error')}"
+
+    elif name == "tpa_list_annotations":
+        res = call_daemon("/list_annotations", args)
+        if res.get("success"):
+            return res.get("summary", "List annotations completed.")
+        return f"Error in list_annotations: {res.get('error')}"
 
     elif name == "tpa_normalize":
         res = call_daemon("/normalize", args)

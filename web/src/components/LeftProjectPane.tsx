@@ -9,15 +9,18 @@ import {
   Database,
   ChevronRight,
   ChevronDown,
-  Sparkles,
   RefreshCw,
   ArrowUp,
   Plus,
+  BookOpen,
+  BarChart3,
+  AlertTriangle,
 } from "lucide-react";
-import { AppConfig, FileTreeNode, McpStatus } from "../types";
+import { AppConfig, FileTreeNode, McpStatus, PipelineState } from "../types";
 
 interface LeftProjectPaneProps {
   config?: AppConfig;
+  pipelineState?: PipelineState;
   mcpStatus?: McpStatus;
   fileTree: FileTreeNode[];
   activeFilePath?: string;
@@ -31,22 +34,34 @@ interface LeftProjectPaneProps {
   onOpenFile: (relPath: string) => void;
   onOpenExperimentForm: () => void;
   onOpenSettings?: () => void;
+  onOpenLibrary?: () => void;
+  onOpenEvaluation?: () => void;
+  onOpenGuides?: (guide?: "operations" | "scientific") => void;
+  onOpenHowto?: (guide?: "operations" | "scientific") => void;
+  onOpenDocumentation?: (guide: "operations" | "scientific") => void;
   onRefreshTree: () => void;
 }
 
 export const LeftProjectPane: React.FC<LeftProjectPaneProps> = ({
   config,
+  pipelineState,
   fileTree,
   activeFilePath,
   onSelectWorkspace,
   onOpenFile,
   onOpenExperimentForm,
   onOpenSettings,
+  onOpenLibrary,
+  onOpenEvaluation,
+  onOpenGuides,
+  onOpenHowto,
+  onOpenDocumentation,
   onRefreshTree,
 }) => {
   // Expanded folders in file tree
   const [expandedDirs, setExpandedDirs] = useState<Record<string, boolean>>({
     docs: true,
+    reference: true,
     analysis: true,
     data: true,
     code: false,
@@ -178,22 +193,92 @@ export const LeftProjectPane: React.FC<LeftProjectPaneProps> = ({
   };
 
   const wsName = config?.workspaceRoot ? config.workspaceRoot.split("/").pop() : "No Workspace";
+  const isWorkspaceUninitialized = Boolean(
+    config?.workspaceRoot &&
+      (pipelineState?.isAnalysisMissingOrEmpty || fileTree.length === 0)
+  );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
-      {/* Top Header with Settings Button */}
-      <div className="pane-header">
-        <h2 className="pane-title">
-          <Sparkles size={14} color="var(--primary)" />
-          tidyproteomics-agent
-        </h2>
+      {/* High-Level Tab Exposure Buttons at Top of Left Panel */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: "6px",
+          padding: "10px",
+          borderBottom: "1px solid var(--border)",
+          background: "var(--tabbar-bg)",
+          flexShrink: 0,
+        }}
+      >
         <button
           type="button"
           className="btn btn-secondary btn-xs"
           onClick={onOpenSettings}
-          title="Open Settings in Center Workspace"
+          style={{
+            justifyContent: "center",
+            gap: "5px",
+            padding: "5px 6px",
+            border: isWorkspaceUninitialized ? "1px solid var(--attention-orange-border)" : undefined,
+            background: isWorkspaceUninitialized ? "var(--attention-orange-bg)" : undefined,
+          }}
+          title={
+            isWorkspaceUninitialized
+              ? "Workspace uninitialized • Open Settings to scaffold template"
+              : "Open Settings in Center Workspace"
+          }
         >
-          <Settings size={12} /> Settings
+          {isWorkspaceUninitialized ? (
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background: "var(--attention-orange)",
+                boxShadow: "0 0 5px var(--attention-orange)",
+                flexShrink: 0,
+              }}
+            />
+          ) : (
+            <Settings size={12} color="var(--warning)" />
+          )}
+          <span>Settings</span>
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary btn-xs"
+          onClick={onOpenLibrary}
+          style={{ justifyContent: "center", gap: "5px", padding: "5px 6px" }}
+          title="Open Literature Library in Center Workspace"
+        >
+          <Database size={12} color="#a855f7" /> Library
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary btn-xs"
+          onClick={onOpenEvaluation}
+          style={{ justifyContent: "center", gap: "5px", padding: "5px 6px" }}
+          title="Open AI Evaluation in Center Workspace"
+        >
+          <BarChart3 size={12} color="#60a5fa" /> Evaluation
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary btn-xs"
+          onClick={() => {
+            if (onOpenGuides) {
+              onOpenGuides("operations");
+            } else if (onOpenHowto) {
+              onOpenHowto("operations");
+            } else if (onOpenDocumentation) {
+              onOpenDocumentation("operations");
+            }
+          }}
+          style={{ justifyContent: "center", gap: "5px", padding: "5px 6px" }}
+          title="Open Guides & Scientific Reference"
+        >
+          <BookOpen size={12} color="#38bdf8" /> Guides
         </button>
       </div>
 
@@ -250,8 +335,42 @@ export const LeftProjectPane: React.FC<LeftProjectPaneProps> = ({
       {/* Navigable Workspace File Tree */}
       <div style={{ flex: "1 1 auto", overflowY: "auto", overflowX: "auto", padding: "6px" }}>
         {fileTree.length === 0 ? (
-          <div style={{ padding: "16px 8px", textAlign: "center", color: "var(--muted)", fontSize: "11.5px" }}>
-            Workspace is empty.<br />Click <b>Settings</b> &rarr; <b>Scaffold Template</b> to initialize.
+          <div
+            className="attention-banner-orange"
+            style={{
+              padding: "14px 10px",
+              margin: "8px 4px",
+              textAlign: "center",
+              display: "flex",
+              flexDirection: "column",
+              gap: "8px",
+            }}
+          >
+            <div
+              style={{
+                fontWeight: 700,
+                color: "var(--attention-orange-light)",
+                fontSize: "11.5px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "5px",
+              }}
+            >
+              <AlertTriangle size={13} />
+              <span>Workspace Uninitialized</span>
+            </div>
+            <div style={{ color: "var(--muted)", fontSize: "11px", lineHeight: 1.4 }}>
+              This directory is missing analytical pipeline templates.
+            </div>
+            <button
+              type="button"
+              className="btn btn-warning btn-xs"
+              onClick={() => onOpenSettings && onOpenSettings()}
+              style={{ alignSelf: "center", marginTop: "2px", fontWeight: 700 }}
+            >
+              Scaffold Template
+            </button>
           </div>
         ) : (
           renderTreeNodes(fileTree)

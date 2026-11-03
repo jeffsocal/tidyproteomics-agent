@@ -114,6 +114,12 @@ export const EvaluationBarChart: React.FC<EvaluationBarChartProps> = ({
     // Wrap x-axis category labels so they stay horizontal without overlapping
     const wrappedCategories = categories.map((c) => wrapCategoryLabel(c, 16));
 
+    const compStyle = window.getComputedStyle(el);
+    const fgColor = compStyle.color || "#e4e4e7";
+    const mutedColor = compStyle.getPropertyValue("--muted").trim() || "#a1a1aa";
+    const borderColor = compStyle.getPropertyValue("--border").trim() || "rgba(255, 255, 255, 0.12)";
+    const cardBgColor = compStyle.getPropertyValue("--card-bg").trim() || "rgba(0, 0, 0, 0.35)";
+
     const data: any[] = series.map((s, idx) => {
       const color = s.color || MODEL_PALETTE[idx % MODEL_PALETTE.length];
       const textLabels = s.text
@@ -131,7 +137,7 @@ export const EvaluationBarChart: React.FC<EvaluationBarChartProps> = ({
         marker: {
           color,
           line: {
-            color: "rgba(255, 255, 255, 0.2)",
+            color: borderColor,
             width: 1,
           },
         },
@@ -149,9 +155,9 @@ export const EvaluationBarChart: React.FC<EvaluationBarChartProps> = ({
       autosize: true,
       height,
       paper_bgcolor: "transparent",
-      plot_bgcolor: "rgba(255, 255, 255, 0.02)",
+      plot_bgcolor: "transparent",
       font: {
-        color: "#e4e4e7",
+        color: fgColor,
         family: 'system-ui, -apple-system, BlinkMacSystemFont, "Inter", sans-serif',
         size: 11,
       },
@@ -168,25 +174,25 @@ export const EvaluationBarChart: React.FC<EvaluationBarChartProps> = ({
         y: -0.25,
         xanchor: "center",
         x: 0.5,
-        font: { color: "#e4e4e7", size: 10.5 },
-        bgcolor: "rgba(0, 0, 0, 0.35)",
-        bordercolor: "rgba(255, 255, 255, 0.12)",
+        font: { color: fgColor, size: 10.5 },
+        bgcolor: cardBgColor,
+        bordercolor: borderColor,
         borderwidth: 1,
       },
       xaxis: {
         tickangle: 0, // Keep metric names strictly horizontal
-        tickfont: { color: "#e4e4e7", size: 10.5, weight: 600 },
-        gridcolor: "rgba(255, 255, 255, 0.05)",
-        linecolor: "rgba(255, 255, 255, 0.18)",
+        tickfont: { color: fgColor, size: 10.5, weight: 600 },
+        gridcolor: borderColor,
+        linecolor: borderColor,
         automargin: true,
       },
       yaxis: {
-        title: effectiveValueTitle ? { text: effectiveValueTitle, font: { color: "#a1a1aa", size: 11 } } : undefined,
+        title: effectiveValueTitle ? { text: effectiveValueTitle, font: { color: mutedColor, size: 11 } } : undefined,
         range: effectiveValueRange,
-        tickfont: { color: "#a1a1aa", size: 10.5 },
-        gridcolor: "rgba(255, 255, 255, 0.07)",
-        zerolinecolor: "rgba(255, 255, 255, 0.15)",
-        linecolor: "rgba(255, 255, 255, 0.18)",
+        tickfont: { color: mutedColor, size: 10.5 },
+        gridcolor: borderColor,
+        zerolinecolor: borderColor,
+        linecolor: borderColor,
         automargin: true,
       },
     };
@@ -218,7 +224,7 @@ export const EvaluationBarChart: React.FC<EvaluationBarChartProps> = ({
   return (
     <div
       style={{
-        background: "var(--panel)",
+        background: "var(--card-bg)",
         border: "1px solid var(--border)",
         borderRadius: "8px",
         padding: "16px 18px",

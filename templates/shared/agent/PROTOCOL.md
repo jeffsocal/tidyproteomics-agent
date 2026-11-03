@@ -55,13 +55,16 @@ $$\text{Read Active Phase Directive} \longrightarrow \text{Execute Scoped Tools 
 3. **Exploratory Scaffolding vs. Pre-Flight HITL Gating (`fail_phase`)**:
    - **Discovery & Scaffolding Tasks Never Halt**: When an exploratory/inspection phase discovers ungrouped sample names, technical batch suffixes, or potential batch confounding, it must scaffold Section 3 of `docs/experiment.md` with initial `FALSE` confirmation defaults and complete normally via `complete_phase`. Similarly, exploratory header audits (`tpa_input_audit`) are advisory diagnostics; if `tpa_load()` successfully imports the dataset with quantified entities, exploratory inspection must never trigger `fail_phase`.
    - **Downstream Pre-Flight HITL Gates**: When an active phase requires human-in-the-loop confirmation of Section 3 settings before executing downstream statistical transformations:
-     - **Autonomous / Headless Bypass**: If `docs/experiment.md` specifies `- **Autonomous Mode**: TRUE` or `- **Auto-Confirm**: TRUE`, or when running in an automated batch pipeline or benchmark evaluation, do NOT call `fail_phase`. Ensure Section 3 subtasks (3.A through 3.E) are cleanly populated with standard analytical defaults, automatically update unconfirmed checks to `TRUE` via a single `replace_file_content` call, and proceed immediately.
+     - **Mandatory Pre-Flight HITL Halt**: Whenever an active phase requires confirmation of Section 3 settings (Phase 2.1b for 3.A–3.E, Phase 3 for 3.C, Phase 4 for 3.E) and any required confirmation flag is `FALSE`:
+       1. Ensure Section 3 subtasks are populated with concrete, data-grounded recommendations while preserving `Confirm ...: FALSE`.
+       2. **DO NOT self-confirm gates**: Autonomous agents are strictly prohibited from changing `Confirm ...: FALSE` to `TRUE` in `docs/experiment.md`.
+       3. Immediately invoke `fail_phase(phaseName = "<ACTIVE_PHASE>", reason = "Pre-flight Study Design Gate: Human-in-the-loop (HITL) confirmation required for Section 3 in docs/experiment.md.", actionableInsights = "ACTION REQUIRED: Open docs/experiment.md (highlighted in orange outline), verify Section 3 subtasks, and confirm via chat action chips or the form.")`.
      - **Inactive Batch Confounding**: When `- **Batch Confounding Detected**: FALSE`, Section 3.F is inactive and satisfied. Do NOT treat `FALSE` for batch confounding detection as an unconfirmed blocker.
-     - **Interactive Gate Halt**: ONLY if running in an interactive human-in-the-loop session with an active live user prompt loop and required confirmation flags are `FALSE` (and not in Autonomous Mode), ensure Section 3 is cleanly populated and immediately invoke `fail_phase(phaseName = "<ACTIVE_PHASE>", reason = "<REASON>", actionableInsights = "<UI_ACTION_INSTRUCTIONS>")` without looping or repeating commands.
-4. **Strict Ban on Speculative `fail_phase` Invocations**:
-   - `fail_phase` is strictly reserved for unrecoverable infrastructure crashes, missing prerequisite input files, or fatal tool error strings that persist after one remediation attempt.
-   - **Surprising biology, modest CV reduction across normalization candidates, empty pathway enrichments, or condition-exclusive dropouts are empirical data results, NEVER pipeline failures.**
-   - Calling `fail_phase` without quoting a hard tool error message is strictly prohibited. If unexpected data distributions occur, document them objectively, adapt according to the phase directive's fallback path, and proceed to `complete_phase`.
+4. **Sanctioned vs. Prohibited Uses of `fail_phase`**:
+   - `fail_phase` is strictly reserved for:
+     1. **Mandatory Pre-Flight HITL Checkpoints** as defined in rule 3 above (where reason explicitly cites the pending Section 3 gate).
+     2. **Unrecoverable Infrastructure Crashes or Fatal Tool Errors** that persist after targeted remediation.
+   - **Prohibited Uses**: Surprising biology, modest CV reduction across normalization candidates, empty pathway enrichments, or condition-exclusive dropouts are empirical data results, NEVER pipeline failures. Calling `fail_phase` for advisory audit warnings or empty ontology columns is strictly prohibited.
 
 ---
 

@@ -471,6 +471,38 @@ export function verifyCountConsistency(manuscript: string, tables: RunTables): V
   check(/\b(\d[\d,]*)\s+(?:proteins?\s+)?(?:were\s+|are\s+)?(?:significantly\s+)?(?:lower|decreased|down-?regulated|reduced|depleted)\b/gi, downs, "down");
   check(/\b(\d[\d,]*)\s+(?:of\s+[\d,]+\s+)?(?:proteins?\s+)?(?:significantly\s+)?(?:altered|changed|passed|qualified|differentially\s+(?:expressed|abundant))\b/gi, totals, "total DE");
 
+  // Verify missingness arithmetic if stated in manuscript
+  if (tables.accounting && tables.accounting.has("matrix_missingness_percentage")) {
+    const trueMissStr = tables.accounting.get("matrix_missingness_percentage")!.replace("%", "").trim();
+    const trueMiss = parseFloat(trueMissStr);
+    if (Number.isFinite(trueMiss)) {
+      const missRe = /(\d+(?:\.\d+)?)\s*%\s*(?:pre-imputation\s+)?missing(?:ness)?/gi;
+      let mMiss: RegExpExecArray | null;
+      while ((mMiss = missRe.exec(text))) {
+        const statedMiss = parseFloat(mMiss[1]);
+        if (Number.isFinite(statedMiss)) {
+          checked++;
+          if (Math.abs(statedMiss - trueMiss) <= 0.5) {
+            ok++;
+          } else {
+            details.push(`Reported missingness '${statedMiss}%' disagrees with authoritative matrix missingness (${trueMiss}% on ${tables.accounting.get("total_matrix_cells") || "full"} cells).`);
+          }
+        }
+      }
+    }
+  }
+
+  // Verify sample vs group count
+  if (tables.accounting && tables.accounting.has("raw_file_count") && tables.accounting.has("biological_group_count")) {
+    const rawFiles = tables.accounting.get("raw_file_count")!;
+    const bioGroups = tables.accounting.get("biological_group_count")!;
+    const conflateRe = new RegExp(`\\b${bioGroups}\\s+(?:biological\\s+samples|samples\\s+in\\s+total)\\b`, "i");
+    if (conflateRe.test(text) && rawFiles !== bioGroups) {
+      checked++;
+      details.push(`Denominator conflation: text describes '${bioGroups} biological samples' but the design has ${rawFiles} replicate data files across ${bioGroups} condition groups.`);
+    }
+  }
+
   return result(ok / checked, `${ok}/${checked} reported counts consistent with the expression table (n = ${nTotal}).`, details, 0.8);
 }
 
@@ -579,6 +611,7 @@ export function verifyMethodsReproducibility(manuscript: string, tables: RunTabl
       k: usedNorm.length ? `normalization method actually used (${usedNorm.join("/")})` : "normalization method",
       ok: usedNorm.length ? usedNorm.some((n) => new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(t)) : /normali[sz]/i.test(t),
     },
+    { k: "peptide identification / filtering cutoff", ok: /(unique|razor)?\s*peptides?\s*(?:>=?|>|at least|minimum\s*of)\s*[12]/i.test(t) || /contaminant|decoy/i.test(t) },
     { k: "imputation method", ok: /imput/i.test(t) && /(minimum|knn|random\s*forest|minprob|mindet|half|column|zero|mean|median|downshift|perseus|missforest)/i.test(t) },
     { k: "statistical test", ok: /(limma|t-?test|wilcoxon|anova|empirical\s*bayes|mann-?whitney)/i.test(t) },
     { k: "multiple-testing correction", ok: /(benjamini|hochberg|\bBH\b|\bFDR\b|q-?value|bonferroni|storey)/i.test(t) },

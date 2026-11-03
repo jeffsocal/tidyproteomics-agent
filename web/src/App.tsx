@@ -15,8 +15,9 @@ import { LeftProjectPane } from "./components/LeftProjectPane";
 import { CenterViewerPane } from "./components/CenterViewerPane";
 import { RightChatPane } from "./components/RightChatPane";
 import { PerformanceReviewModal } from "./components/PerformanceReviewModal";
+import { TopStatusBar } from "./components/TopStatusBar";
 
-const PINNED_TABS: ViewerTab[] = [
+const DEFAULT_TABS: ViewerTab[] = [
   {
     id: "experiment",
     title: "Experiment Setup",
@@ -30,15 +31,27 @@ const PINNED_TABS: ViewerTab[] = [
     pinned: true,
   },
   {
-    id: "evaluation",
-    title: "AI Evaluation",
-    kind: "evaluation",
-    pinned: true,
-  },
-  {
     id: "settings",
     title: "Settings",
     kind: "settings",
+    pinned: false,
+  },
+  {
+    id: "library",
+    title: "Literature Library",
+    kind: "library",
+    pinned: false,
+  },
+  {
+    id: "evaluation",
+    title: "AI Evaluation",
+    kind: "evaluation",
+    pinned: false,
+  },
+  {
+    id: "guides",
+    title: "Guides",
+    kind: "guides",
     pinned: false,
   },
 ];
@@ -68,16 +81,108 @@ export const App: React.FC = () => {
   const [logs, setLogs] = useState<string[]>([]);
 
   // Center viewer tabs
-  const [tabs, setTabs] = useState<ViewerTab[]>(PINNED_TABS);
+  const [tabs, setTabs] = useState<ViewerTab[]>(DEFAULT_TABS);
   const [activeTabId, setActiveTabId] = useState<string>("experiment");
   const [focusedPhaseId, setFocusedPhaseId] = useState<string | null>(null);
   const [showPerformanceReviewModal, setShowPerformanceReviewModal] = useState<boolean>(false);
+  const [settingsInitialSection, setSettingsInitialSection] = useState<"workspace" | "provider" | "mcp">("workspace");
+  const [howtoInitialGuide, setHowtoInitialGuide] = useState<"operations" | "scientific">("operations");
+
+  const handleOpenSettings = useCallback((section?: "workspace" | "provider" | "mcp") => {
+    if (section) setSettingsInitialSection(section);
+    setTabs((prev) => {
+      if (prev.some((t) => t.id === "settings")) return prev;
+      return [
+        ...prev,
+        {
+          id: "settings",
+          title: "Settings",
+          kind: "settings",
+          pinned: false,
+        },
+      ];
+    });
+    setActiveTabId("settings");
+  }, []);
+
+  const handleOpenLibrary = useCallback(() => {
+    setTabs((prev) => {
+      if (prev.some((t) => t.id === "library")) return prev;
+      return [
+        ...prev,
+        {
+          id: "library",
+          title: "Literature Library",
+          kind: "library",
+          pinned: false,
+        },
+      ];
+    });
+    setActiveTabId("library");
+  }, []);
+
+  const handleOpenEvaluation = useCallback(() => {
+    setTabs((prev) => {
+      if (prev.some((t) => t.id === "evaluation")) return prev;
+      return [
+        ...prev,
+        {
+          id: "evaluation",
+          title: "AI Evaluation",
+          kind: "evaluation",
+          pinned: false,
+        },
+      ];
+    });
+    setActiveTabId("evaluation");
+  }, []);
+
+  const handleOpenGuides = useCallback((guide: "operations" | "scientific" = "operations") => {
+    setHowtoInitialGuide(guide);
+    setTabs((prev) => {
+      if (prev.some((t) => t.id === "guides" || t.id === "howto")) return prev;
+      return [
+        ...prev,
+        {
+          id: "guides",
+          title: "Guides",
+          kind: "guides",
+          pinned: false,
+        },
+      ];
+    });
+    setActiveTabId((prevActive) => {
+      return prevActive === "howto" ? "howto" : "guides";
+    });
+  }, []);
+
+  const handleOpenHowto = handleOpenGuides;
+
+  const handleOpenDocumentation = useCallback((guide: "operations" | "scientific" = "operations") => {
+    handleOpenGuides(guide);
+  }, [handleOpenGuides]);
 
   // Open a workspace file in a tab (or focus if already open)
   const handleOpenFile = useCallback((relPath: string) => {
     const cleanRel = relPath.replace(/^\/+/, "");
     if (cleanRel === "docs/experiment.md") {
       setActiveTabId("experiment");
+      return;
+    }
+    if (
+      cleanRel === "reference/operations.md" ||
+      cleanRel === "guides/operations.md" ||
+      cleanRel === "docs/README_OPERATIONS.md"
+    ) {
+      handleOpenGuides("operations");
+      return;
+    }
+    if (
+      cleanRel === "reference/scientific.md" ||
+      cleanRel === "guides/scientific.md" ||
+      cleanRel === "docs/README_SCIENTIFIC.md"
+    ) {
+      handleOpenGuides("scientific");
       return;
     }
     const tabId = `file:${cleanRel}`;
@@ -256,7 +361,7 @@ export const App: React.FC = () => {
               if (Array.isArray(msg.fileTree)) setFileTree(msg.fileTree);
               if (msg.experimentSpec) setExperimentSpec(msg.experimentSpec);
               if (typeof msg.experimentRaw === "string") setExperimentRaw(msg.experimentRaw);
-              setTabs(PINNED_TABS);
+              setTabs(DEFAULT_TABS);
               setActiveTabId("experiment");
               break;
             default:
@@ -423,6 +528,14 @@ export const App: React.FC = () => {
     });
   };
 
+  const handleContinuePhase = async (phaseId: string, additionalTurns = 10) => {
+    await fetch("/api/pipeline/continue-phase", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phaseId, additionalTurns }),
+    });
+  };
+
   const handleTogglePhase = async (phaseId: string, enabled: boolean) => {
     await fetch("/api/pipeline/toggle-phase", {
       method: "POST",
@@ -501,123 +614,130 @@ export const App: React.FC = () => {
     } catch (_) {}
   }, []);
 
-  const handleOpenSettings = useCallback(() => {
-    if (activeTabId === "settings") {
-      handleCloseTab("settings");
-      return;
-    }
-    setTabs((prev) => {
-      if (prev.some((t) => t.id === "settings")) return prev;
-      return [
-        ...prev,
-        {
-          id: "settings",
-          title: "Settings",
-          kind: "settings",
-          pinned: false,
-        },
-      ];
-    });
-    setActiveTabId("settings");
-  }, [activeTabId, handleCloseTab]);
-
   const centerPct = Math.max(30, Number((100 - leftPct - rightPct).toFixed(2)));
   const activeFileTab = tabs.find((t) => t.id === activeTabId && t.kind === "file");
 
   return (
-    <div className="workbench-shell">
-      {/* Left 15% (Adjustable) Project Main: Settings at top + Navigable Workspace below */}
-      <aside className="board-column pane-left" style={{ width: `${leftPct}%`, flex: `0 0 ${leftPct}%` }}>
-        <LeftProjectPane
-          config={config}
-          mcpStatus={mcpStatus}
-          fileTree={fileTree}
-          activeFilePath={activeFileTab?.relPath}
-          onUpdateConfig={handleUpdateConfig}
-          onSelectWorkspace={handleSelectWorkspace}
-          onInitWorkspace={handleInitWorkspace}
-          onReconnectMcp={handleReconnectMcp}
-          onOpenFile={handleOpenFile}
-          onOpenExperimentForm={() => setActiveTabId("experiment")}
-          onOpenSettings={handleOpenSettings}
-          onRefreshTree={handleRefreshTree}
-        />
-      </aside>
-
-      {/* Left / Center Resizer (double-click resets to 20/60/20) */}
-      <div
-        className="resize-handle"
-        onMouseDown={() => startDragging("left")}
-        onDoubleClick={resetPaneWidths}
-        title="Drag to resize Project pane • Double-click to reset to 20% / 60% / 20%"
+    <div className="app-container">
+      {/* Top Banner Across Whole Page: App Name + Total Time + Visual PIPELINE PROGRESS Bar + Status Indicators */}
+      <TopStatusBar
+        pipelineState={pipelineState}
+        config={config}
+        mcpStatus={mcpStatus}
+        experimentSpec={experimentSpec}
+        literatureState={literatureState}
+        fileTree={fileTree}
+        onSelectPhaseSegment={handleSelectPhaseSegment}
+        onSendMessage={handleSendMessage}
+        onOpenSettings={handleOpenSettings}
+        onOpenLibrary={handleOpenLibrary}
+        onOpenExperiment={() => setActiveTabId("experiment")}
       />
 
-      {/* Center 60% (Adjustable) Tabbed Main Viewer */}
-      <main className="board-column pane-center" style={{ width: `${centerPct}%`, flex: `1 1 ${centerPct}%`, minWidth: 0 }}>
-        <CenterViewerPane
-          tabs={tabs}
-          activeTabId={activeTabId}
-          onSelectTab={setActiveTabId}
-          onCloseTab={handleCloseTab}
-          onOpenFile={handleOpenFile}
-          experimentSpec={experimentSpec}
-          experimentRaw={experimentRaw}
-          fileTree={fileTree}
-          pipelineState={pipelineState}
-          focusedPhaseId={focusedPhaseId}
-          isBenchmarkRunning={isBenchmarkRunning}
-          config={config}
-          mcpStatus={mcpStatus}
-          literatureState={literatureState}
-          onRefreshLiteratureState={handleRefreshLiteratureState}
-          onUpdateConfig={handleUpdateConfig}
-          onSelectWorkspace={handleSelectWorkspace}
-          onInitWorkspace={handleInitWorkspace}
-          onReconnectMcp={handleReconnectMcp}
-          onSaveExperimentForm={handleSaveExperimentForm}
-          onSaveExperimentRaw={handleSaveExperimentRaw}
-          onConfirmAndProceed={handleConfirmAndProceed}
-          onRunPhase={handleRunPhase}
-          onTogglePhase={handleTogglePhase}
-          onStartPipeline={handleStartPipeline}
-          onStopPipeline={handleStopPipeline}
-          onResetPipeline={handleResetPipeline}
-          onOpenPerformanceReview={() => setShowPerformanceReviewModal(true)}
-        />
-      </main>
+      <div className="workbench-shell">
+        {/* Left 15% (Adjustable) Project Main: Settings at top + Navigable Workspace below */}
+        <aside className="board-column pane-left" style={{ width: `${leftPct}%`, flex: `0 0 ${leftPct}%` }}>
+          <LeftProjectPane
+            config={config}
+            pipelineState={pipelineState}
+            mcpStatus={mcpStatus}
+            fileTree={fileTree}
+            activeFilePath={activeFileTab?.relPath}
+            onUpdateConfig={handleUpdateConfig}
+            onSelectWorkspace={handleSelectWorkspace}
+            onInitWorkspace={handleInitWorkspace}
+            onReconnectMcp={handleReconnectMcp}
+            onOpenFile={handleOpenFile}
+            onOpenExperimentForm={() => setActiveTabId("experiment")}
+            onOpenSettings={handleOpenSettings}
+            onOpenLibrary={handleOpenLibrary}
+            onOpenEvaluation={handleOpenEvaluation}
+            onOpenGuides={handleOpenGuides}
+            onOpenHowto={handleOpenHowto}
+            onOpenDocumentation={handleOpenDocumentation}
+            onRefreshTree={handleRefreshTree}
+          />
+        </aside>
 
-      {/* Center / Right Resizer (double-click resets to 20/60/20) */}
-      <div
-        className="resize-handle"
-        onMouseDown={() => startDragging("right")}
-        onDoubleClick={resetPaneWidths}
-        title="Drag to resize Chat pane • Double-click to reset to 20% / 60% / 20%"
-      />
-
-      {/* Right 20% (Adjustable) Agentic Chat + Segmented Progress Bar below input */}
-      <aside className="board-column pane-right" style={{ width: `${rightPct}%`, flex: `0 0 ${rightPct}%` }}>
-        <RightChatPane
-          pipelineState={pipelineState}
-          isBenchmarkRunning={isBenchmarkRunning}
-          messages={messages}
-          activeChatSessionId={activeChatSessionId}
-          chatSessions={chatSessions}
-          isGenerating={isGenerating}
-          streamingText={streamingText}
-          logs={logs}
-          onSendMessage={handleSendMessage}
-          onStopChat={handleStopChat}
-          onClearChat={handleClearChat}
-          onNewChat={handleNewChat}
-          onLoadChat={handleLoadChat}
-          onSearchChats={handleSearchChats}
-          onStartPipeline={handleStartPipeline}
-          onStopPipeline={handleStopPipeline}
-          onSelectPhaseSegment={handleSelectPhaseSegment}
-          onOpenFile={handleOpenFile}
-          onOpenExperimentForm={() => setActiveTabId("experiment")}
+        {/* Left / Center Resizer (double-click resets to 20/60/20) */}
+        <div
+          className="resize-handle"
+          onMouseDown={() => startDragging("left")}
+          onDoubleClick={resetPaneWidths}
+          title="Drag to resize Project pane • Double-click to reset to 20% / 60% / 20%"
         />
-      </aside>
+
+        {/* Center 60% (Adjustable) Tabbed Main Viewer */}
+        <main className="board-column pane-center" style={{ width: `${centerPct}%`, flex: `1 1 ${centerPct}%`, minWidth: 0 }}>
+          <CenterViewerPane
+            tabs={tabs}
+            activeTabId={activeTabId}
+            onSelectTab={setActiveTabId}
+            onCloseTab={handleCloseTab}
+            onOpenFile={handleOpenFile}
+            experimentSpec={experimentSpec}
+            experimentRaw={experimentRaw}
+            fileTree={fileTree}
+            pipelineState={pipelineState}
+            focusedPhaseId={focusedPhaseId}
+            isBenchmarkRunning={isBenchmarkRunning}
+            config={config}
+            mcpStatus={mcpStatus}
+            literatureState={literatureState}
+            onRefreshLiteratureState={handleRefreshLiteratureState}
+            onUpdateConfig={handleUpdateConfig}
+            onSelectWorkspace={handleSelectWorkspace}
+            onInitWorkspace={handleInitWorkspace}
+            onReconnectMcp={handleReconnectMcp}
+            onSaveExperimentForm={handleSaveExperimentForm}
+            onSaveExperimentRaw={handleSaveExperimentRaw}
+            onConfirmAndProceed={handleConfirmAndProceed}
+            onRunPhase={handleRunPhase}
+            onContinuePhase={handleContinuePhase}
+            onTogglePhase={handleTogglePhase}
+            onStartPipeline={handleStartPipeline}
+            onStopPipeline={handleStopPipeline}
+            onResetPipeline={handleResetPipeline}
+            onOpenPerformanceReview={() => setShowPerformanceReviewModal(true)}
+            settingsInitialSection={settingsInitialSection}
+            howtoInitialGuide={howtoInitialGuide}
+          />
+        </main>
+
+        {/* Center / Right Resizer (double-click resets to 20/60/20) */}
+        <div
+          className="resize-handle"
+          onMouseDown={() => startDragging("right")}
+          onDoubleClick={resetPaneWidths}
+          title="Drag to resize Chat pane • Double-click to reset to 20% / 60% / 20%"
+        />
+
+        {/* Right 20% (Adjustable) Agentic Chat */}
+        <aside className="board-column pane-right" style={{ width: `${rightPct}%`, flex: `0 0 ${rightPct}%` }}>
+          <RightChatPane
+            pipelineState={pipelineState}
+            isBenchmarkRunning={isBenchmarkRunning}
+            messages={messages}
+            activeChatSessionId={activeChatSessionId}
+            chatSessions={chatSessions}
+            isGenerating={isGenerating}
+            streamingText={streamingText}
+            logs={logs}
+            onSendMessage={handleSendMessage}
+            onStopChat={handleStopChat}
+            onClearChat={handleClearChat}
+            onNewChat={handleNewChat}
+            onLoadChat={handleLoadChat}
+            onSearchChats={handleSearchChats}
+            onStartPipeline={handleStartPipeline}
+            onStopPipeline={handleStopPipeline}
+            onSelectPhaseSegment={handleSelectPhaseSegment}
+            onOpenFile={handleOpenFile}
+            onOpenExperimentForm={() => setActiveTabId("experiment")}
+            onOpenDocumentation={handleOpenDocumentation}
+          />
+        </aside>
+      </div>
 
       {showPerformanceReviewModal && (
         <PerformanceReviewModal

@@ -1152,7 +1152,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
       {/* ======================================================== */}
       <div
         style={{
-          background: "var(--panel)",
+          background: "var(--card-bg)",
           border: "1px solid var(--border)",
           borderRadius: "8px",
           padding: "18px 20px",
@@ -1271,7 +1271,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
         {showAuditFocusInput && (
           <div
             style={{
-              background: "rgba(0,0,0,0.25)",
+              background: "var(--card-hover)",
               border: "1px solid var(--border)",
               borderRadius: "6px",
               padding: "10px 14px",
@@ -1310,7 +1310,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
         {isGeneratingAudit && (
           <div
             style={{
-              background: "linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(15, 23, 42, 0.6))",
+              background: "linear-gradient(135deg, rgba(245, 158, 11, 0.12), var(--card-bg))",
               border: "1px solid rgba(245, 158, 11, 0.4)",
               borderRadius: "8px",
               padding: "14px 18px",
@@ -1485,7 +1485,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
       {/* ====================================================================== */}
       <div
         style={{
-          background: "var(--panel)",
+          background: "var(--card-bg)",
           border: "1px solid var(--border)",
           borderRadius: "8px",
           padding: "18px 20px",
@@ -1559,7 +1559,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
         {currentScoreResult && (
           <div
             style={{
-              background: "linear-gradient(180deg, rgba(59, 130, 246, 0.08) 0%, rgba(15, 23, 42, 0.4) 100%)",
+              background: "linear-gradient(180deg, rgba(59, 130, 246, 0.08) 0%, var(--card-bg) 100%)",
               border: "1px solid rgba(59, 130, 246, 0.3)",
               borderRadius: "8px",
               padding: "14px 18px",
@@ -1618,7 +1618,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                 { label: "Bioinfo Rigor", val: currentScoreResult.scores.bioinformaticsIntelligence },
                 { label: "Actionable Insights", val: currentScoreResult.scores.actionableInsights },
               ].map((d) => (
-                <div key={d.label} style={{ background: "rgba(0,0,0,0.25)", border: "1px solid var(--border)", borderRadius: "6px", padding: "6px 8px", textAlign: "center" }}>
+                <div key={d.label} style={{ background: "var(--card-hover)", border: "1px solid var(--border)", borderRadius: "6px", padding: "6px 8px", textAlign: "center" }}>
                   <div style={{ fontSize: "9.5px", color: "var(--muted)", textTransform: "uppercase" }}>{d.label}</div>
                   <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--fg-bright)" }}>{d.val}/10</div>
                 </div>
@@ -1626,7 +1626,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
             </div>
 
             {currentScoreResult.scores.rubricNotes && (
-              <div style={{ fontSize: "11.5px", color: "var(--muted)", fontStyle: "italic", background: "rgba(0,0,0,0.2)", padding: "6px 10px", borderRadius: "4px" }}>
+              <div style={{ fontSize: "11.5px", color: "var(--muted)", fontStyle: "italic", background: "var(--code-bg)", padding: "6px 10px", borderRadius: "4px" }}>
                 Feedback: {currentScoreResult.scores.rubricNotes}
               </div>
             )}
@@ -1650,7 +1650,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "10px" }}>
-              <div style={{ background: "var(--panel)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
+              <div style={{ background: "var(--card-hover)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
                 <div style={{ fontSize: "11.5px", fontWeight: 700, color: "#60a5fa", marginBottom: "3px" }}>
                   1. 5-Dimension Manuscript Rubric
                 </div>
@@ -1659,7 +1659,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                 </div>
               </div>
 
-              <div style={{ background: "var(--panel)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
+              <div style={{ background: "var(--card-hover)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
                 <div style={{ fontSize: "11.5px", fontWeight: 700, color: "#34d399", marginBottom: "3px" }}>
                   2. TidyProteomics-MCP Telemetry
                 </div>
@@ -1668,7 +1668,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                 </div>
               </div>
 
-              <div style={{ background: "var(--panel)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
+              <div style={{ background: "var(--card-hover)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
                 <div style={{ fontSize: "11.5px", fontWeight: 700, color: "#f59e0b", marginBottom: "3px" }}>
                   3. Bioinformatics Intelligence
                 </div>
@@ -1677,7 +1677,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                 </div>
               </div>
 
-              <div style={{ background: "var(--panel)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
+              <div style={{ background: "var(--card-hover)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
                 <div style={{ fontSize: "11.5px", fontWeight: 700, color: "#c084fc", marginBottom: "3px" }}>
                   4. Baseline Calibration
                 </div>
@@ -1775,7 +1775,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
         {/* Benchmark Suite Configuration Panel */}
         <div
           style={{
-            background: "var(--panel)",
+            background: "var(--card-bg)",
             border: "1px solid var(--border)",
             borderRadius: "8px",
             padding: "16px 20px",
@@ -1888,7 +1888,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
               display: "flex",
               flexDirection: "column",
               gap: "12px",
-              background: "rgba(0, 0, 0, 0.18)",
+              background: "var(--card-hover)",
               border: "1px solid var(--border)",
               borderRadius: "8px",
               padding: "14px 16px",
@@ -1969,7 +1969,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                           display: "inline-flex",
                           alignItems: "center",
                           gap: "6px",
-                          background: isCurrentlyRunning ? "rgba(59, 130, 246, 0.2)" : "rgba(15, 23, 42, 0.85)",
+                          background: isCurrentlyRunning ? "rgba(59, 130, 246, 0.2)" : "var(--card-hover)",
                           border: `1px solid ${isCurrentlyRunning ? "#60a5fa" : "var(--primary)"}`,
                           borderRadius: "4px",
                           padding: "3px 8px",
@@ -1996,7 +1996,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                           {displayName}
                         </span>
                         {currentTokens && (
-                          <span style={{ fontSize: "9.5px", color: "var(--muted)", background: "rgba(0,0,0,0.4)", padding: "1px 4px", borderRadius: "2px" }}>
+                          <span style={{ fontSize: "9.5px", color: "var(--muted)", background: "var(--code-bg)", padding: "1px 4px", borderRadius: "2px" }}>
                             {currentTokens >= 1024 ? `${Math.round(currentTokens / 1024)}k` : `${currentTokens}`}
                           </span>
                         )}
@@ -2032,8 +2032,8 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
             {/* Progress display */}
             <div
               style={{
-                background: "rgba(0, 0, 0, 0.25)",
-                border: "1px solid rgba(255, 255, 255, 0.08)",
+                background: "var(--card-bg)",
+                border: "1px solid var(--border)",
                 borderRadius: "6px",
                 padding: "8px 12px",
                 display: "flex",
@@ -2064,7 +2064,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                     style={{
                       padding: "2px 8px",
                       borderRadius: "4px",
-                      background: "rgba(255, 255, 255, 0.05)",
+                      background: "var(--card-hover)",
                       border: "1px solid var(--border)",
                       color: "var(--muted)",
                     }}
@@ -2077,7 +2077,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                   style={{
                     padding: "2px 8px",
                     borderRadius: "4px",
-                    background: isRunning ? "rgba(168, 85, 247, 0.15)" : "rgba(255, 255, 255, 0.05)",
+                    background: isRunning ? "rgba(168, 85, 247, 0.15)" : "var(--card-hover)",
                     border: `1px solid ${isRunning ? "rgba(168, 85, 247, 0.4)" : "var(--border)"}`,
                     color: isRunning ? "#c084fc" : "var(--muted)",
                     fontWeight: isRunning ? 600 : 400,
@@ -2088,7 +2088,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
               </div>
 
               {/* Progress Bar track */}
-              <div style={{ width: "100%", height: "4px", background: "rgba(255, 255, 255, 0.08)", borderRadius: "2px", overflow: "hidden" }}>
+              <div style={{ width: "100%", height: "4px", background: "var(--border)", borderRadius: "2px", overflow: "hidden" }}>
                 <div
                   style={{
                     width: `${phaseProgressPct}%`,
@@ -2160,7 +2160,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                   <div
                     key={slotIdx}
                     style={{
-                      background: "rgba(0, 0, 0, 0.35)",
+                      background: "var(--card-hover)",
                       border: "1px solid rgba(168, 85, 247, 0.25)",
                       borderRadius: "6px",
                       padding: "8px 10px",
@@ -2187,7 +2187,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                       style={{
                         fontSize: "11.5px",
                         padding: "4px 8px",
-                        background: "rgba(15, 23, 42, 0.8)",
+                        background: "var(--input-bg)",
                         borderColor: currentReviewerId ? "rgba(168, 85, 247, 0.4)" : "var(--border)",
                         color: "var(--fg-bright)",
                         cursor: "pointer",
@@ -2409,7 +2409,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                           }}
                           title={`Max output token limit for ${m.name}`}
                           style={{
-                            background: "rgba(0,0,0,0.5)",
+                            background: "var(--input-bg)",
                             border: `1px solid ${currentTokens ? "var(--primary)" : "var(--border)"}`,
                             borderRadius: "4px",
                             color: currentTokens ? "var(--fg-bright)" : "var(--fg)",
@@ -2510,7 +2510,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
       {(!currentDisplaySuite || currentDisplaySuite.runs.length === 0) ? (
         <div
           style={{
-            background: "var(--panel)",
+            background: "var(--card-bg)",
             border: "1px dashed var(--border)",
             borderRadius: "8px",
             padding: "36px 24px",
@@ -2543,7 +2543,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
       {currentDisplaySuite && currentDisplaySuite.runs.length > 0 && (
         <div
           style={{
-            background: "var(--panel)",
+            background: "var(--card-bg)",
             border: "1px solid var(--border)",
             borderRadius: "8px",
             padding: "14px 18px",
@@ -2795,7 +2795,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
 
                   {/* Expanded Telemetry Details (Phase breakdown & notes) */}
                   {isExpanded && (
-                    <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: "12px", background: "rgba(0, 0, 0, 0.15)" }}>
+                    <div style={{ padding: "12px 16px", borderTop: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: "12px", background: "var(--card-hover)" }}>
                       {/* Phase Telemetry Table */}
                       <table className="pipeline-table" style={{ fontSize: "11px" }}>
                         <thead>
@@ -2861,7 +2861,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
 
                       {/* Rigor & Deterministic Verifiers (Rubric v2) */}
                       {r.scores?.verifiers && (
-                        <div style={{ display: "flex", flexDirection: "column", gap: "6px", background: "rgba(0,0,0,0.25)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "6px", background: "var(--card-bg)", border: "1px solid var(--border)", borderRadius: "6px", padding: "10px 12px" }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                             <span style={{ fontSize: "10.5px", fontWeight: 700, color: "var(--fg-bright)", textTransform: "uppercase" }}>
                               Analytical Rigor & Deterministic Verifiers (v{r.scores.rubricVersion || "2.0"})
@@ -2872,16 +2872,16 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                           </div>
 
                           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", fontSize: "11px" }}>
-                            <span style={{ background: "rgba(255,255,255,0.06)", padding: "2px 6px", borderRadius: "3px" }}>
+                            <span style={{ background: "var(--card-hover)", padding: "2px 6px", borderRadius: "3px" }}>
                               Numeric Fidelity: <b>{r.scores.verifiers.numericFidelity.score !== null ? `${(r.scores.verifiers.numericFidelity.score * 100).toFixed(0)}%` : "N/A"}</b> ({r.scores.verifiers.stats.claimsMatched}/{r.scores.verifiers.stats.claimsExtracted} claims)
                             </span>
                             <span style={{ background: r.scores.verifiers.stats.directionErrors > 0 ? "rgba(239, 68, 68, 0.2)" : "rgba(34, 197, 94, 0.15)", padding: "2px 6px", borderRadius: "3px", color: r.scores.verifiers.stats.directionErrors > 0 ? "#f87171" : "#4ade80" }}>
                               Direction Errors: <b>{r.scores.verifiers.stats.directionErrors}</b>
                             </span>
-                            <span style={{ background: r.scores.verifiers.stats.overclaims > 0 ? "rgba(245, 158, 11, 0.2)" : "rgba(255,255,255,0.06)", padding: "2px 6px", borderRadius: "3px", color: r.scores.verifiers.stats.overclaims > 0 ? "#fbbf24" : "var(--fg)" }}>
+                            <span style={{ background: r.scores.verifiers.stats.overclaims > 0 ? "rgba(245, 158, 11, 0.2)" : "var(--card-hover)", padding: "2px 6px", borderRadius: "3px", color: r.scores.verifiers.stats.overclaims > 0 ? "#fbbf24" : "var(--fg)" }}>
                               Overclaims (q&gt;0.05): <b>{r.scores.verifiers.stats.overclaims}</b>
                             </span>
-                            <span style={{ background: "rgba(255,255,255,0.06)", padding: "2px 6px", borderRadius: "3px" }}>
+                            <span style={{ background: "var(--card-hover)", padding: "2px 6px", borderRadius: "3px" }}>
                               Figures Verified: <b>{r.scores.verifiers.stats.missingFigures === 0 ? "100%" : `${r.scores.verifiers.stats.missingFigures} missing`}</b>
                             </span>
                           </div>
@@ -2976,7 +2976,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
 
                       {/* Evaluator Notes */}
                       {r.scores?.rubricNotes && (
-                        <div style={{ fontSize: "11.5px", color: "var(--muted)", background: "rgba(0,0,0,0.3)", padding: "8px 12px", borderRadius: "4px" }}>
+                        <div style={{ fontSize: "11.5px", color: "var(--muted)", background: "var(--card-hover)", padding: "8px 12px", borderRadius: "4px" }}>
                           <b>Evaluator Assessment:</b> {r.scores.rubricNotes}
                         </div>
                       )}
@@ -3000,7 +3000,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
       {currentDisplaySuite && currentDisplaySuite.runs.length > 0 && (
         <div
           style={{
-            background: "var(--panel)",
+            background: "var(--card-bg)",
             border: "1px solid var(--border)",
             borderRadius: "8px",
             padding: "12px 16px",
@@ -3028,7 +3028,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                       )
                     }
                     style={{
-                      background: isSelected ? "rgba(59, 130, 246, 0.2)" : "rgba(0,0,0,0.2)",
+                      background: isSelected ? "rgba(59, 130, 246, 0.2)" : "var(--card-hover)",
                       border: `1px solid ${isSelected ? "var(--primary)" : "var(--border)"}`,
                       borderRadius: "4px",
                       padding: "3px 8px",
@@ -3093,7 +3093,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
       {currentDisplaySuite && currentDisplaySuite.runs.length > 0 && activeAggregated.length === 0 && (
         <div
           style={{
-            background: "var(--panel)",
+            background: "var(--card-bg)",
             border: "1px dashed var(--border)",
             borderRadius: "8px",
             padding: "24px",
@@ -3110,7 +3110,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
       {activeAggregated.length > 0 && (
         <div
           style={{
-            background: "var(--panel)",
+            background: "var(--card-bg)",
             border: "1px solid var(--border)",
             borderRadius: "8px",
             padding: "14px 18px",
@@ -3329,7 +3329,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
           {phaseCategories.length > 0 && (
             <div
               style={{
-                background: "var(--panel)",
+                background: "var(--card-bg)",
                 border: "1px solid var(--border)",
                 borderRadius: "8px",
                 padding: "16px 18px",
@@ -3373,7 +3373,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                   style={{
                     display: "flex",
                     gap: "4px",
-                    background: "rgba(0,0,0,0.35)",
+                    background: "var(--card-hover)",
                     padding: "3px",
                     borderRadius: "6px",
                     border: "1px solid var(--border)",
@@ -3508,7 +3508,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
       {(!currentDisplaySuite || currentDisplaySuite.runs.length === 0) && (
         <div
           style={{
-            background: "var(--panel)",
+            background: "var(--card-bg)",
             border: "1px dashed var(--border)",
             borderRadius: "8px",
             padding: "36px 24px",
@@ -3567,7 +3567,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
       {/* Header Banner */}
       <div
         style={{
-          background: "var(--panel)",
+          background: "var(--panel-bg)",
           borderBottom: "1px solid var(--border)",
           padding: "12px 20px",
           display: "flex",
@@ -3596,23 +3596,6 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
           <div style={{ fontSize: "11.5px", color: "var(--muted)", marginTop: "2px" }}>
             Autonomous benchmarking across iterations, manuscript scoring rubric, TidyProteomics-MCP telemetry, and comparative plots.
           </div>
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => {
-              handleSelectSubTab("review");
-              handleScoreCurrentWorkspace();
-            }}
-            disabled={isScoringCurrent}
-            title="Score current workspace outputs (manuscript + MCP tool usage) on-demand"
-            style={{ gap: "6px" }}
-          >
-            <Award size={13} color="var(--primary)" />
-            {isScoringCurrent ? "Scoring Workspace..." : "Score Current Workspace"}
-          </button>
         </div>
       </div>
 
@@ -3787,9 +3770,9 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
           <div
             style={{
               margin: "12px 20px 0 20px",
-              background: "linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(24, 33, 56, 0.88) 100%)",
-              border: "1px solid rgba(59, 130, 246, 0.35)",
-              boxShadow: "0 6px 24px rgba(0, 0, 0, 0.4), 0 0 1px rgba(59, 130, 246, 0.3)",
+              background: "linear-gradient(135deg, var(--card-bg) 0%, var(--panel-bg) 100%)",
+              border: "1px solid var(--border-strong)",
+              boxShadow: "0 6px 24px rgba(0, 0, 0, 0.15), 0 0 1px rgba(59, 130, 246, 0.3)",
               borderRadius: "10px",
               padding: "16px 20px",
               display: "flex",
@@ -3836,8 +3819,8 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                     gap: "6px",
                     padding: "3px 10px",
                     borderRadius: "6px",
-                    background: "rgba(255, 255, 255, 0.05)",
-                    border: "1px solid rgba(255, 255, 255, 0.1)",
+                    background: "var(--card-hover)",
+                    border: "1px solid var(--border)",
                     fontSize: "11.5px",
                     color: "var(--fg-bright)",
                   }}
@@ -3879,8 +3862,8 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
               {/* Card 1: Active Target Model */}
               <div
                 style={{
-                  background: "rgba(0, 0, 0, 0.25)",
-                  border: "1px solid rgba(255, 255, 255, 0.07)",
+                  background: "var(--card-hover)",
+                  border: "1px solid var(--border)",
                   borderRadius: "6px",
                   padding: "10px 12px",
                   display: "flex",
@@ -3918,8 +3901,8 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
               {/* Card 2: Current Pipeline Stage */}
               <div
                 style={{
-                  background: "rgba(0, 0, 0, 0.25)",
-                  border: "1px solid rgba(255, 255, 255, 0.07)",
+                  background: "var(--card-hover)",
+                  border: "1px solid var(--border)",
                   borderRadius: "6px",
                   padding: "10px 12px",
                   display: "flex",
@@ -3962,8 +3945,8 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
               {/* Card 3: Suite Queue & Completed Runs */}
               <div
                 style={{
-                  background: "rgba(0, 0, 0, 0.25)",
-                  border: "1px solid rgba(255, 255, 255, 0.07)",
+                  background: "var(--card-hover)",
+                  border: "1px solid var(--border)",
                   borderRadius: "6px",
                   padding: "10px 12px",
                   display: "flex",
@@ -3999,7 +3982,7 @@ export const AIEvaluationTab: React.FC<AIEvaluationTabProps> = ({
                 style={{
                   width: "100%",
                   height: "7px",
-                  background: "rgba(255, 255, 255, 0.08)",
+                  background: "var(--border)",
                   borderRadius: "4px",
                   overflow: "hidden",
                 }}

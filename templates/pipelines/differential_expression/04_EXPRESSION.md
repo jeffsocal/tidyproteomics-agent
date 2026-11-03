@@ -18,11 +18,11 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/04_e
 - [ ] **Fast-Path Contrast & Confounding Confirmation Check (`docs/experiment.md` Sections 3.E & 3.F)**:
   - Review Section 3.E (`Target Contrasts`) and Section 3.F (`Confounded Batch & Exploratory Comparison Gate`) in `docs/experiment.md`.
   - **Evaluation & Confirmation Criteria**:
-    - If `docs/experiment.md` contains `- **Autonomous Mode**: TRUE` or `- **Auto-Confirm**: TRUE`, ensure Section 3.E (and `3.F` if batch confounding was detected) is set to `TRUE` via `replace_file_content` and proceed immediately without calling `fail_phase`.
     - If Section 3.E lists confirmed target contrast(s) (`- **Confirm Target Contrasts**: TRUE` or `Status: CONFIRMED`) whose `<treatment>/<control>` groups match the active sample groups, AND either no batch confounding exists (`- **Batch Confounding Detected**: FALSE`) or Section 3.F is authorized (`- **Proceed With Potential Batch Confounding**: TRUE` / `- **Confirm Batch Confounding Authorization**: TRUE`), proceed immediately to **Phase 4.2** in the same turn without halting.
     - If target contrasts are unconfirmed (`FALSE`), or if batch confounding is detected and Section 3.F has NOT been authorized (`FALSE`):
-      1. Scaffold Section 3.E and 3.F in `docs/experiment.md` with suggested `<treatment>/<control>` contrast pairs and clean visual badges.
-      2. Halt execution cleanly via `fail_phase`:
+      1. Scaffold Section 3.E and 3.F in `docs/experiment.md` with suggested `<treatment>/<control>` contrast pairs while preserving `FALSE`.
+      2. **DO NOT self-confirm**: Autonomous agents are strictly prohibited from editing `Confirm Target Contrasts: FALSE` or `Confirm Batch Confounding Authorization: FALSE` to `TRUE`.
+      3. Halt execution cleanly via `fail_phase`:
          ```
          fail_phase(
            phaseName = "04_EXPRESSION",

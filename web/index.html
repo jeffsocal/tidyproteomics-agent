@@ -8,11 +8,19 @@
     <script>
       (function() {
         try {
-          var theme = localStorage.getItem('tpa-theme') || 'dark';
+          var stored = localStorage.getItem('tpa-theme') || 'dark';
+          var validThemes = ['dark', 'twilight', 'cloudy', 'dawn', 'bright'];
+          var theme = stored;
+          if (!validThemes.includes(theme)) {
+            if (theme === 'sandy') theme = 'dawn';
+            else if (theme === 'dim') theme = 'twilight';
+            else if (theme === 'light') theme = 'bright';
+            else theme = 'dark';
+          }
           document.documentElement.setAttribute('data-theme', theme);
           var meta = document.querySelector('meta[name="color-scheme"]');
           if (meta) {
-            meta.content = theme === 'light' ? 'light' : 'dark';
+            meta.content = (theme === 'dawn' || theme === 'bright') ? 'light' : 'dark';
           }
         } catch (e) {}
       })();

@@ -1,5 +1,5 @@
 ---
-tools: [tpa_health, tpa_load, tpa_inspect, tpa_enrichment, tpa_batch_analysis, tpa_query_enrichment, tpa_plot, tpa_export_table, tpa_operations, tpa_export_state]
+tools: [tpa_health, tpa_load, tpa_inspect, tpa_audit_annotations, tpa_integrate_annotations, tpa_fetch_annotations, tpa_list_annotations, tpa_enrichment, tpa_batch_analysis, tpa_query_enrichment, tpa_plot, tpa_export_table, tpa_operations, tpa_export_state]
 ---
 
 ### Phase 5: Functional Annotation Assessment & Pathway Enrichment
@@ -8,19 +8,35 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/05_e
 
 ---
 
-#### Phase 5.1: Functional Annotation Assessment Gate & Autonomous Continuation
+#### Phase 5.1: Functional Annotation Assessment Gate & Integration
 - [ ] **In-Memory State Continuity**: The dataset is active in memory from Phase 4. If reloading is needed, call `tpa_load(source = "data/tidyproteomics_data.rds")`.
 - [ ] **Extract & Audit Functional Annotation Categories**:
   - Run `tpa_inspect(what = "annotation_terms")`.
-  - Identify biological ontology terms (e.g., `biological_process`, `cellular_component`, `molecular_function`, `reactome_pathway`, `reactome`, `kegg`, `pathway`, `wiki_pathway`, `gene_ontology`, `subcellular`).
+  - Check whether canonical biological ontology terms (`biological_process`, `cellular_component`, `molecular_function`, `reactome_pathway`, `kegg`) are already attached.
+- [ ] **Execute Configured Annotation Strategy (Section 3.G of `docs/experiment.md`)**:
+  - Inspect Section 3.G (`### G. Functional Annotation Strategy`) in `docs/experiment.md`:
+    1. **Remote UniProt KB Fetch (`Annotation Source: uniprot`)**:
+       - If canonical ontology categories are absent in memory, execute remote fetching:
+         `tpa_fetch_annotations(source = "uniprot", categories = "biological_process, cellular_component, molecular_function, reactome_pathway")`
+       - This queries UniProt KB REST API in batches, caches the annotations table to `data/annotations_uniprot.tsv`, records provenance in `data/annotations_provenance.json`, attaches the terms to the dataset, and logs reproducible R code.
+    2. **Local Annotation Table (`Annotation Source: file`)**:
+       - If a local file path is configured, audit and attach:
+         `tpa_audit_annotations(file_path = "<file_path>")`
+         `tpa_integrate_annotations(file_path = "<file_path>", duplicates = "merge")`
+    3. **Bypass Mode (`Annotation Source: none`)**:
+       - If Section 3.G specifies `none` or bypass, preserve existing state and proceed to Phase 6 and Phase 7.
 - [ ] **Annotation Adequacy & Autonomous Continuation Mandate**:
-  - If canonical ontology categories (`biological_process`, `cellular_component`, `molecular_function`, `reactome_pathway`, `wiki_pathway`) are missing, but structured functional term categories exist that support grouping, test `tpa_enrichment(comparison = "<treatment>/<control>", terms = "<term>", method = "wilcoxon")`.
+  - If canonical ontology categories (`biological_process`, `cellular_component`, `molecular_function`, `reactome_pathway`) are present (either from ingestion or fetched/integrated):
+    - Proceed immediately to **Phase 5.2**.
   - If NO biological ontology categories or grouping annotations exist (e.g., only `gene_name` and free-text `description` are present):
-    1. **CRITICAL AUTONOMOUS CONTINUATION MANDATE (DO NOT HALT)**:
-       - **NEVER halt execution, stop calling tools, or invoke `fail_phase` when formal ontology terms are absent.** Empty ontology columns are a valid negative analytical result to be documented, never a failure.
+    1. **Gene Symbol & Annotation Resolution Obligation**:
+       - Verify whether `gene_name` or `description` are populated across rows. If identifiers are bare accessions but `fasta_header` is present in the object annotations, parse `GN=` gene symbols and protein titles into `gene_name` and `description` (e.g., via `tpa_run_code` or `tpa_integrate_annotations`), ensuring downstream Phase 6 expression tables and volcano labels are not accession-only.
+       - If external ontology mapping is impossible or bypassed, document `ANNOTATION_UNAVAILABLE` as a formal empirical finding (empty ontologies are a valid negative analytical result, never an error).
+    2. **CRITICAL AUTONOMOUS CONTINUATION MANDATE (DO NOT HALT)**:
+       - **NEVER halt execution, stop calling tools, or invoke `fail_phase` when formal ontology terms are absent or bypassed.**
        - Do NOT manually edit `docs/notes.md` via file tools; the orchestrator automatically records your `complete_phase` summary into `docs/notes.md`.
        - Invoke `tpa_export_state(rds_path = "data/tidyproteomics_data.rds", script_path = "code/05_enrichment.R")`.
-       - **Immediately invoke `complete_phase(phaseName = "05_ENRICHMENT", summary = "Standard pathway enrichment bypassed due to absence of formal biological ontology annotations (GO/Reactome/KEGG); data preserved for Phase 6 observations and Phase 7 de novo functional module testing.")`** so the pipeline autonomously advances to Phase 6 and Phase 7 (where `code/07_knowledge.R` constructs and statistically tests *de novo* functional modules from `description` and `gene_name` families).
+       - **Invoke `complete_phase(phaseName = "05_ENRICHMENT", summary = "Standard pathway enrichment bypassed due to absence or bypass of formal biological ontology annotations (GO/Reactome/KEGG); gene symbols and descriptions verified/attached, and data preserved for Phase 6 observations and Phase 7 de novo functional module testing.")`** so the pipeline autonomously advances to Phase 6 and Phase 7.
 
 #### Phase 5.2: Multi-Category Pathway Enrichment Testing & Enforced Batch Processing
 - [ ] If functional ontology terms are available:

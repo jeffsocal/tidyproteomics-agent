@@ -134,9 +134,6 @@ format_state_card <- function(data, id = NULL) {
   n_entities <- if (!is.null(data$quantitative[[id_col]])) length(unique(data$quantitative[[id_col]])) else 0
 
   quant_col <- paste0("abundance_", source)
-  missing_pct <- if (!is.null(data$quantitative[[quant_col]])) {
-    round(100 * mean(is.na(data$quantitative[[quant_col]])), 1)
-  } else "N/A"
 
   has_imputed_vals <- !is.null(data$accounting$imputed) && any(as.numeric(data$accounting$imputed) > 0, na.rm = TRUE)
   has_impute_op <- !is.null(data$operations) && any(grepl("Missing values imputed", unlist(data$operations), ignore.case = TRUE))
@@ -144,11 +141,29 @@ format_state_card <- function(data, id = NULL) {
   imputed_str <- if (is_imputed) "Yes" else "No"
   ops_count <- length(data$operations)
 
+  # Calculate true matrix missingness across the full entities x files grid
+  total_cells <- n_entities * n_files
+  observed_cells <- 0
+  if (total_cells > 0 && !is.null(data$quantitative[[quant_col]])) {
+    obs_vals <- data$quantitative[[quant_col]]
+    observed_cells <- sum(!is.na(obs_vals) & obs_vals > 0)
+  }
+  missing_cells <- max(0, total_cells - observed_cells)
+  missing_pct <- if (total_cells > 0) {
+    if (is_imputed) {
+      residual_na <- sum(is.na(data$quantitative[[quant_col]]) | data$quantitative[[quant_col]] <= 0)
+      round(100 * (residual_na / total_cells), 1)
+    } else {
+      round(100 * (missing_cells / total_cells), 1)
+    }
+  } else "N/A"
+
   paste0(
     "[TidyProteomics State: ", target_id, "]\n",
     "- Analyte & Origin: ", analyte, " (", origin, ")\n",
-    "- Quantified Entities: ", n_entities, " ", analyte, " across ", n_samples, " samples (", samples_str, "), ", n_files, " files\n",
+    "- Quantified Entities: ", n_entities, " ", analyte, " across ", n_files, " files (grouped into ", n_samples, " cohorts: ", samples_str, ")\n",
     "- Active Assay: ", source, " | Imputed: ", imputed_str, " (Missing values: ", missing_pct, "%)\n",
+    "- Matrix Dimensions: ", n_entities, " x ", n_files, " = ", total_cells, " data points (observed: ", observed_cells, ", missing: ", missing_cells, ")\n",
     "- Operations History: ", ops_count, " operation(s) recorded"
   )
 }
@@ -161,7 +176,11 @@ resolve_or_stage_file <- function(raw_file) {
     dest_file <- file.path(raw_dir, basename(raw_file))
     if (!file.exists(dest_file)) {
       cat(glue::glue("[TidyDaemon] Staging remote file from {raw_file} to {dest_file} ...\n"))
-      download.file(raw_file, destfile = dest_file, mode = "wb", quiet = TRUE)
+      tryCatch({
+        download.file(raw_file, destfile = dest_file, mode = "wb", quiet = TRUE)
+      }, error = function(e) {
+        warning(glue::glue("[TidyDaemon] Warning: Failed to stage remote file from {raw_file}: {conditionMessage(e)}"))
+      })
     }
     return(dest_file)
   }
@@ -285,6 +304,240 @@ fmt_pvalue <- function(v) {
     }
     as.character(x)
   }, character(1), USE.NAMES = FALSE)
+}
+
+# ------------------------------------------------------------------------------
+# Annotation Helpers (File Normalization, Coverage Audit, UniProt REST Fetcher)
+# ------------------------------------------------------------------------------
+
+# Helper: Resolve file path within active workspace if needed
+resolve_workspace_file <- function(file_path) {
+  if (is.null(file_path) || !nzchar(trimws(file_path))) return(NULL)
+  trimmed <- trimws(file_path)
+  if (file.exists(trimmed)) return(trimmed)
+  if (!is.null(STATE$output_dir) && nzchar(STATE$output_dir)) {
+    ws_path <- file.path(STATE$output_dir, trimmed)
+    if (file.exists(ws_path)) return(ws_path)
+  }
+  return(trimmed)
+}
+
+# Helper: Load and normalize annotation table from CSV/TSV/delimited file
+# Returns a tibble with columns c(target_id_col, "term", "annotation")
+load_and_normalize_annotation_table <- function(file_path, target_id_col = "protein") {
+  actual_path <- resolve_workspace_file(file_path)
+  if (is.null(actual_path) || !file.exists(actual_path)) {
+    stop(glue::glue("Annotation file not found: {file_path}"))
+  }
+
+  first_line <- readLines(actual_path, n = 1, warn = FALSE)
+  delim <- if (grepl("\t", first_line)) "\t" else if (grepl(",", first_line)) "," else if (grepl(";", first_line)) ";" else "\t"
+  
+  df <- suppressMessages(readr::read_delim(actual_path, delim = delim, show_col_types = FALSE, progress = FALSE))
+  if (nrow(df) == 0) stop("Annotation table is empty.")
+
+  col_names_lower <- tolower(names(df))
+
+  # 1. Resolve Identifier column
+  id_aliases <- c(tolower(target_id_col), "protein", "accession", "uniprot", "uniprot_id", "entry", "identifier", "protein_id", "protein.ids", "protein_ids", "gene_name", "gene")
+  matched_id_idx <- which(col_names_lower %in% id_aliases)
+  if (length(matched_id_idx) == 0) {
+    first_col_sample <- as.character(df[[1]][!is.na(df[[1]])])[1:min(5, nrow(df))]
+    if (any(grepl("^[A-NR-Z0-9]{5,10}", first_col_sample))) {
+      matched_id_idx <- 1
+    } else {
+      stop(glue::glue("Could not identify protein identifier column in '{basename(file_path)}'. Found columns: {paste(names(df), collapse = ', ')}"))
+    }
+  }
+  names(df)[matched_id_idx[1]] <- target_id_col
+
+  # 2. Check if table is long (has term + annotation) or wide (has biological_process, cellular_component, etc.)
+  term_aliases <- c("term", "category", "ontology", "aspect", "type", "namespace")
+  annot_aliases <- c("annotation", "name", "description", "term_name", "pathway", "pathway_name", "go_name", "go_term")
+
+  matched_term_idx <- which(col_names_lower %in% term_aliases)
+  matched_annot_idx <- which(col_names_lower %in% annot_aliases)
+
+  out_df <- NULL
+  if (length(matched_term_idx) > 0 && length(matched_annot_idx) > 0) {
+    term_col_name <- names(df)[matched_term_idx[1]]
+    annot_col_name <- names(df)[matched_annot_idx[1]]
+    out_df <- df %>%
+      dplyr::select(dplyr::all_of(target_id_col), term = dplyr::all_of(term_col_name), annotation = dplyr::all_of(annot_col_name))
+  } else {
+    wide_term_cols <- setdiff(names(df), target_id_col)
+    cand_terms <- wide_term_cols[grepl("process|component|function|pathway|reactome|kegg|go|wiki|domain|family", tolower(wide_term_cols))]
+    if (length(cand_terms) == 0) cand_terms <- wide_term_cols
+    
+    out_df <- df %>%
+      dplyr::select(dplyr::all_of(c(target_id_col, cand_terms))) %>%
+      tidyr::pivot_longer(cols = dplyr::all_of(cand_terms), names_to = "term", values_to = "annotation") %>%
+      dplyr::filter(!is.na(annotation), nzchar(trimws(as.character(annotation))))
+  }
+
+  out_df <- out_df %>%
+    dplyr::mutate(
+      !!rlang::sym(target_id_col) := trimws(as.character(.data[[target_id_col]])),
+      term = tolower(trimws(as.character(term))),
+      annotation = trimws(as.character(annotation))
+    ) %>%
+    dplyr::filter(!is.na(.data[[target_id_col]]), nzchar(.data[[target_id_col]]), !is.na(term), nzchar(term), !is.na(annotation), nzchar(annotation)) %>%
+    dplyr::distinct()
+
+  out_df <- out_df %>%
+    dplyr::mutate(
+      term = dplyr::case_when(
+        term %in% c("bp", "go_bp", "go_p", "biological process", "biological_process") ~ "biological_process",
+        term %in% c("cc", "go_cc", "go_c", "cellular component", "cellular_component") ~ "cellular_component",
+        term %in% c("mf", "go_mf", "go_f", "molecular function", "molecular_function") ~ "molecular_function",
+        term %in% c("reactome", "reactome_pathway", "reactome_pathways") ~ "reactome_pathway",
+        term %in% c("kegg", "kegg_pathway", "kegg_pathways") ~ "kegg",
+        term %in% c("wiki", "wikipathways", "wiki_pathway", "wiki_pathways") ~ "wiki_pathway",
+        TRUE ~ term
+      )
+    )
+
+  return(out_df)
+}
+
+# Helper: Fetch annotations from UniProt KB REST API for accessions
+fetch_uniprot_annotations <- function(orig_ids, target_id_col = "protein", target_categories = NULL, batch_size = 150) {
+  if (length(orig_ids) == 0) {
+    empty_res <- tibble::tibble(x = character(0), term = character(0), annotation = character(0))
+    names(empty_res)[1] <- target_id_col
+    return(empty_res)
+  }
+
+  acc_regex <- "[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9]([A-Z][A-Z0-9]{2}[0-9]){1,2}"
+  m <- regexpr(acc_regex, orig_ids)
+  clean_accs <- ifelse(m != -1, regmatches(orig_ids, m), NA_character_)
+  
+  # Mapping from clean accession back to original IDs in dataset
+  id_map <- tibble::tibble(orig = orig_ids, clean = clean_accs) %>%
+    dplyr::filter(!is.na(clean), nzchar(clean))
+
+  unique_clean <- unique(id_map$clean)
+  if (length(unique_clean) == 0) {
+    empty_res <- tibble::tibble(x = character(0), term = character(0), annotation = character(0))
+    names(empty_res)[1] <- target_id_col
+    return(empty_res)
+  }
+
+  total_batches <- ceiling(length(unique_clean) / batch_size)
+  cat(glue::glue("[TidyDaemon] Fetching UniProt annotations for {length(unique_clean)} distinct accessions across {total_batches} batches...\n"))
+
+  all_rows <- list()
+  old_to <- getOption("timeout")
+  on.exit(options(timeout = old_to), add = TRUE)
+  options(timeout = 30)
+
+  base_url <- "https://rest.uniprot.org/uniprotkb/accessions"
+  fields_arg <- "accession,id,gene_names,go_p,go_c,go_f,xref_reactome,xref_kegg"
+
+  for (b in seq_len(total_batches)) {
+    start_i <- (b - 1) * batch_size + 1
+    end_i <- min(b * batch_size, length(unique_clean))
+    batch_accs <- unique_clean[start_i:end_i]
+    acc_param <- paste(batch_accs, collapse = ",")
+
+    query_url <- paste0(base_url, "?accessions=", utils::URLencode(acc_param), "&fields=", fields_arg)
+    
+    res_text <- NULL
+    tryCatch({
+      con <- url(query_url, open = "r")
+      res_lines <- readLines(con, warn = FALSE)
+      close(con)
+      res_text <- paste(res_lines, collapse = "\n")
+    }, error = function(e) {
+      cat(glue::glue("[TidyDaemon] Warning: batch {b}/{total_batches} fetch error: {e$message}\n"))
+    })
+
+    if (!is.null(res_text) && nzchar(res_text)) {
+      parsed <- tryCatch(jsonlite::fromJSON(res_text, simplifyVector = FALSE), error = function(e) NULL)
+      results <- if (!is.null(parsed$results)) parsed$results else list()
+
+      for (entry in results) {
+        acc <- entry$primaryAccession
+        if (is.null(acc) || !nzchar(acc)) next
+
+        # 1. Gene Names
+        gname <- NULL
+        if (!is.null(entry$genes) && length(entry$genes) > 0) {
+          first_gene <- entry$genes[[1]]
+          if (!is.null(first_gene$geneName$value)) gname <- first_gene$geneName$value
+        }
+        if (!is.null(gname) && nzchar(gname)) {
+          all_rows[[length(all_rows) + 1]] <- list(clean = acc, term = "gene_name", annotation = gname)
+        }
+
+        # 2. Cross references (GO, Reactome, KEGG)
+        xrefs <- entry$uniProtKBCrossReferences
+        if (!is.null(xrefs) && length(xrefs) > 0) {
+          for (xref in xrefs) {
+            db <- xref$database
+            if (identical(db, "GO")) {
+              props <- xref$properties
+              go_term <- NULL
+              for (p in props) {
+                if (identical(p$key, "GoTerm")) { go_term <- p$value; break }
+              }
+              if (!is.null(go_term) && nzchar(go_term)) {
+                aspect <- substr(go_term, 1, 2)
+                clean_name <- sub("^[PCF]:", "", go_term)
+                term_name <- switch(aspect,
+                  "P:" = "biological_process",
+                  "C:" = "cellular_component",
+                  "F:" = "molecular_function",
+                  "biological_process"
+                )
+                all_rows[[length(all_rows) + 1]] <- list(clean = acc, term = term_name, annotation = clean_name)
+              }
+            } else if (identical(db, "Reactome")) {
+              props <- xref$properties
+              pname <- NULL
+              for (p in props) {
+                if (identical(p$key, "PathwayName")) { pname <- p$value; break }
+              }
+              if (!is.null(pname) && nzchar(pname)) {
+                all_rows[[length(all_rows) + 1]] <- list(clean = acc, term = "reactome_pathway", annotation = pname)
+              }
+            } else if (identical(db, "KEGG")) {
+              kid <- xref$id
+              if (!is.null(kid) && nzchar(kid)) {
+                all_rows[[length(all_rows) + 1]] <- list(clean = acc, term = "kegg", annotation = kid)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (length(all_rows) == 0) {
+    empty_res <- tibble::tibble(x = character(0), term = character(0), annotation = character(0))
+    names(empty_res)[1] <- target_id_col
+    return(empty_res)
+  }
+
+  raw_annot_df <- dplyr::bind_rows(lapply(all_rows, tibble::as_tibble)) %>%
+    dplyr::distinct()
+
+  # Map clean accession back to original protein identifiers
+  final_df <- id_map %>%
+    dplyr::inner_join(raw_annot_df, by = "clean") %>%
+    dplyr::select(!!rlang::sym(target_id_col) := orig, term, annotation) %>%
+    dplyr::distinct()
+
+  # Filter target categories if provided
+  if (!is.null(target_categories) && length(target_categories) > 0) {
+    cats_vec <- tolower(trimws(unlist(strsplit(as.character(target_categories), "[,; ]+"))))
+    cats_vec <- cats_vec[nzchar(cats_vec)]
+    if (length(cats_vec) > 0 && !("all" %in% cats_vec)) {
+      final_df <- final_df %>% dplyr::filter(term %in% cats_vec | term %in% c("gene_name", "description"))
+    }
+  }
+
+  return(final_df)
 }
 
 # Router logic
@@ -514,13 +767,27 @@ handle_request <- function(req) {
             quantifiable_n <- sum(obs_per_f > 0, na.rm = TRUE)
           }
 
+          n_files <- if (!is.null(data$experiments)) nrow(data$experiments) else 0
+          n_groups <- if (!is.null(data$experiments$sample)) length(unique(data$experiments$sample)) else length(get_sample_names(data, format = "vector"))
+          total_cells <- total_features * n_files
+
+          obs_vals <- if (!is.null(data$quantitative[[quant_col]])) data$quantitative[[quant_col]] else numeric(0)
+          observed_cells <- sum(!is.na(obs_vals) & obs_vals > 0)
+          missing_cells <- max(0, total_cells - observed_cells)
+          missing_pct <- if (total_cells > 0) round(100 * (missing_cells / total_cells), 1) else 0
+
           acc_tbl <- tibble::tibble(
             accounting_metric = c(
               paste0("Total retained ", analyte_name, " in active object"),
               paste0("Quantifiable ", analyte_name, " (>= 1 non-zero observation)"),
               paste0("Zero-quantification background (0 non-missing values)"),
               "Active quantification assay",
-              "Number of biological samples",
+              "Number of raw MS data files / replicates",
+              "Number of biological condition cohorts/groups",
+              "Total theoretical matrix cells (features x files)",
+              "Observed quantifiable data points",
+              "Missing / unquantified cells in matrix",
+              "Matrix missingness percentage",
               "Number of evaluated comparisons/analyses"
             ),
             value = c(
@@ -528,7 +795,12 @@ handle_request <- function(req) {
               as.character(quantifiable_n),
               as.character(zero_quant_n),
               as.character(active_assay),
-              as.character(length(get_sample_names(data, format = "vector"))),
+              as.character(n_files),
+              as.character(n_groups),
+              as.character(total_cells),
+              as.character(observed_cells),
+              as.character(missing_cells),
+              paste0(missing_pct, "%"),
               as.character(nrow(get_analyses(data)))
             )
           )
@@ -705,21 +977,229 @@ handle_request <- function(req) {
         list(success = TRUE, summary = summary_text)
       },
 
+      "/audit_annotations" = {
+        data <- get_active_data(params$id)
+        id_col <- if (!is.null(data$identifier)) data$identifier[1] else "protein"
+        file_path <- params$file_path
+
+        dataset_proteins <- get_unique_variables(data, id_col, format = "vector")
+        total_ds_proteins <- length(dataset_proteins)
+
+        if (!is.null(file_path) && nzchar(trimws(file_path)) && toupper(trimws(file_path)) != "NONE") {
+          actual_path <- resolve_workspace_file(file_path)
+          if (!file.exists(actual_path)) {
+            stop(glue::glue("Annotation file not found: {file_path}"))
+          }
+          annot_tbl <- load_and_normalize_annotation_table(actual_path, target_id_col = id_col)
+          source_desc <- glue::glue("File: {basename(file_path)}")
+        } else {
+          if (is.null(data$annotations) || nrow(data$annotations) == 0) {
+            return(list(
+              success = TRUE,
+              valid = FALSE,
+              has_annotations = FALSE,
+              coverage_percent = 0,
+              matched_proteins = 0,
+              total_dataset_proteins = total_ds_proteins,
+              detected_terms = character(0),
+              summary = "No biological annotations currently attached to dataset."
+            ))
+          }
+          annot_tbl <- data$annotations
+          source_desc <- "In-Memory Dataset Annotations"
+        }
+
+        matched_proteins <- length(intersect(dataset_proteins, unique(annot_tbl[[id_col]])))
+        cov_pct <- if (total_ds_proteins > 0) round(100 * matched_proteins / total_ds_proteins, 1) else 0
+
+        term_counts_tbl <- table(annot_tbl$term)
+        term_counts <- as.list(term_counts_tbl)
+        detected_terms <- names(term_counts)
+
+        canonical_terms <- c("biological_process", "cellular_component", "molecular_function", "reactome_pathway", "kegg", "wiki_pathway")
+        has_canonical <- any(canonical_terms %in% detected_terms)
+
+        summary_lines <- c(
+          glue::glue("### Annotation Audit: {source_desc}"),
+          glue::glue("- **Total Dataset Proteins**: {total_ds_proteins}"),
+          glue::glue("- **Mapped Proteins**: {matched_proteins} ({cov_pct}%)"),
+          glue::glue("- **Total Annotation Rows**: {nrow(annot_tbl)}"),
+          glue::glue("- **Available Ontologies / Terms ({length(detected_terms)})**:")
+        )
+        for (tm in detected_terms) {
+          summary_lines <- c(summary_lines, glue::glue("  • `{tm}`: {term_counts[[tm]]} annotations"))
+        }
+
+        valid_flag <- cov_pct >= 50 && (has_canonical || length(detected_terms) > 0)
+        if (!valid_flag && cov_pct < 50) {
+          summary_lines <- c(summary_lines, glue::glue("\n⚠️ **Low Identifier Overlap Alert**: Only {cov_pct}% of dataset proteins matched annotation identifiers."))
+        }
+
+        list(
+          success = TRUE,
+          valid = valid_flag,
+          coverage_percent = cov_pct,
+          matched_proteins = matched_proteins,
+          total_dataset_proteins = total_ds_proteins,
+          detected_terms = detected_terms,
+          term_counts = term_counts,
+          has_canonical = has_canonical,
+          summary = paste(summary_lines, collapse = "\n")
+        )
+      },
+
       "/annotate" = {
-        # params: file_path (CSV or TSV with identifier, term, annotation), duplicates ('replace', 'merge', 'leave')
         data <- get_active_data(params$id)
         file_path <- params$file_path
-        dups <- if (!is.null(params$duplicates)) params$duplicates else "replace"
+        dups <- if (!is.null(params$duplicates)) params$duplicates else "merge"
+        id_col <- if (!is.null(data$identifier)) data$identifier[1] else "protein"
 
-        if (is.null(file_path) || !file.exists(file_path)) stop("Valid file_path is required for annotate")
-        annot_tbl <- readr::read_csv(file_path, show_col_types = FALSE)
+        if (is.null(file_path) || !nzchar(trimws(file_path))) stop("Valid file_path is required for annotate")
+        actual_path <- resolve_workspace_file(file_path)
+        if (!file.exists(actual_path)) stop(glue::glue("Annotation file not found: {file_path}"))
+
+        annot_tbl <- load_and_normalize_annotation_table(actual_path, target_id_col = id_col)
         eval_str <- glue::glue('data %>% annotate(annot_tbl, duplicates = "{dups}")')
         data <- eval(parse(text = eval_str))
         set_active_data(data)
-        log_code(glue::glue('{STATE$active_id} <- {STATE$active_id} %>% annotate(readr::read_csv("{file_path}"), duplicates = "{dups}")'))
+
+        read_fn <- if (grepl("\\.csv$", actual_path, ignore.case = TRUE)) "readr::read_csv" else "readr::read_tsv"
+        rel_path <- if (!is.null(STATE$output_dir) && nzchar(STATE$output_dir)) {
+          sub(paste0("^", normalizePath(STATE$output_dir, mustWork = FALSE), "/?"), "", normalizePath(actual_path, mustWork = FALSE))
+        } else basename(actual_path)
+        log_code(glue::glue('{STATE$active_id} <- {STATE$active_id} %>% annotate({read_fn}("{rel_path}"), duplicates = "{dups}")'))
 
         terms <- get_annotation_terms(data, format = "vector")
-        list(success = TRUE, available_terms = terms)
+        dataset_proteins <- get_unique_variables(data, id_col, format = "vector")
+        matched_proteins <- length(intersect(dataset_proteins, unique(annot_tbl[[id_col]])))
+        cov_pct <- if (length(dataset_proteins) > 0) round(100 * matched_proteins / length(dataset_proteins), 1) else 0
+
+        summary_text <- glue::glue("Integrated {nrow(annot_tbl)} annotations ({cov_pct}% protein coverage, {matched_proteins}/{length(dataset_proteins)} proteins). Available terms: {paste(terms, collapse = ', ')}")
+
+        list(
+          success = TRUE,
+          available_terms = terms,
+          coverage_percent = cov_pct,
+          matched_proteins = matched_proteins,
+          total_proteins = length(dataset_proteins),
+          summary = summary_text
+        )
+      },
+
+      "/fetch_annotations" = {
+        data <- get_active_data(params$id)
+        id_col <- if (!is.null(data$identifier)) data$identifier[1] else "protein"
+        source <- if (!is.null(params$source) && nzchar(params$source)) tolower(params$source) else "uniprot"
+        taxon_id <- params$taxon_id
+        target_cats <- params$categories
+        out_file <- if (!is.null(params$output_file) && nzchar(params$output_file)) params$output_file else glue::glue("data/annotations_{source}.tsv")
+        
+        target_path <- resolve_workspace_file(out_file)
+        out_dir <- dirname(target_path)
+        if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+        dataset_proteins <- get_unique_variables(data, id_col, format = "vector")
+        if (length(dataset_proteins) == 0) stop("No quantified proteins found in active dataset.")
+
+        annot_df <- NULL
+        if (source == "uniprot") {
+          annot_df <- fetch_uniprot_annotations(dataset_proteins, target_id_col = id_col, target_categories = target_cats)
+        } else {
+          stop(glue::glue("Annotation source '{source}' is currently not supported for direct remote fetching. Please use 'uniprot'."))
+        }
+
+        if (is.null(annot_df) || nrow(annot_df) == 0) {
+          stop("Zero annotations retrieved from external query. Check accession formats and network connectivity.")
+        }
+
+        readr::write_tsv(annot_df, target_path)
+
+        prov_path <- resolve_workspace_file("data/annotations_provenance.json")
+        prov_data <- list(
+          source = source,
+          database_url = "https://rest.uniprot.org",
+          query_timestamp = as.character(Sys.time()),
+          taxon_id = if (!is.null(taxon_id)) as.character(taxon_id) else "auto",
+          total_dataset_proteins = length(dataset_proteins),
+          total_annotation_rows = nrow(annot_df),
+          annotated_proteins = length(unique(annot_df[[id_col]])),
+          coverage_percent = round(100 * length(unique(annot_df[[id_col]])) / length(dataset_proteins), 1),
+          cached_file = out_file,
+          terms_retrieved = unique(annot_df$term)
+        )
+        tryCatch(jsonlite::write_json(prov_data, prov_path, pretty = TRUE, auto_unbox = TRUE), error = function(e) NULL)
+
+        eval_str <- glue::glue('data %>% annotate(annot_df, duplicates = "merge")')
+        data <- eval(parse(text = eval_str))
+        set_active_data(data)
+
+        rel_out <- if (!is.null(STATE$output_dir) && nzchar(STATE$output_dir)) {
+          sub(paste0("^", normalizePath(STATE$output_dir, mustWork = FALSE), "/?"), "", normalizePath(target_path, mustWork = FALSE))
+        } else out_file
+        log_code(glue::glue('{STATE$active_id} <- {STATE$active_id} %>% annotate(readr::read_tsv("{rel_out}"), duplicates = "merge")'))
+
+        terms <- get_annotation_terms(data, format = "vector")
+        cov_pct <- prov_data$coverage_percent
+        matched_proteins <- prov_data$annotated_proteins
+
+        summary_lines <- c(
+          glue::glue("### UniProt Annotations Successfully Fetched & Integrated"),
+          glue::glue("- **Cached File**: `{rel_out}`"),
+          glue::glue("- **Protein Coverage**: **{cov_pct}%** ({matched_proteins} of {length(dataset_proteins)} proteins)"),
+          glue::glue("- **Total Annotations Attached**: {nrow(annot_df)}"),
+          glue::glue("- **Available Terms**: {paste(terms, collapse = ', ')}")
+        )
+
+        list(
+          success = TRUE,
+          source = source,
+          cached_file = rel_out,
+          coverage_percent = cov_pct,
+          matched_proteins = matched_proteins,
+          total_proteins = length(dataset_proteins),
+          available_terms = terms,
+          summary = paste(summary_lines, collapse = "\n")
+        )
+      },
+
+      "/list_annotations" = {
+        data <- get_active_data(params$id)
+        id_col <- if (!is.null(data$identifier)) data$identifier[1] else "protein"
+        if (is.null(data$annotations) || nrow(data$annotations) == 0) {
+          return(list(
+            success = TRUE,
+            has_annotations = FALSE,
+            terms = character(0),
+            summary = "No biological annotations currently attached."
+          ))
+        }
+
+        dataset_proteins <- get_unique_variables(data, id_col, format = "vector")
+        matched_proteins <- length(intersect(dataset_proteins, unique(data$annotations[[id_col]])))
+        cov_pct <- if (length(dataset_proteins) > 0) round(100 * matched_proteins / length(dataset_proteins), 1) else 0
+
+        term_counts <- as.list(table(data$annotations$term))
+        terms <- names(term_counts)
+
+        summary_lines <- c(
+          glue::glue("### Attached Annotations Overview"),
+          glue::glue("- **Coverage**: {cov_pct}% ({matched_proteins}/{length(dataset_proteins)} proteins)"),
+          glue::glue("- **Terms ({length(terms)})**:")
+        )
+        for (tm in terms) {
+          summary_lines <- c(summary_lines, glue::glue("  • `{tm}`: {term_counts[[tm]]} annotations"))
+        }
+
+        list(
+          success = TRUE,
+          has_annotations = TRUE,
+          coverage_percent = cov_pct,
+          matched_proteins = matched_proteins,
+          total_proteins = length(dataset_proteins),
+          terms = terms,
+          term_counts = term_counts,
+          summary = paste(summary_lines, collapse = "\n")
+        )
       },
 
       # ------------------------------------------------------------------------
@@ -950,6 +1430,9 @@ handle_request <- function(req) {
             created_files <- c(created_files, file.path("data", base_f), file.path("data", paste0("plot_", base_f)))
           }
 
+          contrast_stats <- list()
+          all_sig_genes <- character(0)
+
           for (ec in expr_csvs) {
             base_f <- basename(ec)
             dst_f <- file.path(data_dir, base_f)
@@ -957,55 +1440,82 @@ handle_request <- function(req) {
             file.remove(ec)
             # Also create TSV variant
             tsv_f <- file.path(data_dir, sub("\\.csv$", ".tsv", base_f))
-            df_tmp <- tryCatch(read.csv(dst_f, check.names = FALSE), error = function(e) NULL)
-            if (!is.null(df_tmp)) write.table(df_tmp, tsv_f, sep = "\t", row.names = FALSE, quote = FALSE)
+            df_cur <- tryCatch(read.csv(dst_f, check.names = FALSE), error = function(e) NULL)
+            if (!is.null(df_cur) && is.data.frame(df_cur) && nrow(df_cur) > 0) {
+              write.table(df_cur, tsv_f, sep = "\t", row.names = FALSE, quote = FALSE)
+
+              c_label <- sub(glue::glue("^table_{data$analyte}_expression_"), "", base_f)
+              c_label <- sub("\\.csv$", "", c_label)
+
+              fc_col <- intersect(c("log2_foldchange", "log2fc", "log2FoldChange"), names(df_cur))[1]
+              p_col <- intersect(c("adj_p_value", "padj", "adj.P.Val", "p_value"), names(df_cur))[1]
+              gene_col <- intersect(c("gene_name", "protein", "identifier"), names(df_cur))[1]
+
+              cur_n_sig <- 0
+              cur_n_up <- 0
+              cur_n_down <- 0
+              cur_top_up <- character(0)
+              cur_top_down <- character(0)
+
+              if (!is.na(fc_col) && !is.na(p_col)) {
+                fc_vec <- suppressWarnings(as.numeric(df_cur[[fc_col]]))
+                p_vec <- suppressWarnings(as.numeric(df_cur[[p_col]]))
+                sig_mask <- !is.na(fc_vec) & !is.na(p_vec) & abs(fc_vec) >= 1.0 & p_vec <= 0.05
+                up_mask <- sig_mask & fc_vec >= 1.0
+                down_mask <- sig_mask & fc_vec <= -1.0
+
+                cur_n_sig <- sum(sig_mask)
+                cur_n_up <- sum(up_mask)
+                cur_n_down <- sum(down_mask)
+
+                if (cur_n_up > 0 && !is.na(gene_col)) {
+                  cur_top_up <- head(as.character(df_cur[up_mask, ][order(-df_cur[[fc_col]][up_mask]), gene_col]), 5)
+                }
+                if (cur_n_down > 0 && !is.na(gene_col)) {
+                  cur_top_down <- head(as.character(df_cur[down_mask, ][order(df_cur[[fc_col]][down_mask]), gene_col]), 5)
+                }
+                if (!is.na(gene_col)) {
+                  all_sig_genes <- unique(c(all_sig_genes, as.character(df_cur[sig_mask, gene_col])))
+                }
+              }
+
+              contrast_stats[[c_label]] <- list(
+                contrast = c_label,
+                total_modeled = nrow(df_cur),
+                n_sig = cur_n_sig,
+                n_up = cur_n_up,
+                n_down = cur_n_down,
+                top_up = paste(cur_top_up, collapse = ", "),
+                top_down = paste(cur_top_down, collapse = ", ")
+              )
+            }
             created_files <- c(created_files, file.path("data", base_f), file.path("data", basename(tsv_f)))
           }
 
-          summary_txt <- ""
-          n_sig <- 0
-          n_up <- 0
-          n_down <- 0
-          top_up_genes <- character(0)
-          top_down_genes <- character(0)
-
-          if (exists("df_tmp") && !is.null(df_tmp) && is.data.frame(df_tmp) && nrow(df_tmp) > 0) {
-            fc_col <- intersect(c("log2_foldchange", "log2fc", "log2FoldChange"), names(df_tmp))[1]
-            p_col <- intersect(c("adj_p_value", "padj", "adj.P.Val", "p_value"), names(df_tmp))[1]
-            gene_col <- intersect(c("gene_name", "protein", "identifier"), names(df_tmp))[1]
-
-            if (!is.na(fc_col) && !is.na(p_col)) {
-              fc_vec <- suppressWarnings(as.numeric(df_tmp[[fc_col]]))
-              p_vec <- suppressWarnings(as.numeric(df_tmp[[p_col]]))
-              sig_mask <- !is.na(fc_vec) & !is.na(p_vec) & abs(fc_vec) >= 1.0 & p_vec <= 0.05
-              up_mask <- sig_mask & fc_vec >= 1.0
-              down_mask <- sig_mask & fc_vec <= -1.0
-
-              n_sig <- sum(sig_mask)
-              n_up <- sum(up_mask)
-              n_down <- sum(down_mask)
-
-              top_up_genes <- if (n_up > 0 && !is.na(gene_col)) head(as.character(df_tmp[up_mask, ][order(-df_tmp[[fc_col]][up_mask]), gene_col]), 6) else character(0)
-              top_down_genes <- if (n_down > 0 && !is.na(gene_col)) head(as.character(df_tmp[down_mask, ][order(df_tmp[[fc_col]][down_mask]), gene_col]), 6) else character(0)
-
-              summary_txt <- glue::glue("Identified {n_sig} significant proteins (|log2FC| >= 1.0, adj_p <= 0.05): {n_up} upregulated, {n_down} downregulated.\n- Top Upregulated: {paste(top_up_genes, collapse = ', ')}\n- Top Downregulated: {paste(top_down_genes, collapse = ', ')}")
-            }
+          table_lines <- c(
+            "| Contrast | Modeled Entities | Strict Sig (|log2FC| >= 1, q <= 0.05) | Up | Down | Top Upregulated | Top Downregulated |",
+            "| :--- | :---: | :---: | :---: | :---: | :--- | :--- |"
+          )
+          total_sig_sum <- 0
+          for (c_label in names(contrast_stats)) {
+            st <- contrast_stats[[c_label]]
+            total_sig_sum <- total_sig_sum + st$n_sig
+            table_lines <- c(table_lines, glue::glue(
+              "| **{st$contrast}** | {st$total_modeled} | **{st$n_sig}** | {st$n_up} | {st$n_down} | {st$top_up} | {st$top_down} |"
+            ))
           }
+          summary_txt <- paste(table_lines, collapse = "\n")
 
-          msg <- glue::glue("Batch differential expression analysis completed via analyze_expressions().")
-          if (nzchar(summary_txt)) {
-            msg <- glue::glue("{msg}\n\n### Differential Expression Summary\n{summary_txt}")
-          }
+          msg <- glue::glue("Batch differential expression analysis completed via analyze_expressions() across {length(contrast_stats)} contrast(s).\n\n### Per-Contrast Differential Expression Summary\n{summary_txt}\n\n- Unique significant entities across contrasts: {length(all_sig_genes)}")
 
           list(
             success = TRUE,
             type = "expressions",
             message = msg,
-            significant_count = n_sig,
-            upregulated_count = n_up,
-            downregulated_count = n_down,
-            top_upregulated = top_up_genes,
-            top_downregulated = top_down_genes,
+            contrast_count = length(contrast_stats),
+            contrasts = contrast_stats,
+            significant_count = total_sig_sum,
+            unique_significant_entities = length(all_sig_genes),
             files_created = unique(created_files)
           )
         } else {
@@ -1533,7 +2043,17 @@ handle_request <- function(req) {
           abs_target_path <- if (grepl("^(/|[A-Za-z]:)", target_path)) target_path else file.path(STATE$output_dir, target_path)
 
           # Construct plotting call with destination = "plot" so the plot object is returned directly
-          plot_fn <- glue::glue("plot_{plot_type}")
+          actual_plot_type <- plot_type
+          n_cohorts <- if (!is.null(data$experiments$sample)) length(unique(data$experiments$sample)) else 0
+          if (plot_type == "venn" && n_cohorts > 4) {
+            actual_plot_type <- "euler"
+            cat(glue::glue("[TidyDaemon] Notice: plot_venn is limited to <=4 sets ({n_cohorts} cohorts present). Auto-falling back to plot_euler.\n"))
+            if (grepl("venn", target_path)) {
+              target_path <- sub("venn", "euler", target_path)
+              abs_target_path <- if (grepl("^(/|[A-Za-z]:)", target_path)) target_path else file.path(STATE$output_dir, target_path)
+            }
+          }
+          plot_fn <- glue::glue("plot_{actual_plot_type}")
           args <- c('destination = "plot"')
           if (!is.null(comp) && nzchar(trimws(comp)) && plot_type %in% contrast_plots) {
             safe_comp <- format_comparison(comp)
@@ -1553,7 +2073,18 @@ handle_request <- function(req) {
           if (!is.null(extra_args) && nchar(extra_args) > 0) args <- c(args, extra_args)
 
           eval_str <- glue::glue("data %>% {plot_fn}({paste(args, collapse = ', ')})")
-          res_plot <- eval(parse(text = eval_str))
+          res_plot <- tryCatch({
+            eval(parse(text = eval_str))
+          }, error = function(e) {
+            if (plot_type == "venn") {
+              cat(glue::glue("[TidyDaemon] plot_venn failed ({conditionMessage(e)}). Retrying with plot_euler ...\n"))
+              plot_fn <<- "plot_euler"
+              actual_plot_type <<- "euler"
+              eval(parse(text = glue::glue("data %>% plot_euler({paste(args, collapse = ', ')})")))
+            } else {
+              stop(e)
+            }
+          })
 
           if (inherits(res_plot, c("gg", "ggplot", "grob", "patchwork"))) {
             ggplot2::ggsave(filename = abs_target_path, plot = res_plot, height = 5, width = 8, dpi = 300)
@@ -1822,7 +2353,35 @@ handle_request <- function(req) {
         matched_ids <- audit_tbl$raw_header[audit_tbl$category == "identifier" & audit_tbl$matched]
         matched_quants <- audit_tbl$raw_header[audit_tbl$category == "quantitative" & audit_tbl$matched]
         matched_annots <- audit_tbl$raw_header[audit_tbl$category == "annotation" & audit_tbl$matched]
+
+        # Smart quantitative candidate detection when 0 quantitative channels match
+        if (length(matched_quants) == 0) {
+          # Check for ProteomeDiscoverer Area
+          is_area <- !audit_tbl$matched & grepl("^Area\\:", audit_tbl$raw_header, ignore.case = TRUE)
+          if (any(is_area)) {
+            audit_tbl$suggestion[is_area] <- "Candidate: quantitative (abundance_raw) via '^Area:'"
+          }
+          # Check for MaxQuant/generic Intensity
+          is_int <- !audit_tbl$matched & grepl("^(Intensity|LFQ\\s+intensity)", audit_tbl$raw_header, ignore.case = TRUE)
+          if (any(is_int)) {
+            audit_tbl$suggestion[is_int] <- "Candidate: quantitative (abundance_raw) via '^Intensity' or '^LFQ intensity'"
+          }
+          # Check for DIA-NN/Spectronaut Quantity
+          is_quant <- !audit_tbl$matched & grepl("^(PG\\.Quantity|Quantity)", audit_tbl$raw_header, ignore.case = TRUE)
+          if (any(is_quant)) {
+            audit_tbl$suggestion[is_quant] <- "Candidate: quantitative (abundance_raw) via '^Quantity'"
+          }
+        }
+
         suggestions <- unique(audit_tbl$suggestion[!audit_tbl$matched & audit_tbl$suggestion != "Unassigned"])
+        if (length(matched_quants) == 0) {
+          if (any(grepl("^Area\\:", audit_tbl$raw_header, ignore.case = TRUE))) {
+            suggestions <- c(
+              suggestions,
+              "Column(s) matching '^Area:' detected without matched quantitative channels. In ProteomeDiscoverer, peak area exports use 'Area: ...'. Configure with: tpa_ingest_config(platform='ProteomeDiscoverer', action='set', category='quantitative', column_defined='abundance_raw', column_import='^Area:', pivot=TRUE)"
+            )
+          }
+        }
 
         audit_md <- paste0(
           "| Raw Header | Matched | Category | Target Column | Config Regex | Suggestion |\n",
@@ -1910,6 +2469,41 @@ handle_request <- function(req) {
             }
           }
         )
+
+        if (action == "auto_fix" && !is.null(raw_file) && file.exists(raw_file)) {
+          raw_headers <- tryCatch({
+            if (is_excel) {
+              colnames(readxl::read_excel(raw_file, n_max = 1, col_types = "text"))
+            } else {
+              strsplit(readLines(raw_file, n = 1), "[\t,]")[[1]]
+            }
+          }, error = function(e) character(0))
+
+          has_abundance <- any(grepl("^Abundance\\:", raw_headers, ignore.case = TRUE))
+          has_area <- any(grepl("^Area\\:", raw_headers, ignore.case = TRUE))
+
+          if (!has_abundance && has_area) {
+            effective_cfg <- if (!is.null(out_file) && nzchar(out_file)) out_file else cfg_file
+            if (is.null(effective_cfg) || !nzchar(effective_cfg)) {
+              effective_cfg <- file.path(STATE$output_dir, paste0(platform, "_", analyte, ".tsv"))
+            }
+            updated_tbl <- tryCatch(
+              tidyproteomics::ingest_config(
+                platform = platform,
+                analyte = analyte,
+                config_file = effective_cfg,
+                action = "set",
+                category = "quantitative",
+                column_defined = "abundance_raw",
+                column_import = "^Area:",
+                pivot = TRUE,
+                save = TRUE,
+                output_file = effective_cfg
+              ),
+              error = function(e) updated_tbl
+            )
+          }
+        }
 
         cfg_md <- paste0(
           "| Category | Column Defined | Import Pattern | Pattern Extract | Pivot |\n",
@@ -2423,20 +3017,38 @@ handle_request <- function(req) {
             quantifiable_n <- sum(obs_per_f > 0, na.rm = TRUE)
           }
 
+          n_files <- if (!is.null(data$experiments)) nrow(data$experiments) else 0
+          n_groups <- if (!is.null(data$experiments$sample)) length(unique(data$experiments$sample)) else length(samples)
+          total_cells <- length(features) * n_files
+          obs_vals <- if (!is.null(data$quantitative[[quant_col_name]])) data$quantitative[[quant_col_name]] else numeric(0)
+          observed_cells <- sum(!is.na(obs_vals) & obs_vals > 0)
+          missing_cells <- max(0, total_cells - observed_cells)
+          missing_pct <- if (total_cells > 0) round(100 * (missing_cells / total_cells), 1) else 0
+
           master_acc <- tibble::tibble(
             metric = c(
               paste0("total_features_retained_", analyte_name),
               paste0("quantifiable_features_", analyte_name),
               "zero_quantifiable_background",
               "active_normalization_assay",
-              "sample_count"
+              "raw_file_count",
+              "biological_group_count",
+              "total_matrix_cells",
+              "observed_cells",
+              "missing_cells",
+              "matrix_missingness_percentage"
             ),
             value = c(
               as.character(length(features)),
               as.character(quantifiable_n),
               as.character(zero_quant_n),
               as.character(source_norm),
-              as.character(length(samples))
+              as.character(n_files),
+              as.character(n_groups),
+              as.character(total_cells),
+              as.character(observed_cells),
+              as.character(missing_cells),
+              paste0(missing_pct, "%")
             )
           )
 

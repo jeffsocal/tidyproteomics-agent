@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Moon, CloudMoon, Sun } from "lucide-react";
+import { Moon, Sunset, Cloud, Sunrise, Sun } from "lucide-react";
 import { ThemeMode, getStoredTheme, applyTheme } from "../utils/theme";
 
 interface ThemeToggleProps {
@@ -18,8 +18,16 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({ compact = false }) => 
     };
 
     const handleStorage = (e: StorageEvent) => {
-      if (e.key === "tpa-theme" && (e.newValue === "dark" || e.newValue === "dim" || e.newValue === "light")) {
-        setCurrentTheme(e.newValue as ThemeMode);
+      if (
+        e.key === "tpa-theme" &&
+        (e.newValue === "dark" ||
+          e.newValue === "twilight" ||
+          e.newValue === "cloudy" ||
+          e.newValue === "dawn" ||
+          e.newValue === "sandy" ||
+          e.newValue === "bright")
+      ) {
+        setCurrentTheme((e.newValue === "sandy" ? "dawn" : e.newValue) as ThemeMode);
       }
     };
 
@@ -38,14 +46,16 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({ compact = false }) => 
 
   const options: Array<{ mode: ThemeMode; label: string; icon: React.ReactNode }> = [
     { mode: "dark", label: "Dark", icon: <Moon size={11} /> },
-    { mode: "dim", label: "Dim", icon: <CloudMoon size={11} /> },
-    { mode: "light", label: "Light", icon: <Sun size={11} /> },
+    { mode: "twilight", label: "Twilight", icon: <Sunset size={11} /> },
+    { mode: "cloudy", label: "Cloudy", icon: <Cloud size={11} /> },
+    { mode: "dawn", label: "Dawn", icon: <Sunrise size={11} /> },
+    { mode: "bright", label: "Bright", icon: <Sun size={11} /> },
   ];
 
   return (
     <div
       role="radiogroup"
-      aria-label="Color scheme theme"
+      aria-label="Workspace color mode"
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -55,6 +65,7 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({ compact = false }) => 
         padding: "2px",
         gap: "2px",
         userSelect: "none",
+        flexWrap: "wrap",
       }}
     >
       {options.map(({ mode, label, icon }) => {
@@ -66,7 +77,7 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({ compact = false }) => 
             role="radio"
             aria-checked={isActive}
             onClick={() => handleSelect(mode)}
-            title={`Switch to ${label} mode`}
+            title={`Switch to ${label} workspace color mode`}
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -74,7 +85,7 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({ compact = false }) => 
               padding: compact ? "3px 6px" : "3px 8px",
               fontSize: "11px",
               fontWeight: isActive ? 600 : 500,
-              color: isActive ? "var(--fg-bright)" : "var(--muted)",
+              color: isActive ? "#ffffff" : "var(--muted)",
               background: isActive ? "var(--primary)" : "transparent",
               border: "none",
               borderRadius: "4px",

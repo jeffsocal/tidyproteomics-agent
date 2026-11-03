@@ -1,4 +1,4 @@
-export type ThemeMode = "dark" | "dim" | "light";
+export type ThemeMode = "dark" | "twilight" | "cloudy" | "dawn" | "bright";
 
 const THEME_STORAGE_KEY = "tpa-theme";
 
@@ -6,9 +6,18 @@ export function getStoredTheme(): ThemeMode {
   if (typeof window === "undefined") return "dark";
   try {
     const stored = localStorage.getItem(THEME_STORAGE_KEY);
-    if (stored === "dark" || stored === "dim" || stored === "light") {
+    if (
+      stored === "dark" ||
+      stored === "twilight" ||
+      stored === "cloudy" ||
+      stored === "dawn" ||
+      stored === "bright"
+    ) {
       return stored;
     }
+    if (stored === "sandy") return "dawn";
+    if (stored === "dim") return "twilight";
+    if (stored === "light") return "bright";
   } catch (_) { }
   return "dark";
 }
@@ -20,7 +29,7 @@ export function applyTheme(mode: ThemeMode): void {
   // Keep meta color-scheme in sync per modern-web-guidance `dark-mode-toggle`
   const meta = document.querySelector('meta[name="color-scheme"]') as HTMLMetaElement | null;
   if (meta) {
-    meta.content = mode === "light" ? "light" : "dark";
+    meta.content = (mode === "dawn" || mode === "bright") ? "light" : "dark";
   }
 
   try {

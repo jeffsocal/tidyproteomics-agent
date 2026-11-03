@@ -33,6 +33,7 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/01_i
   - If `tpa_load` fails with `"... not retaining values, check import regex"` or missing column errors:
     1. Re-run `tpa_input_audit` to see exact column regex mismatches.
     2. Adjust regex patterns via `tpa_ingest_config(platform = "{{PLATFORM}}", analyte = "{{ANALYTE}}", action = "set", ...)`.
+       - **ProteomeDiscoverer Note**: ProteomeDiscoverer exports often quantify peak areas with `Area: ...` instead of `Abundance: ...`. If `tpa_input_audit` reports 0 quantitative channels and raw headers match `Area:`, set the quantitative pattern: `tpa_ingest_config(platform = "ProteomeDiscoverer", analyte = "proteins", action = "set", category = "quantitative", column_defined = "abundance_raw", column_import = "^Area:", pivot = TRUE)`.
     3. Re-run `tpa_load(source = "<raw_staged_file>", platform = "{{PLATFORM}}", analyte = "{{ANALYTE}}", config = "<platform>_<analyte>.tsv")`.
 - [ ] **Consolidated Topology & Operations Discovery**:
   - Run `tpa_inspect(what = "overview")` to verify core object state in stdout and log.

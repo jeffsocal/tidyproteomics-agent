@@ -188,7 +188,7 @@ export const PerformanceReviewModal: React.FC<PerformanceReviewModalProps> = ({
           style={{
             padding: "16px 22px",
             borderBottom: "1px solid var(--border)",
-            background: "#16161b",
+            background: "var(--card-bg)",
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
@@ -260,7 +260,7 @@ export const PerformanceReviewModal: React.FC<PerformanceReviewModalProps> = ({
           style={{
             padding: "10px 22px",
             borderBottom: "1px solid var(--border)",
-            background: "#121216",
+            background: "var(--panel-bg)",
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
@@ -392,7 +392,7 @@ export const PerformanceReviewModal: React.FC<PerformanceReviewModalProps> = ({
           <div
             style={{
               padding: "12px 22px",
-              background: "#18181f",
+              background: "var(--card-hover)",
               borderBottom: "1px solid var(--border)",
               display: "flex",
               flexDirection: "column",

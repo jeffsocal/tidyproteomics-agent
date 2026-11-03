@@ -21,23 +21,21 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/02_n
     - Verify whether ALL Section 3 subtasks have their confirmation checks set to `TRUE`:
       1. **3.A Discovered Sample Groups**: `- **Confirm Discovered Sample Groups**: TRUE`.
       2. **3.B Quantitative Normalization Strategy**: `- **Confirm Normalization Strategy**: TRUE`.
-      3. **3.C Missing Value Imputation Strategy**: `- **Confirm Imputation Strategy**: TRUE`. (If post-filter missingness dropped to `0%`, set `- **Imputation Method**: none` and `- **Confirm Imputation Strategy**: TRUE`).
+      3. **3.C Missing Value Imputation Strategy**: `- **Confirm Imputation Strategy**: TRUE`.
+         - ⚠️ **Strategy Lock & Knockout Integrity**: If Section 3.C is already confirmed with an intentional imputation strategy (e.g. `min_column` for genetic knockouts/knockdowns/pull-downs, or `randomforest_grouped` for MAR), **NEVER mutate or downgrade the confirmed strategy to `none`** based on apparent post-filter 0% missingness (in tidyproteomics, sparse tables omit unquantified rows rather than carrying explicit `NA` cells). Preserve the confirmed imputation strategy.
       4. **3.D Sample Group Renaming & Pooling Map**: `- **Confirm Sample Pooling Map**: TRUE` (and `- **Reassign Sample Names According to Pooling Map**: TRUE` if raw replicates map into cohorts).
       5. **3.E Target Contrasts**: `- **Confirm Target Contrasts**: TRUE` or `Status: CONFIRMED` (with non-empty `<treatment>/<control>` contrast).
       6. **3.F Confounded Batch Gate**: If batch confounding was detected (`- **Batch Confounding Detected**: TRUE`), verify `- **Proceed With Potential Batch Confounding**: TRUE` and `- **Confirm Batch Confounding Authorization**: TRUE`. **CRITICAL**: If `- **Batch Confounding Detected**: FALSE`, Section 3.F is completely unexposed, inactive, and SATISFIED. Do NOT treat `FALSE` for batch confounding detection as an unconfirmed gate or blocker.
-    - **Autonomous / Automated Execution Policy (Priority Rule - DO NOT HALT)**:
-      - When running in autonomous pipeline execution, automated benchmark evaluations, non-interactive execution, or if `docs/experiment.md` contains `- **Autonomous Mode**: TRUE` or `- **Auto-Confirm**: TRUE`:
-        - **DO NOT invoke `fail_phase`. Calling `fail_phase` on unconfirmed study design defaults in automated or autonomous runs is strictly prohibited.**
-        - Ensure Section 3 subtasks (`3.A` through `3.E`) are cleanly populated with standard analytical defaults (e.g. `Normalization Methods: default`, `Normalization Subset Filter: NONE`, standard pooling map from sample prefixes, and primary contrast `<treatment>/<control>`).
-        - Automatically update all unconfirmed checks from `FALSE` to `TRUE` in a single `replace_file_content` call on `docs/experiment.md`, and proceed immediately to **Execute Sample Pooling & Condition Recoding**.
-    - **Interactive User Gate Halt (Interactive GUI Mode Only)**:
-      - ONLY if running in an interactive human-in-the-loop session with an active live human researcher prompt loop and ANY required confirmation check is `FALSE`:
-        - Ensure Section 3 subtasks (`3.A` through `3.E`, and `3.F` if detected) are cleanly populated in `docs/experiment.md`.
+      7. **3.G Functional Annotation Strategy**: Verify `- **Confirm Functional Annotation Strategy**: TRUE` (specifying `uniprot` default, custom file path, or bypass).
+    - **Mandatory Pre-Flight HITL Halt Check**:
+      - If ANY required confirmation check (3.A Discovered Groups, 3.B Normalization, 3.C Imputation, 3.D Sample Pooling, 3.E Target Contrasts, or 3.G Annotation Strategy) is `FALSE`:
+        - Ensure Section 3 subtasks (`3.A` through `3.E`, `3.G`, and `3.F` if detected) are cleanly populated with standard analytical defaults in `docs/experiment.md`, keeping `Confirm ...: FALSE`.
+        - **DO NOT self-confirm gates**: Autonomous agents are strictly prohibited from editing `Confirm ...: FALSE` to `TRUE`.
         - Halt execution cleanly via a single `fail_phase` call listing ALL unconfirmed items so the researcher can review and confirm all items in one click:
           ```
           fail_phase(
             phaseName = "02_NORMALIZE",
-            reason = "Pre-flight Study Design Gate: Human-in-the-loop (HITL) confirmation required for Section 3 subtasks (3.A Discovered Groups, 3.B Normalization, 3.C Imputation, 3.D Sample Pooling, 3.E Target Contrasts) in docs/experiment.md.",
+            reason = "Pre-flight Study Design Gate: Human-in-the-loop (HITL) confirmation required for Section 3 subtasks (3.A Discovered Groups, 3.B Normalization, 3.C Imputation, 3.D Sample Pooling, 3.E Target Contrasts, 3.G Annotation Strategy) in docs/experiment.md.",
             actionableInsights = "ACTION REQUIRED: Open docs/experiment.md (highlighted in orange outline), verify each Section 3 subtask confirmation check, and click '🎯 Confirm All Study Design & Proceed' in the sidebar or Live Agent to resume Phases 02–11 uninterrupted."
           )
           ```

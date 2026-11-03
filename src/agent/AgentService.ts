@@ -18,6 +18,19 @@ export interface AgentMessage {
   phaseTag?: string;
 }
 
+export interface AppStatusInfo {
+  config?: any;
+  mcpStatus?: {
+    connected: boolean;
+    toolsCount: number;
+    error?: string;
+    mode: string;
+  };
+  literatureState?: any;
+  pipelineState?: PipelineState;
+  experimentSpec?: ExperimentSpec;
+}
+
 export type AdvisorMessage = AgentMessage;
 
 export class AgentService {
@@ -30,6 +43,11 @@ export class AgentService {
   private lastSuggestedContrast?: string;
   private phaseEventsPosted = new Set<string>();
   private saveDebounceTimer: NodeJS.Timeout | null = null;
+  private statusProvider?: () => Promise<AppStatusInfo>;
+
+  public setStatusProvider(provider: () => Promise<AppStatusInfo>) {
+    this.statusProvider = provider;
+  }
 
   constructor(
     private workspaceRoot: string,
@@ -640,6 +658,37 @@ export class AgentService {
         },
       },
       {
+        name: "set_annotation_strategy",
+        description: "Updates Section 3.G (Functional Annotation Strategy) of docs/experiment.md to configure the source ('uniprot', 'quickgo', 'kegg', 'reactome', 'david', 'file', or 'none'), custom file path, taxon ID, ontologies, and confirmation status.",
+        parameters: {
+          type: "object",
+          properties: {
+            source: {
+              type: "string",
+              enum: ["uniprot", "quickgo", "kegg", "reactome", "david", "file", "none"],
+              description: "Annotation source provider: 'uniprot' (default), 'quickgo', 'kegg', 'reactome', 'david', 'file', or 'none' (bypass).",
+            },
+            filePath: {
+              type: "string",
+              description: "Relative path to local annotation table (e.g. 'data/annotations.tsv') when source='file'.",
+            },
+            taxonId: {
+              type: "string",
+              description: "NCBI Taxonomy ID (e.g. '9606' for Human, '10090' for Mouse).",
+            },
+            ontologies: {
+              type: "string",
+              description: "Comma-separated target ontologies (e.g. 'biological_process, cellular_component, molecular_function, reactome_pathway').",
+            },
+            confirmed: {
+              type: "boolean",
+              description: "Whether the functional annotation strategy is confirmed by the researcher.",
+            },
+          },
+          required: [],
+        },
+      },
+      {
         name: "start_or_resume_pipeline",
         description: "Triggers or resumes execution of the autonomous analysis pipeline when initial configuration is satisfied or when a halted phase's questions have been resolved.",
         parameters: {
@@ -730,7 +779,9 @@ export class AgentService {
           "ProteomeDiscoverer",
           "DIA-NN",
           "MaxQuant",
-          "Review docs/experiment.md ↗"
+          "Review docs/experiment.md ↗",
+          "📖 Operations Guide ↗",
+          "🔬 Scientific Guide ↗"
         ];
 
         this.messages.push({
@@ -752,7 +803,12 @@ export class AgentService {
         role: "assistant",
         content: "👋 **Welcome back to TidyProteomicsAgent!**\n\nI reviewed `docs/experiment.md` and confirmed that all dataset parameters and your study hypothesis are configured! 🚀\n\n**Ready to start the autonomous analysis pipeline?**",
         timestamp: new Date().toLocaleTimeString(),
-        quickChips: ["⚡ Yes, Start Pipeline", "Review docs/experiment.md ↗"],
+        quickChips: [
+          "⚡ Yes, Start Pipeline",
+          "Review docs/experiment.md ↗",
+          "📖 Operations Guide ↗",
+          "🔬 Scientific Guide ↗"
+        ],
         type: "message",
       });
 
@@ -959,8 +1015,8 @@ export class AgentService {
     const isStudyDesignGate = phase.id === "02" || /Pre-flight Study Design Gate|Human-in-the-loop|Section 3/i.test(errorText);
 
     if (isStudyDesignGate) {
-      questionPrompt = `🛑 **HUMAN-IN-THE-LOOP (HITL) CHECKPOINT: Unified Study Design Gate**\n**Phase**: ${phase.title || phase.fileName} (Phase ${phase.id})\n\n**Reason Execution Paused**:\nMandatory Section 3 subtask confirmation checks are pending in \`docs/experiment.md\`. All unconfirmed subtasks must be verified before normalization benchmarking and replicate variation analysis proceed.\n\n**Specific Required Actions (Mandatory)**:\n1. **3.A Discovered Sample Groups**: Verify detected sample groups and check \`Confirm Discovered Sample Groups: TRUE\`.\n2. **3.B Quantitative Normalization**: Confirm normalization methods (default \`scaled, median, linear, limma, loess\`) and check \`Confirm Normalization Strategy: TRUE\`.\n3. **3.C Missing Value Imputation**: Verify imputation method (\`randomforest_grouped\` for general MAR vs \`min_column\` for knockouts/MNAR) and check \`Confirm Imputation Strategy: TRUE\`.\n4. **3.D Sample Group Renaming & Pooling Map**: Verify raw replicate mapping into clean biological cohorts and check \`Confirm Sample Pooling Map: TRUE\`.\n5. **3.E Target Contrasts**: Verify pairwise comparison pair (e.g. \`Treated vs Control\`) and check \`Confirm Target Contrasts: TRUE\`.\n${isConfounding ? "6. **3.F Confounded Batch Gate**: Review detected batch confounding and check `Proceed With Potential Batch Confounding: TRUE`.\n" : ""}\n👉 *All items needing your confirmation are highlighted with an **orange outline** in the \`docs/experiment.md\` form pane.*`;
-      chips = ["🎯 Confirm All Study Design & Proceed", "Use Random Forest Normalization", "Use Column Min (MNAR / Knockout)", "Review docs/experiment.md ↗"];
+      questionPrompt = `🛑 **HUMAN-IN-THE-LOOP (HITL) CHECKPOINT: Unified Study Design Gate**\n**Phase**: ${phase.title || phase.fileName} (Phase ${phase.id})\n\n**Reason Execution Paused**:\nMandatory Section 3 subtask confirmation checks are pending in \`docs/experiment.md\`. All unconfirmed subtasks must be verified before normalization benchmarking and replicate variation analysis proceed.\n\n**Specific Required Actions (Mandatory)**:\n1. **3.A Discovered Sample Groups**: Verify detected sample groups and check \`Confirm Discovered Sample Groups: TRUE\`.\n2. **3.B Quantitative Normalization**: Confirm normalization methods (default \`scaled, median, linear, limma, loess\`) and check \`Confirm Normalization Strategy: TRUE\`.\n3. **3.C Missing Value Imputation**: Verify imputation method (\`randomforest_grouped\` for general MAR vs \`min_column\` for knockouts/MNAR) and check \`Confirm Imputation Strategy: TRUE\`.\n4. **3.D Sample Group Renaming & Pooling Map**: Verify raw replicate mapping into clean biological cohorts and check \`Confirm Sample Pooling Map: TRUE\`.\n5. **3.E Target Contrasts**: Verify pairwise comparison pair (e.g. \`Treated vs Control\`) and check \`Confirm Target Contrasts: TRUE\`.\n${isConfounding ? "6. **3.F Confounded Batch Gate**: Review detected batch confounding and check `Proceed With Potential Batch Confounding: TRUE`.\n" : ""}7. **3.G Functional Annotation Strategy**: Verify annotation source (\`uniprot\` default, custom file, or bypass) and check \`Confirm Functional Annotation Strategy: TRUE\`.\n\n👉 *All items needing your confirmation are highlighted with an **orange outline** in the \`docs/experiment.md\` form pane.*`;
+      chips = ["🎯 Confirm All Study Design & Proceed", "🌐 Fetch UniProt Annotations", "Review docs/experiment.md ↗"];
     } else if (phase.id === "03" || isImputationNeeded) {
       questionPrompt = `🛑 **HUMAN-IN-THE-LOOP (HITL) CHECKPOINT: Imputation Strategy Gate**\n**Phase**: ${phase.title || phase.fileName} (Phase ${phase.id})\n\n**Reason Execution Paused**:\nMissing Value Imputation Strategy confirmation is required in Section 3.C of \`docs/experiment.md\`.\n\n**Specific Required Actions (Mandatory)**:\n1. Review the recommended method in Section 3.C (highlighted in orange outline):\n   • \`randomforest_grouped\` (MAR Default — Karpievitch et al., 2012)\n   • \`min_column\` (LOD minimum for intentional gene knockouts / suppressions)\n2. Check \`Confirm Imputation Strategy: TRUE\` or click a confirmation button below to resume.`;
       chips = ["🎯 Confirm All Study Design & Proceed", "🎯 Confirm Imputation & Proceed", "Use Random Forest (MAR Default)", "Use Column Min (MNAR / Knockout)", "Review docs/experiment.md ↗"];
@@ -1059,8 +1115,42 @@ ${llm || "Not specified."}
 - **Engine**: Persistent in-memory tidyproteomics R session via Model Context Protocol (MCP).
 - **Live In-Memory Workflow**: Automated ingestion (\`tpa_load\`), QC inspection (\`tpa_inspect\`, \`tpa_summary\`), normalization benchmarking (\`tpa_normalize\`), quantitative imputation (\`tpa_impute\`), differential expression (\`tpa_expression\`), pathway enrichment (\`tpa_enrichment\`), and state export (\`tpa_export_state\`).
 
+### BUILT-IN APPLICATION DOCUMENTATION & SCIENTIFIC MANUAL:
+The workspace includes two exhaustive markdown manuals in \`reference/\` (also viewable in the high-level **Guides** tab):
+1. **Operations Guide (\`reference/operations.md\`)**:
+   - Layout: Left pane (Project Explorer & Workspace Switcher), Center pane (High-level tabs: Experiment Setup, Pipeline Progress, Settings, Literature Library, AI Evaluation, Guides, plus dynamic file tabs for Markdown with search, TSV/CSV tables with filtering, PNG mass spec plots, and R code), Right pane (Agent Chat, live R console, 12-phase segmented progress bar).
+   - Directory hierarchy: \`docs/\` (working documents: manuscript.md, notes.md, experiment.md, observations.md, knowledge.md, reports), \`reference/\` (platform reference manuals: operations.md, scientific.md), \`data/\` (tidyproteomics_data.rds, volcano plots, PCA plots, count plots, result TSVs), \`code/\` (reproducible exported R scripts 01-11), \`logs/\` (per-phase console logs), \`analysis/\` (phase directives), \`literature/\` (SQLite/DuckDB index and corpus).
+   - Visual Semantics & Status Colors: Grey (#52525b) pending, Animated Blue (#2563eb->#60a5fa) running, Green (#10b981) completed, Amber (#f59e0b) warning/HITL checkpoint, Red (#ef4444) error.
+   - Orange outline: Marks required Human-in-the-Loop confirmation fields in Section 3 of \`docs/experiment.md\`.
+   - Unified Study Design Gate (Phase 2.1b): Discovered groups (3.A), Normalization (3.B), Imputation (3.C), Sample pooling map (3.D), Target contrasts (3.E), Confounded batch gate (3.F).
+   - Follow-on iterative refinement (Phases 12+): FollowonPhaseModal, versioned manuscripts (\`docs/manuscript_rev_XX.md\`), and topic reports (\`docs/report_<topic>.md\`).
+2. **Scientific Guide: Methods & Statistics (\`reference/scientific.md\`)**:
+   - **Normalization Models**:
+     - Linear: \`scaled\` (total/mean/median intensity scaling), \`median\` (median centering, robust to outliers), \`linear\` (linear regression to reference run), \`limma\` (cyclic linear/loess empirical Bayes).
+     - Non-linear: \`loess\` (locally estimated scatterplot smoothing for intensity-dependent curvature), \`svm\` (support vector regression with RBF kernel), \`randomforest\` (ensemble tree regression).
+     - Sub-population normalization (\`subset_filter\`): Invariant subsets (e.g. Ribosome, stable complexes) used when global symmetry fails (viral infection, transcription shutoff, oncogene amplification, fractionation). Crucial mathematical constraint: ONLY linear models (\`scaled\`, \`median\`, \`linear\`) and \`svm\` can extrapolate out-of-sample; \`limma\`, \`loess\`, \`randomforest\` cannot extrapolate.
+     - Evaluation criteria: Minimizing median replicate CV, PCA cohort clustering (PC1/PC2), and normalization sensitivity analysis across candidate methods.
+     - Key citations: Välikangas et al. 2018 Brief Bioinform (PMID: 27694351), Callister et al. 2006 J Proteome Res (PMID: 16457593), Bolstad et al. 2003 Bioinformatics (PMID: 12538238), Ritchie et al. 2015 Nucleic Acids Res (PMID: 25605792).
+   - **Missing Value Imputation**:
+     - Taxonomy: MCAR (completely at random, autosampler drops), MAR (at random, sporadic dropouts near detection limit where protein is physically present), MNAR (not at random, true biological absence or left-censored below LOD).
+     - Supported methods:
+       - \`randomforest_grouped\` (\`impute.randomforest, method='matrix', group_by_sample=TRUE\`): Iterative MissForest within condition groups. Predicts MAR dropouts from replicate correlation without artificial variance collapse. Preserves 100% condition-exclusive dropouts as NA (qualitative switches tagged \`unmodeled_condition_exclusive\`). Stekhoven & Bühlmann 2012 Bioinformatics (PMID: 22039212), Lazar et al. 2016 J Proteome Res (PMID: 26906401).
+       - \`min_column\` (\`base::min, method='column'\`): MS replicate Limit of Detection (LOD). Unbiased across conditions, fills all dropouts including condition-exclusive absences. Essential for CRISPR knockouts, siRNA knockdowns, and PROTAC degraders so they can enter continuous differential expression in \`limma\` (tagged \`DETECTION_LIMITED_ON_OFF\`). Karpievitch et al. 2012 BMC Bioinformatics (PMID: 23176165).
+       - \`min_row_grouped\`: Condition-specific row minimum.
+       - \`none\`: Complete-case bypass for 0% missing or pre-imputed datasets.
+     - Downstream consequences: Applying MAR to MNAR data shrinks real infinite fold changes and creates false positives; applying constant minimum to MAR data deflates variance and produces artificial bimodal spikes.
+   - **Differential Expression Analysis**:
+     - Supported methods: \`limma\` (empirical Bayes moderated $t$-test, Smyth 2004, gold standard for low-sample proteomics), \`t.test\` (standard two-sample $t$-test for large clinical cohorts), \`wilcoxon\` (non-parametric rank-sum test for skewed/heavy-tailed distributions), \`mixed-effects\` (linear mixed models for repeated or longitudinal designs).
+     - FDR control: Benjamini-Hochberg (BH, default $q \le 0.05$), Bonferroni, Holm, BY.
+   - **Functional Enrichment Analysis**:
+     - Supported methods: \`gsea\` (Gene Set Enrichment Analysis, Subramanian et al. 2005), \`wilcoxon\` (rank-sum shift testing, native TidyProteomics engine), \`fisher\` (Fisher's exact test / hypergeometric ORA).
+     - Ontologies: Gene Ontology (\`biological_process\`, \`cellular_component\`, \`molecular_function\`), \`reactome_pathway\`, \`wiki_pathway\`, \`kegg\`.
+     - Proteomics background: Must use measured proteome, not whole genome, to prevent mass spectrometry detection bias.
+
 ### AGENT RESPONSIBILITIES & FREE-FORM NATURAL PROMPT RESOLUTION:
-1. **Natural Conversational Setup**: The researcher can describe their experiment freely in plain English (e.g. data file location, search platform, analyte, treatment vs control conditions, and biological hypothesis). You MUST parse all stated parameters and immediately invoke the corresponding tools:
+1. **Natural Conversational Setup & Knowledge Advisor**:
+   - The researcher can describe their experiment freely in plain English (e.g. data file location, search platform, analyte, treatment vs control conditions, and biological hypothesis). You MUST parse all stated parameters and immediately invoke the corresponding tools.
+   - When the researcher asks questions about how to use the app, where to find files, what status indicators mean, or seeks advice on choosing normalization or imputation methods, provide clear, authoritative explanations directly citing the literature (with PMIDs/DOIs), and recommend reviewing \`reference/operations.md\` and \`reference/scientific.md\` or opening the Guides tab.
    - Call \`update_experiment_parameters({ pathToDataFile, platform, analyte })\` for any dataset path, platform, or analyte mentioned.
    - Call \`update_target_contrasts({ contrasts: [...] })\` for any treatment/control comparisons mentioned (e.g. \`["KO vs WT"]\`).
    - Call \`update_experiment_description({ description })\` for the biological hypothesis, model system, or study goals.
@@ -1194,6 +1284,348 @@ ${llm || "Not specified."}
         await this.logAgentTurn(userText, statusReply);
         this.notifyUpdated();
         return { reply: statusReply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
+      }
+
+      // 3-workspace. Workspace Status Intent
+      const isWorkspaceStatusIntent =
+        /(?:explain|check|what is|how is|get)?\s*workspace\s*status\b/i.test(trimmed) ||
+        /status(?:\s+check)?:\s*\[?workspace\]?/i.test(trimmed) ||
+        /explain workspace/i.test(trimmed);
+      if (isWorkspaceStatusIntent) {
+        const appStatus = this.statusProvider ? await this.statusProvider() : undefined;
+        const wsRoot = this.workspaceRoot || appStatus?.config?.workspaceRoot || "";
+        const exists = wsRoot ? fsSync.existsSync(wsRoot) : false;
+        const isAnalysisMissing = Boolean(appStatus?.pipelineState?.isAnalysisMissingOrEmpty);
+        const isReady = Boolean(wsRoot && exists && !isAnalysisMissing);
+
+        let reply = "";
+        if (isReady) {
+          reply =
+            `📁 **Workspace Status: Ready**\n\n` +
+            `• **Directory**: \`${wsRoot}\`\n` +
+            `• **Structure**: Verified (analysis and pipeline folders are present).\n` +
+            `• **Readiness**: All workspace directories are ready for analytical execution.\n\n` +
+            `**Where to go**:\n` +
+            `• Explore files in the **Project Explorer** (left pane).\n` +
+            `• Manage workspace locations in the **Settings** tab under the **Workspace** section.`;
+        } else {
+          reply =
+            `📁 **Workspace Status: Attention Required**\n\n` +
+            `• **Issue**: ${!wsRoot ? "No workspace directory selected." : !exists ? `Directory does not exist on disk: \`${wsRoot}\`` : "Analysis directory is missing or empty."}\n` +
+            `• **What needs to be done**:\n` +
+            `  1. Select a valid proteomics project directory or initialize a new workspace.\n` +
+            `  2. Workspace initialization provisions standard templates (\`code/\`, \`data/\`, \`docs/\`, \`logs/\`).\n\n` +
+            `**Where to go**:\n` +
+            `• Switch to the **Settings** tab and select the **Workspace** section to pick or initialize your directory.\n` +
+            `• Or click **Select Workspace** in the top-left Project header.`;
+        }
+        if (onToken) onToken(reply);
+        const agentMsg: AgentMessage = {
+          id: "msg_" + Date.now() + "_a",
+          role: "assistant",
+          content: reply,
+          timestamp: new Date().toLocaleTimeString(),
+          quickChips: ["⚙️ Workspace Settings", "Review docs/experiment.md ↗", "📊 Pipeline Status"],
+        };
+        this.messages.push(agentMsg);
+        await this.logAgentTurn(userText, reply);
+        this.notifyUpdated();
+        return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
+      }
+
+      // 3-experiments. Experiment Setup Status Intent
+      const isExperimentStatusIntent =
+        /(?:explain|check|what is|how is|get)?\s*experiment(?:s)?(?:\s+setup)?\s*status\b/i.test(trimmed) ||
+        /status(?:\s+check)?:\s*\[?experiments?\]?/i.test(trimmed) ||
+        /explain experiment(?:s)?(?:\s+setup)?/i.test(trimmed);
+      if (isExperimentStatusIntent) {
+        const appStatus = this.statusProvider ? await this.statusProvider() : undefined;
+        const spec = appStatus?.experimentSpec || (await this.experimentManager.readSpec());
+        const isReady = Boolean(
+          spec?.exists &&
+          spec.pathToDataFile &&
+          spec.pathToDataFile.trim() !== "" &&
+          (!spec.missingInitialFields || spec.missingInitialFields.length === 0)
+        );
+
+        let reply = "";
+        if (isReady) {
+          reply =
+            `🧪 **Experiment Setup Status: Ready**\n\n` +
+            `• **Data File**: \`${spec.pathToDataFile}\`\n` +
+            `• **Platform**: \`${spec.platform || "Standard"}\`\n` +
+            `• **Analyte**: \`${spec.analyte || "Proteins"}\`\n` +
+            `• **Sample Groups**: \`${spec.discoveredGroups?.length || 0} condition groups defined\`\n` +
+            `• **Target Contrasts**: \`${spec.targetContrasts?.length ? spec.targetContrasts.join(", ") : "Ready to discover in Phase 02"}\`\n` +
+            `• **Readiness**: Study design is complete and synchronized in \`docs/experiment.md\`.\n\n` +
+            `**Where to go**:\n` +
+            `• Review or edit metadata in the **Experiment Setup** tab.\n` +
+            `• Or run the pipeline via the **Run / Resume Pipeline** button.`;
+        } else {
+          const missing = (spec?.missingInitialFields || []).join(", ") || "Data file path";
+          reply =
+            `🧪 **Experiment Setup Status: Incomplete / Attention Required**\n\n` +
+            `• **Current State**: ${!spec?.exists ? "`docs/experiment.md` is missing." : !spec?.pathToDataFile ? "Path to raw data file is not specified." : `Missing initial fields: ${missing}`}\n` +
+            `• **What needs to be done**:\n` +
+            `  1. Set the file path to your proteomics dataset (MaxQuant \`proteinGroups.txt\`, DIA-NN report, or FragPipe output).\n` +
+            `  2. Specify platform (e.g. Orbitrap, timsTOF, Astral) and analyte (Proteins/Peptides).\n` +
+            `  3. Confirm sample groups and study design in Section 3 of \`docs/experiment.md\`.\n\n` +
+            `**Where to go**:\n` +
+            `• Open the **Experiment Setup** tab (first tab in the middle pane) to configure your study design.\n` +
+            `• Or click **Review docs/experiment.md ↗** below to edit the raw markdown directly.`;
+        }
+        if (onToken) onToken(reply);
+        const agentMsg: AgentMessage = {
+          id: "msg_" + Date.now() + "_a",
+          role: "assistant",
+          content: reply,
+          timestamp: new Date().toLocaleTimeString(),
+          quickChips: ["🧪 Experiment Setup", "Review docs/experiment.md ↗", "▶ Run / Resume Pipeline"],
+        };
+        this.messages.push(agentMsg);
+        await this.logAgentTurn(userText, reply);
+        this.notifyUpdated();
+        return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
+      }
+
+      // 3-literature. Literature Status Intent
+      const isLiteratureStatusIntent =
+        /(?:explain|check|what is|how is|get)?\s*literature(?:\s+library)?\s*status\b/i.test(trimmed) ||
+        /status(?:\s+check)?:\s*\[?literature\]?/i.test(trimmed) ||
+        /explain literature/i.test(trimmed);
+      if (isLiteratureStatusIntent) {
+        const appStatus = this.statusProvider ? await this.statusProvider() : undefined;
+        const lit = appStatus?.literatureState;
+        const hasStudies = Boolean(
+          lit?.stats &&
+            ((lit.stats.studies ?? 0) > 0 ||
+              (lit.stats.study_count ?? 0) > 0 ||
+              (lit.stats.assertions ?? 0) > 0)
+        );
+        const hasDatabases = Boolean(lit?.databases && lit.databases.length > 0);
+        const isReady = Boolean(lit && (hasStudies || hasDatabases || lit.activeLiterature));
+
+        let reply = "";
+        if (isReady) {
+          reply =
+            `📚 **Literature Library Status: Ready**\n\n` +
+            `• **Active Database**: \`${lit?.activeLiterature || "Default"}\`\n` +
+            `• **Corpus Statistics**: ${lit?.stats?.studies || lit?.stats?.study_count || 0} studies, ${lit?.stats?.assertions || 0} ontology assertions indexed.\n` +
+            `• **Synthesis**: Indexed scientific knowledge is ready to assist in Phase 11 Biological Interpretation (\`docs/manuscript.md\`).\n\n` +
+            `**Where to go**:\n` +
+            `• Open the **Literature Library** tab to inspect papers, search assertions, or add publications.`;
+        } else {
+          reply =
+            `📚 **Literature Library Status: Not Configured**\n\n` +
+            `• **Current State**: 0 indexed papers or no active literature database found.\n` +
+            `• **What needs to be done**:\n` +
+            `  1. Ingest relevant publications (PubMed IDs, DOIs, or PDF files) covering your biological system, disease model, or perturbations.\n` +
+            `  2. Extracted mechanistic claims and functional annotations will enrich downstream biological discussion synthesis.\n\n` +
+            `**Where to go**:\n` +
+            `• Switch to the **Literature Library** tab to ingest papers.\n` +
+            `• Or place PDF files directly into your workspace's \`literature/ingest/\` folder.`;
+        }
+        if (onToken) onToken(reply);
+        const agentMsg: AgentMessage = {
+          id: "msg_" + Date.now() + "_a",
+          role: "assistant",
+          content: reply,
+          timestamp: new Date().toLocaleTimeString(),
+          quickChips: ["📚 Literature Library", "Review docs/experiment.md ↗", "📊 Pipeline Status"],
+        };
+        this.messages.push(agentMsg);
+        await this.logAgentTurn(userText, reply);
+        this.notifyUpdated();
+        return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
+      }
+
+      // 3-provider. LLM Provider Status Intent
+      const isProviderStatusIntent =
+        /(?:explain|check|what is|how is|get)?\s*(?:llm\s+provider|llm|provider|model)\s*status\b/i.test(trimmed) ||
+        /status(?:\s+check)?:\s*\[?(?:llm\s+provider|provider)\]?/i.test(trimmed) ||
+        /explain (?:llm\s+provider|llm|provider)/i.test(trimmed);
+      if (isProviderStatusIntent) {
+        const appStatus = this.statusProvider ? await this.statusProvider() : undefined;
+        const cfg = appStatus?.config || this.client.getConfig();
+        const provider = cfg?.provider || "None";
+        const model = cfg?.model || "None";
+        const isOllama = provider === "ollama";
+        const hasKey = Boolean(cfg?.apiKey && cfg.apiKey.trim().length > 0);
+        const isReady = Boolean(provider !== "None" && model !== "None" && (isOllama || hasKey));
+
+        let reply = "";
+        if (isReady) {
+          reply =
+            `🤖 **LLM Provider Status: Ready**\n\n` +
+            `• **Provider**: \`${provider}\`\n` +
+            `• **Model**: \`${model}\`\n` +
+            `• **Authentication**: Configured and verified.\n` +
+            `• **Multi-Model Tiers**: ${cfg?.multiModelEnabled ? "Enabled (Utility, Tool Runner, Reasoner)" : "Standard single model"}\n` +
+            `• **Readiness**: Ready to power autonomous reasoning, phase execution, and interactive chat.\n\n` +
+            `**Where to go**:\n` +
+            `• Adjust models, temperature, or multi-model tiers in the **Settings** tab under the **Provider & Model** section.`;
+        } else {
+          reply =
+            `🤖 **LLM Provider Status: Attention Required**\n\n` +
+            `• **Issue**: ${provider === "None" ? "No LLM provider selected." : !model || model === "None" ? "No model selected." : "API key is missing."}\n` +
+            `• **What needs to be done**:\n` +
+            `  1. Select your LLM provider (Anthropic, Gemini, OpenAI, OpenRouter, or Ollama).\n` +
+            `  2. Enter a valid API key (or base URL for Ollama / local models).\n` +
+            `  3. Choose the model for reasoning and tool execution.\n\n` +
+            `**Where to go**:\n` +
+            `• Open the **Settings** tab and go to the **Provider & Model** section.`;
+        }
+        if (onToken) onToken(reply);
+        const agentMsg: AgentMessage = {
+          id: "msg_" + Date.now() + "_a",
+          role: "assistant",
+          content: reply,
+          timestamp: new Date().toLocaleTimeString(),
+          quickChips: ["⚙️ Provider Settings", "Review docs/experiment.md ↗", "📊 Pipeline Status"],
+        };
+        this.messages.push(agentMsg);
+        await this.logAgentTurn(userText, reply);
+        this.notifyUpdated();
+        return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
+      }
+
+      // 3-mcp. MCP Engine Status Intent
+      const isMcpStatusIntent =
+        /(?:explain|check|what is|how is|get)?\s*(?:mcp\s+engine|mcp|engine)\s*status\b/i.test(trimmed) ||
+        /status(?:\s+check)?:\s*\[?(?:mcp\s+engine|mcp)\]?/i.test(trimmed) ||
+        /explain (?:mcp\s+engine|mcp|engine)/i.test(trimmed);
+      if (isMcpStatusIntent) {
+        const appStatus = this.statusProvider ? await this.statusProvider() : undefined;
+        const mcp = appStatus?.mcpStatus;
+        const isReady = Boolean(mcp?.connected && (mcp.toolsCount ?? 0) > 0);
+
+        let reply = "";
+        if (isReady) {
+          reply =
+            `⚡ **MCP Engine Status: Ready**\n\n` +
+            `• **Connection**: Connected (active)\n` +
+            `• **Mode**: \`${mcp?.mode || "local"}\`\n` +
+            `• **Tools Loaded**: \`${mcp?.toolsCount || 0}\` tidyproteomics tools available.\n` +
+            `• **Capabilities**: Protein intensity normalization, missing value imputation, limma differential expression, volcano and PCA visualizations.\n\n` +
+            `**Where to go**:\n` +
+            `• Review tool inventory, switch to Docker mode, or test connection in the **Settings** tab under the **MCP Engine** section.`;
+        } else {
+          reply =
+            `⚡ **MCP Engine Status: Disconnected / Attention Required**\n\n` +
+            `• **Issue**: tidyproteomics MCP server is offline (${mcp?.error || "Process not responding or R environment missing"}).\n` +
+            `• **What needs to be done**:\n` +
+            `  1. Verify that R and Rscript are installed with \`tidyproteomics\` package installed.\n` +
+            `  2. Alternatively, switch to Docker MCP mode in Settings to run in an isolated container.\n` +
+            `  3. Click 'Reconnect MCP' to test the connection.\n\n` +
+            `**Where to go**:\n` +
+            `• Open the **Settings** tab and go to the **MCP Engine** section.`;
+        }
+        if (onToken) onToken(reply);
+        const agentMsg: AgentMessage = {
+          id: "msg_" + Date.now() + "_a",
+          role: "assistant",
+          content: reply,
+          timestamp: new Date().toLocaleTimeString(),
+          quickChips: ["⚙️ MCP Engine Settings", "📊 Pipeline Status", "Review docs/experiment.md ↗"],
+        };
+        this.messages.push(agentMsg);
+        await this.logAgentTurn(userText, reply);
+        this.notifyUpdated();
+        return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
+      }
+
+      // 3b. Operations Guide Intent
+      const isOpsGuideIntent =
+        /^(?:operations(?: guide)?|how to use(?: the app)?|help|where (?:to find things|is everything)|what do (?:the )?colors mean)\??$/i.test(trimmed);
+      if (isOpsGuideIntent) {
+        const reply = `📖 **TidyProteomics Agent Operations Summary**:\n\n` +
+          `• **Layout**: Left pane (Project Explorer & Workspace Switcher), Center pane (Interactive Experiment Setup, Pipeline Progress, Settings, Literature Library, AI Evaluation, Guides, and dynamic file tabs), Right pane (Agent Chat, live R console, 12-phase segmented progress bar).\n` +
+          `• **Where to Find Things**:\n` +
+          `  - \`docs/\`: Working project documents — \`experiment.md\` (study design), \`manuscript.md\` (Phase 11 synthesis), \`notes.md\` (milestones), \`observations.md\`.\n` +
+          `  - \`reference/\`: Platform reference manuals — \`operations.md\` (operations guide), \`scientific.md\` (scientific guide to normalization, imputation, expression & enrichment).\n` +
+          `  - \`data/\`: \`tidyproteomics_data.rds\` (active MS dataset), volcano plots, PCA score plots, identification counts, and differential expression TSV tables.\n` +
+          `  - \`code/\`: 100% reproducible standalone R scripts (\`01_inspect.R\` through \`11_synthesis.R\`).\n` +
+          `  - \`logs/\`: Per-phase execution and console logs.\n` +
+          `• **Status Colors**: Grey (#52525b) pending, Animated Blue (#2563eb->#60a5fa) running, Green (#10b981) completed, Amber (#f59e0b) HITL checkpoint, Red (#ef4444) error.\n` +
+          `• **Orange Border**: Highlights required Human-in-the-Loop confirmations in Section 3 of \`docs/experiment.md\`.\n\n` +
+          `Click **📖 Operations Guide ↗** below (or open the Guides tab) to view the full operations manual!`;
+        if (onToken) onToken(reply);
+        const agentMsg: AgentMessage = {
+          id: "msg_" + Date.now() + "_a",
+          role: "assistant",
+          content: reply,
+          timestamp: new Date().toLocaleTimeString(),
+          quickChips: ["📖 Operations Guide ↗", "🔬 Scientific Guide ↗", "Review docs/experiment.md ↗", "📊 Pipeline Status"],
+        };
+        this.messages.push(agentMsg);
+        await this.logAgentTurn(userText, reply);
+        this.notifyUpdated();
+        return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
+      }
+
+      // 3c. Normalization Science Guide Intent
+      const isNormGuideIntent =
+        /^(?:explain normalization|normalization guide|what is normalization|how does normalization work|normalization methods)\??$/i.test(trimmed);
+      if (isNormGuideIntent) {
+        const reply = `🔬 **Quantitative Normalization Science Summary**:\n\n` +
+          `Normalization eliminates systematic technical drift (sample loading, column aging, ionization efficiency) while preserving genuine biological variance:\n\n` +
+          `1. **Linear Methods**:\n` +
+          `   • \`scaled\`: Global total / mean / median intensity multiplier.\n` +
+          `   • \`median\`: Median centering across runs (robust against hyper-abundant outliers).\n` +
+          `   • \`linear\`: Linear regression slope/intercept scaling to a reference run.\n` +
+          `   • \`limma\`: Cyclic empirical Bayes linear scaling (*Ritchie et al., NAR 2015, PMID: 25605792*).\n` +
+          `2. **Non-Linear Methods**:\n` +
+          `   • \`loess\`: Local polynomial smoothing for intensity-dependent curvature (*Bolstad et al., Bioinformatics 2003, PMID: 12538238*).\n` +
+          `   • \`svm\`: Support vector regression with RBF kernel.\n` +
+          `   • \`randomforest\`: Non-linear ensemble tree regression.\n` +
+          `3. **Sub-Population Normalization (\`subset_filter\`)**:\n` +
+          `   • Used when global symmetry fails (viral shutdown, hyper-transcription). Trains on invariant proteins (e.g. Ribosome).\n` +
+          `   • ⚠️ **Mathematical Rule**: Only linear models (\`scaled\`, \`median\`, \`linear\`) and \`svm\` can extrapolate out-of-sample; \`limma\`, \`loess\`, and \`randomforest\` cannot.\n` +
+          `4. **Selection Metric**: Minimizing median replicate CV and optimizing PCA cluster separation (*Välikangas et al., Brief Bioinform 2018, PMID: 27694351*).\n\n` +
+          `Click **🔬 Scientific Guide ↗** below to view the full guide with PubMed links!`;
+        if (onToken) onToken(reply);
+        const agentMsg: AgentMessage = {
+          id: "msg_" + Date.now() + "_a",
+          role: "assistant",
+          content: reply,
+          timestamp: new Date().toLocaleTimeString(),
+          quickChips: ["🔬 Scientific Guide ↗", "Use Random Forest Normalization", "Review docs/experiment.md ↗"],
+        };
+        this.messages.push(agentMsg);
+        await this.logAgentTurn(userText, reply);
+        this.notifyUpdated();
+        return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
+      }
+
+      // 3d. Imputation Science Guide Intent
+      const isImputeGuideIntent =
+        /^(?:explain imputation|imputation guide|what is imputation|how does imputation work|imputation methods)\??$/i.test(trimmed);
+      if (isImputeGuideIntent) {
+        const reply = `🔬 **Missing Value Imputation Science Summary**:\n\n` +
+          `Missing values in LC-MS arise via two distinct biological/technical mechanisms (*Karpievitch et al., BMC Bioinformatics 2012, PMID: 23176165*; *Lazar et al., J Proteome Res 2016, PMID: 26906401*):\n\n` +
+          `1. **Missing At Random (MAR)**:\n` +
+          `   • Sporadic dropouts near the detection limit where the protein is physically present.\n` +
+          `   • **Recommended**: \`randomforest_grouped\` (iterative MissForest within condition groups; *Stekhoven & Bühlmann, Bioinformatics 2012, PMID: 22039212*).\n` +
+          `   • Preserves correlation structure without artificial variance collapse. Keeps 100% condition-exclusive dropouts as \`NA\` (tagged as qualitative switches \`unmodeled_condition_exclusive\`).\n` +
+          `2. **Missing Not At Random (MNAR / Genetic Knockout)**:\n` +
+          `   • True biological absence: CRISPR knockouts, siRNA knockdowns, PROTAC degraders, or IP-MS controls.\n` +
+          `   • **Recommended**: \`min_column\` (fills with replicate empirical Limit of Detection / LOD).\n` +
+          `   • Retains condition-exclusive proteins in continuous \`limma\` differential expression (tagged \`DETECTION_LIMITED_ON_OFF\`).\n` +
+          `3. **Complete Case (\`none\`)**:\n` +
+          `   • Bypass imputation when total missingness is 0% or pre-imputed upstream.\n\n` +
+          `Click **🔬 Scientific Guide ↗** below to view the full guide with PubMed links!`;
+        if (onToken) onToken(reply);
+        const agentMsg: AgentMessage = {
+          id: "msg_" + Date.now() + "_a",
+          role: "assistant",
+          content: reply,
+          timestamp: new Date().toLocaleTimeString(),
+          quickChips: ["🔬 Scientific Guide ↗", "Use Random Forest (MAR Default)", "Use Column Min (MNAR / Knockout)", "Review docs/experiment.md ↗"],
+        };
+        this.messages.push(agentMsg);
+        await this.logAgentTurn(userText, reply);
+        this.notifyUpdated();
+        return { reply, usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 } };
       }
 
       const isAuthorizeAffirmative = /^(authorize|authorize and resume|authorize confounding|yes,? authorize|yes,? proceed|⚡ authorize confounding & resume)$/i.test(lower);
@@ -1573,6 +2005,19 @@ ${llm || "Not specified."}
               case "set_normalization_strategy": {
                 const normCfg = await this.experimentManager.setNormalizationStrategy(tc.args?.methods, tc.args?.subsetFilter);
                 executedActionSummary += `\n• Configured Normalization Strategy to \`${normCfg.methods}\` (Subset Filter: \`${normCfg.subsetFilter}\`) in Section 3.B`;
+                pipelineTriggered = true;
+                break;
+              }
+              case "set_annotation_strategy": {
+                await this.experimentManager.setAnnotationStrategy(
+                  tc.args?.source,
+                  tc.args?.filePath,
+                  tc.args?.taxonId,
+                  tc.args?.ontologies,
+                  undefined,
+                  tc.args?.confirmed
+                );
+                executedActionSummary += `\n• Configured Functional Annotation Strategy (Source: \`${tc.args?.source || "uniprot"}\`, Confirmed: \`${tc.args?.confirmed ? "TRUE" : "FALSE"}\`) in Section 3.G`;
                 pipelineTriggered = true;
                 break;
               }

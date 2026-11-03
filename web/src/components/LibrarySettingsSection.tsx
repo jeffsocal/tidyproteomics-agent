@@ -15,6 +15,7 @@ import {
   ExternalLink,
   Check,
   AlertCircle,
+  AlertTriangle,
   FileUp,
 } from "lucide-react";
 import { LiteratureViewState, LiteratureStats } from "../types";
@@ -73,16 +74,49 @@ export const LibrarySettingsSection: React.FC<LibrarySettingsSectionProps> = ({
   const queue = literatureState?.queue || [];
   const useInSynthesis = Boolean(literatureState?.useInSynthesis ?? literatureState?.config?.useInSynthesis);
 
+  // Local bypass state fallback for when running server process predates toggle-bypass route
+  const [localBypass, setLocalBypass] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("tpa-literature-bypass") === "true";
+    } catch (_) {
+      return false;
+    }
+  });
+
+  const isBypassed = Boolean(
+    literatureState?.bypassLiterature ||
+    literatureState?.config?.bypassLiterature ||
+    localBypass
+  );
+
   // Helper to show temporary status messages
   const flashStatus = (msg: string) => {
     setStatusMessage(msg);
     setTimeout(() => setStatusMessage(null), 3500);
   };
 
+  // Readiness evaluation
+  const effectiveStats = liveStats || literatureState?.stats;
+  const hasStudies = Boolean(
+    effectiveStats &&
+    ((effectiveStats.studies ?? 0) > 0 ||
+      (effectiveStats.study_count ?? 0) > 0 ||
+      (effectiveStats.assertions ?? 0) > 0)
+  );
+  const isLiteratureReady = Boolean(activeDb && hasStudies);
+  const needsLiteratureAttention = !isBypassed && !isLiteratureReady;
+
   // 1. Select Active Database
   const handleSelectDatabase = async (fileName: string) => {
     try {
       setDbError(null);
+      if (fileName) {
+        setLocalBypass(false);
+        try {
+          localStorage.removeItem("tpa-literature-bypass");
+        } catch (_) { }
+        window.dispatchEvent(new CustomEvent("tpa-literature-bypass-change", { detail: { bypass: false } }));
+      }
       const res = await fetch("/api/literature/select", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -92,11 +126,14 @@ export const LibrarySettingsSection: React.FC<LibrarySettingsSectionProps> = ({
       if (!data.ok) {
         setDbError(data.error || "Failed to switch active database");
       } else {
-        flashStatus(fileName ? `Switched active database to ${fileName}` : "Cleared active database");
+        flashStatus(fileName ? `Switched active database to ${fileName} (automatically engaged in synthesis)` : "Cleared active database");
         if (fileName) {
           fetchStats(fileName);
         } else {
           setLiveStats(null);
+        }
+        if (onRefreshState) {
+          await onRefreshState();
         }
       }
     } catch (err: any) {
@@ -110,6 +147,12 @@ export const LibrarySettingsSection: React.FC<LibrarySettingsSectionProps> = ({
     if (!trimmed) return;
     setIsCreatingDb(true);
     setDbError(null);
+    setLocalBypass(false);
+    try {
+      localStorage.removeItem("tpa-literature-bypass");
+    } catch (_) { }
+    window.dispatchEvent(new CustomEvent("tpa-literature-bypass-change", { detail: { bypass: false } }));
+
     try {
       const res = await fetch("/api/literature/create", {
         method: "POST",
@@ -119,9 +162,12 @@ export const LibrarySettingsSection: React.FC<LibrarySettingsSectionProps> = ({
       const data = await res.json();
       if (data.ok) {
         setNewDbName("");
-        flashStatus(`Created literature database: ${data.database?.fileName || trimmed}`);
+        flashStatus(`Created literature database: ${data.database?.fileName || trimmed} (engaged in synthesis)`);
         if (data.database?.fileName) {
           fetchStats(data.database.fileName);
+        }
+        if (onRefreshState) {
+          await onRefreshState();
         }
       } else {
         setDbError(data.error || "Failed to create database");
@@ -133,7 +179,100 @@ export const LibrarySettingsSection: React.FC<LibrarySettingsSectionProps> = ({
     }
   };
 
-  // 3. Toggle Use in Synthesis
+  // 3. Toggle Bypass Mode
+  const handleToggleBypass = async (bypass: boolean) => {
+    try {
+      setDbError(null);
+      setLocalBypass(bypass);
+      try {
+        localStorage.setItem("tpa-literature-bypass", String(bypass));
+      } catch (_) { }
+      window.dispatchEvent(new CustomEvent("tpa-literature-bypass-change", { detail: { bypass } }));
+
+      let success = false;
+      let errorMsg = "";
+
+      // 1. Try dedicated endpoint first
+      try {
+        const res = await fetch("/api/literature/toggle-bypass", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ bypass }),
+        });
+
+        if (res.ok) {
+          const contentType = res.headers.get("content-type") || "";
+          if (contentType.includes("application/json")) {
+            const data = await res.json();
+            if (data.ok) {
+              success = true;
+            } else {
+              errorMsg = data.error || "Failed to toggle bypass";
+            }
+          } else {
+            success = true;
+          }
+        } else if (res.status === 404) {
+          // Dedicated route not present in currently running server process
+          success = false;
+        } else {
+          const text = await res.text();
+          errorMsg = text || `Server error ${res.status}`;
+        }
+      } catch (_) {
+        success = false;
+      }
+
+      // 2. Resilient fallback: write literature/config.json via /api/workspace/file and toggle synthesis
+      if (!success && !errorMsg) {
+        try {
+          const currentCfg = (literatureState?.config || {}) as Record<string, any>;
+          const updatedCfg = {
+            ...currentCfg,
+            bypassLiterature: bypass,
+            useInSynthesis: bypass ? false : Boolean(currentCfg.activeLiterature || currentCfg.activeCorpus),
+            updatedAt: new Date().toISOString(),
+          };
+
+          await fetch("/api/workspace/file", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              path: "literature/config.json",
+              content: JSON.stringify(updatedCfg, null, 2),
+            }),
+          });
+
+          await fetch("/api/literature/toggle-synthesis", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: !bypass }),
+          });
+
+          success = true;
+        } catch (fbErr: any) {
+          errorMsg = fbErr.message || "Failed to persist bypass config";
+        }
+      }
+
+      if (success) {
+        flashStatus(
+          bypass
+            ? "Literature corroboration bypassed (non-blocking for pipeline)"
+            : "Literature requirement restored"
+        );
+        if (onRefreshState) {
+          await onRefreshState();
+        }
+      } else if (errorMsg) {
+        setDbError(errorMsg);
+      }
+    } catch (err: any) {
+      setDbError(err.message || "Failed to toggle bypass");
+    }
+  };
+
+  // 4. Toggle Use in Synthesis
   const handleToggleSynthesis = async (enabled: boolean) => {
     try {
       await fetch("/api/literature/toggle-synthesis", {
@@ -142,6 +281,9 @@ export const LibrarySettingsSection: React.FC<LibrarySettingsSectionProps> = ({
         body: JSON.stringify({ enabled }),
       });
       flashStatus(enabled ? "Enabled database for Phase 09 synthesis" : "Disabled database in synthesis");
+      if (onRefreshState) {
+        await onRefreshState();
+      }
     } catch (err: any) {
       setDbError(err.message || "Failed to toggle synthesis mode");
     }
@@ -374,9 +516,6 @@ export const LibrarySettingsSection: React.FC<LibrarySettingsSectionProps> = ({
     }
   };
 
-  // Current stats display
-  const effectiveStats = liveStats || literatureState?.stats;
-
   const formatBytes = (bytes?: number) => {
     if (!bytes || bytes <= 0) return "0 B";
     if (bytes < 1024) return `${bytes} B`;
@@ -408,19 +547,147 @@ export const LibrarySettingsSection: React.FC<LibrarySettingsSectionProps> = ({
               Manage DuckDB perturbation knowledge databases, import scientific PDFs / supplementary tables, and corroborate findings across published studies.
             </p>
           </div>
-          <div>
-            {activeDb ? (
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            {isBypassed ? (
+              <span
+                style={{
+                  fontSize: "11px",
+                  padding: "4px 8px",
+                  borderRadius: "4px",
+                  background: "rgba(113, 113, 122, 0.2)",
+                  color: "#a1a1aa",
+                  border: "1px solid rgba(113, 113, 122, 0.4)",
+                  fontWeight: 600,
+                }}
+              >
+                BYPASSED (OPTIONAL)
+              </span>
+            ) : isLiteratureReady ? (
               <span className="badge badge-completed" style={{ fontSize: "11px", padding: "4px 8px" }}>
-                ACTIVE: {activeDb}
+                READY: {activeDb} ({effectiveStats?.study_count ?? effectiveStats?.studies ?? 0} studies)
+              </span>
+            ) : activeDb ? (
+              <span
+                style={{
+                  fontSize: "11px",
+                  padding: "4px 8px",
+                  borderRadius: "4px",
+                  background: "var(--attention-orange-bg)",
+                  color: "var(--attention-orange-light)",
+                  border: "1px solid var(--attention-orange)",
+                  fontWeight: 600,
+                }}
+              >
+                ATTENTION: 0 PAPERS
               </span>
             ) : (
-              <span className="badge badge-idle" style={{ fontSize: "11px", padding: "4px 8px" }}>
-                NO ACTIVE DATABASE
+              <span
+                style={{
+                  fontSize: "11px",
+                  padding: "4px 8px",
+                  borderRadius: "4px",
+                  background: "var(--attention-orange-bg)",
+                  color: "var(--attention-orange-light)",
+                  border: "1px solid var(--attention-orange)",
+                  fontWeight: 600,
+                }}
+              >
+                ATTENTION: NO DATABASE
               </span>
             )}
           </div>
         </div>
       </div>
+
+      {/* Orange Action Required Banner if unconfigured and not bypassed */}
+      {needsLiteratureAttention && (
+        <div
+          className="attention-banner-orange"
+          style={{
+            marginBottom: "16px",
+            padding: "14px 16px",
+            display: "flex",
+            alignItems: "flex-start",
+            gap: "12px",
+          }}
+        >
+          <AlertTriangle size={20} color="var(--attention-orange)" style={{ flexShrink: 0, marginTop: "2px" }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--attention-orange)", marginBottom: "4px" }}>
+              ACTION REQUIRED: Literature Setup Incomplete
+            </div>
+            <div style={{ fontSize: "12px", color: "var(--fg)", lineHeight: 1.45, marginBottom: "10px" }}>
+              {!activeDb
+                ? "No DuckDB knowledge database is selected. Select or create one below, or import PDFs into the queue."
+                : "The active database currently has no indexed studies or assertions. Ingest PDFs below, or bypass literature if you wish to run without corroboration."}
+            </div>
+            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-xs"
+                onClick={() => handleToggleBypass(true)}
+                style={{
+                  background: "var(--attention-orange-bg)",
+                  borderColor: "var(--attention-orange)",
+                  color: "var(--fg-bright)",
+                  fontWeight: 600,
+                }}
+              >
+                Bypass Literature (Run Pipeline Without Corroboration)
+              </button>
+              <span style={{ fontSize: "11px", color: "var(--muted)" }}>
+                This places Literature into a non-blocking bypassed state.
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bypassed Status Notice */}
+      {isBypassed && (
+        <div
+          style={{
+            marginBottom: "16px",
+            padding: "12px 16px",
+            borderRadius: "8px",
+            background: "rgba(113, 113, 122, 0.12)",
+            border: "1px solid rgba(113, 113, 122, 0.3)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "12px",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <span
+              style={{
+                width: "8px",
+                height: "8px",
+                borderRadius: "50%",
+                background: "#71717a",
+                display: "inline-block",
+                flexShrink: 0,
+              }}
+            />
+            <div>
+              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--fg-bright)" }}>
+                Literature Corroboration is Bypassed (Non-blocking)
+              </div>
+              <div style={{ fontSize: "11px", color: "var(--muted)" }}>
+                The pipeline will proceed through Phase 09 without literature queries. You can configure and ingest papers at any time.
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="btn btn-secondary btn-xs"
+            onClick={() => handleToggleBypass(false)}
+            style={{ whiteSpace: "nowrap" }}
+          >
+            Re-enable Literature Requirement
+          </button>
+        </div>
+      )}
 
       {/* Status Notifications */}
       {statusMessage && (
@@ -466,12 +733,28 @@ export const LibrarySettingsSection: React.FC<LibrarySettingsSectionProps> = ({
       {/* Grid: Database Selector + Synthesis Toggle */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
         {/* Database Picker & Creator Card */}
-        <div className="card" style={{ padding: "16px", background: "var(--card-bg)", borderRadius: "8px", border: "1px solid var(--border)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "10px" }}>
-            <Database size={14} color="var(--primary)" />
-            <span style={{ fontSize: "12px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--fg-bright)" }}>
-              Active Knowledge Database
-            </span>
+        <div
+          className={`card ${needsLiteratureAttention ? "attention-card-orange" : ""}`}
+          style={{
+            padding: "16px",
+            background: "var(--card-bg)",
+            borderRadius: "8px",
+            border: needsLiteratureAttention ? undefined : "1px solid var(--border)",
+            transition: "all 0.2s ease",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <Database size={14} color={needsLiteratureAttention ? "var(--attention-orange)" : "var(--primary)"} />
+              <span style={{ fontSize: "12px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--fg-bright)" }}>
+                Active Knowledge Database
+              </span>
+            </div>
+            {needsLiteratureAttention && (
+              <span className="attention-badge-orange">
+                ACTION REQUIRED
+              </span>
+            )}
           </div>
 
           <label style={{ fontSize: "11px", color: "var(--muted)", display: "block", marginBottom: "6px" }}>
@@ -484,7 +767,7 @@ export const LibrarySettingsSection: React.FC<LibrarySettingsSectionProps> = ({
               width: "100%",
               padding: "7px 10px",
               fontSize: "12px",
-              background: "#18181f",
+              background: "var(--input-bg)",
               color: "var(--fg)",
               border: "1px solid var(--border)",
               borderRadius: "6px",
@@ -514,7 +797,7 @@ export const LibrarySettingsSection: React.FC<LibrarySettingsSectionProps> = ({
                 flex: 1,
                 padding: "6px 10px",
                 fontSize: "12px",
-                background: "#18181f",
+                background: "var(--input-bg)",
                 color: "var(--fg)",
                 border: "1px solid var(--border)",
                 borderRadius: "6px",
@@ -534,47 +817,140 @@ export const LibrarySettingsSection: React.FC<LibrarySettingsSectionProps> = ({
         </div>
 
         {/* Synthesis Configuration Card */}
-        <div className="card" style={{ padding: "16px", background: "var(--card-bg)", borderRadius: "8px", border: "1px solid var(--border)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "10px" }}>
-            <RefreshCw size={14} color="var(--primary)" />
-            <span style={{ fontSize: "12px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--fg-bright)" }}>
-              Synthesis Orchestration
-            </span>
-          </div>
-
-          <p style={{ fontSize: "11.5px", color: "var(--muted)", margin: "0 0 12px 0", lineHeight: 1.45 }}>
-            When enabled, the active database is linked to the 12-Phase pipeline. Phase 09 (Literature Corroboration &amp; Synthesis) performs two-way R DBI queries against this corpus to validate differentially abundant proteins against published literature evidence.
-          </p>
-
-          <label
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "10px",
-              cursor: activeDb ? "pointer" : "not-allowed",
-              padding: "10px 12px",
-              background: "#18181f",
-              border: "1px solid var(--border)",
-              borderRadius: "6px",
-              opacity: activeDb ? 1 : 0.6,
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={useInSynthesis}
-              disabled={!activeDb}
-              onChange={(e) => handleToggleSynthesis(e.target.checked)}
-              style={{ width: "16px", height: "16px", cursor: activeDb ? "pointer" : "not-allowed" }}
-            />
-            <div>
-              <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--fg-bright)" }}>
-                Use Active Database in Synthesis
+        <div
+          className="card"
+          style={{
+            padding: "16px",
+            background: "var(--card-bg)",
+            borderRadius: "8px",
+            border: "1px solid var(--border)",
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "space-between",
+          }}
+        >
+          <div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <RefreshCw size={14} color="var(--primary)" />
+                <span style={{ fontSize: "12px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.5px", color: "var(--fg-bright)" }}>
+                  Pipeline Integration &amp; Bypass
+                </span>
               </div>
-              <div style={{ fontSize: "10.5px", color: "var(--muted)" }}>
-                Injects <code>literature/{activeDb || "none"}</code> into prompt context &amp; execution
+              <div>
+                {isBypassed ? (
+                  <span
+                    style={{
+                      fontSize: "10.5px",
+                      fontWeight: 700,
+                      background: "rgba(113, 113, 122, 0.2)",
+                      color: "#a1a1aa",
+                      border: "1px solid rgba(113, 113, 122, 0.4)",
+                      padding: "2px 6px",
+                      borderRadius: "4px",
+                    }}
+                  >
+                    BYPASSED
+                  </span>
+                ) : activeDb && useInSynthesis ? (
+                  <span
+                    style={{
+                      fontSize: "10.5px",
+                      fontWeight: 700,
+                      background: "rgba(34, 197, 94, 0.15)",
+                      color: "#22c55e",
+                      border: "1px solid rgba(34, 197, 94, 0.35)",
+                      padding: "2px 6px",
+                      borderRadius: "4px",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "4px",
+                    }}
+                  >
+                    <Check size={11} /> ENGAGED IN SYNTHESIS
+                  </span>
+                ) : (
+                  <span
+                    className="attention-badge-orange"
+                    style={{ fontSize: "10.5px" }}
+                  >
+                    NOT ENGAGED
+                  </span>
+                )}
               </div>
             </div>
-          </label>
+
+            <p style={{ fontSize: "11.5px", color: "var(--muted)", margin: "0 0 12px 0", lineHeight: 1.45 }}>
+              Phase 09 (Literature Corroboration &amp; Synthesis) automatically queries the active database to validate differential proteins against published findings. Selecting or creating a database automatically engages it.
+            </p>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {/* Bypass Switch */}
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "8px 12px",
+                background: isBypassed ? "rgba(113, 113, 122, 0.15)" : "var(--panel-bg)",
+                border: isBypassed ? "1px solid rgba(113, 113, 122, 0.4)" : "1px solid var(--border)",
+                borderRadius: "6px",
+                cursor: "pointer",
+              }}
+            >
+              <div>
+                <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--fg-bright)" }}>
+                  Bypass Literature Corroboration
+                </div>
+                <div style={{ fontSize: "10.5px", color: "var(--muted)" }}>
+                  Skip Phase 09 literature queries (non-blocking for pipeline)
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={isBypassed}
+                onChange={(e) => handleToggleBypass(e.target.checked)}
+                style={{ width: "16px", height: "16px", cursor: "pointer" }}
+              />
+            </label>
+
+            {/* Active Database in Synthesis Toggle */}
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "8px 12px",
+                background: !activeDb || isBypassed ? "var(--bg)" : useInSynthesis ? "rgba(34, 197, 94, 0.08)" : "var(--panel-bg)",
+                border:
+                  !activeDb || isBypassed
+                    ? "1px solid var(--border)"
+                    : useInSynthesis
+                      ? "1px solid rgba(34, 197, 94, 0.3)"
+                      : "1px solid var(--border)",
+                borderRadius: "6px",
+                cursor: !activeDb || isBypassed ? "not-allowed" : "pointer",
+                opacity: !activeDb || isBypassed ? 0.55 : 1,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--fg-bright)" }}>
+                  Engage Active Database in Phase 09 Synthesis
+                </div>
+                <div style={{ fontSize: "10.5px", color: "var(--muted)" }}>
+                  {activeDb ? `Automatically queries literature/${activeDb}` : "Select a database above first"}
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={useInSynthesis && !isBypassed}
+                disabled={!activeDb || isBypassed}
+                onChange={(e) => handleToggleSynthesis(e.target.checked)}
+                style={{ width: "16px", height: "16px", cursor: !activeDb || isBypassed ? "not-allowed" : "pointer" }}
+              />
+            </label>
+          </div>
         </div>
       </div>
 
@@ -702,14 +1078,14 @@ export const LibrarySettingsSection: React.FC<LibrarySettingsSectionProps> = ({
 
         {/* Upload status banner */}
         {uploadProgress && (
-          <div style={{ padding: "8px 12px", background: "#1c1c24", borderRadius: "6px", marginBottom: "12px", fontSize: "11.5px", color: "var(--primary)" }}>
+          <div style={{ padding: "8px 12px", background: "var(--card-hover)", borderRadius: "6px", marginBottom: "12px", fontSize: "11.5px", color: "var(--primary)" }}>
             {uploadProgress}
           </div>
         )}
 
         {/* Host folder scanner input form */}
         {showFolderInput && (
-          <div style={{ display: "flex", gap: "6px", marginBottom: "12px", padding: "10px", background: "#18181f", borderRadius: "6px", border: "1px solid var(--border)" }}>
+          <div style={{ display: "flex", gap: "6px", marginBottom: "12px", padding: "10px", background: "var(--panel-bg)", borderRadius: "6px", border: "1px solid var(--border)" }}>
             <input
               type="text"
               placeholder={`Folder path (e.g. ${workspaceRoot || "/path/to/papers"})...`}
@@ -719,7 +1095,7 @@ export const LibrarySettingsSection: React.FC<LibrarySettingsSectionProps> = ({
                 flex: 1,
                 padding: "6px 10px",
                 fontSize: "12px",
-                background: "#121216",
+                background: "var(--input-bg)",
                 color: "var(--fg)",
                 border: "1px solid var(--border)",
                 borderRadius: "4px",
@@ -870,7 +1246,7 @@ export const LibrarySettingsSection: React.FC<LibrarySettingsSectionProps> = ({
               flex: 1,
               padding: "7px 12px",
               fontSize: "12px",
-              background: "#18181f",
+              background: "var(--input-bg)",
               color: "var(--fg)",
               border: "1px solid var(--border)",
               borderRadius: "6px",

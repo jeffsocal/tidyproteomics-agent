@@ -30,6 +30,7 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/01_i
   - If `tpa_load` fails with `"... not retaining values, check import regex"` or missing column errors:
     1. Re-run `tpa_input_audit` to see exact column regex mismatches.
     2. Adjust regex patterns via `tpa_ingest_config(platform = "{{PLATFORM}}", analyte = "{{ANALYTE}}", action = "set", ...)`.
+       - **ProteomeDiscoverer Note**: ProteomeDiscoverer exports often quantify peak areas with `Area: ...` instead of `Abundance: ...`. If `tpa_input_audit` reports 0 quantitative channels and raw headers match `Area:`, set the quantitative pattern: `tpa_ingest_config(platform = "ProteomeDiscoverer", analyte = "proteins", action = "set", category = "quantitative", column_defined = "abundance_raw", column_import = "^Area:", pivot = TRUE)`.
     3. Re-run `tpa_load(source = "<raw_staged_file>", platform = "{{PLATFORM}}", analyte = "{{ANALYTE}}", config = "<platform>_<analyte>.tsv")`.
 - [ ] **Full Sample-Table & Annotation Topology Discovery**:
   - Extract core dataset topology (origin platform, analyte, entity count, missingness %, and upstream operation count) directly from the `tpa_load` state card output.
@@ -86,12 +87,24 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/01_i
          - `- **Confirm Sample Pooling Map**: FALSE` as the scaffolded default awaiting researcher review.
       5. **Section 3.E**: Label with `👉 [USER ACTION REQUIRED - DEFINE & CONFIRM TARGET CONTRASTS]:` and suggest logical **Target Contrasts** structured as `<treatment>/<control>` (so $\log_2\text{FC} > 0$ reflects induction in treatment/perturbation), setting `Status: PENDING` and `- **Confirm Target Contrasts**: FALSE`.
       6. **Section 3.F**: Label with `⚠️ [PRE-FLIGHT GATE DECISION - EXPOSE ONLY IF BATCH CONFOUNDING DETECTED]:`. If disease/treatment condition is confounded with batch across cohorts (e.g. healthy only in batch 8, disease in batches 5/6/9), explicitly document the confounding in HTML comments, set `- **Batch Confounding Detected**: TRUE`, `- **Proceed With Potential Batch Confounding**: FALSE`, and `- **Confirm Batch Confounding Authorization**: FALSE` to expose this gate for researcher review. If NO batch confounding is detected, set `- **Batch Confounding Detected**: FALSE`. Setting these defaults does NOT fail or halt Phase 1.
+      7. **Section 3.G**: Label with `👉 [USER ACTION REQUIRED - CONFIGURE & CONFIRM ANNOTATION STRATEGY]:` and scaffold the **Functional Annotation Strategy**:
+         - Inspect active annotations from `tpa_inspect(what = "annotation_terms")`.
+         - If canonical functional ontologies (`biological_process`, `cellular_component`, `molecular_function`, `reactome_pathway`, `kegg`) are absent or unmapped:
+           - Inspect accessions and FASTA headers to detect organism/taxon ID (e.g., `9606` for Human, `10090` for Mouse).
+           - Scaffold default UniProt remote fetch parameters awaiting user confirmation:
+             - `- **Annotation Source**: uniprot`
+             - `- **Annotation File Path**: NONE`
+             - `- **Taxon / Organism ID**: <taxon_id>`
+             - `- **Annotation Ontologies**: biological_process, cellular_component, molecular_function, reactome_pathway`
+             - `- **Annotation Validation Status**: PENDING`
+             - `- **Confirm Functional Annotation Strategy**: FALSE`
+         - If full canonical ontologies are already present from data ingestion, record status as `VALIDATED` and set `TRUE`.
   - If Section 3 already contains user-customized renaming, contrast definitions, or a confirmed imputation strategy, preserve them exactly!
   - **Enforce Clean Boolean/Enum Values & Badge Preservation**: Keep all configuration lines strictly as clean tokens (`TRUE`, `FALSE`, or the method identifier) without appending conversational notes. Place any rationale inside HTML comments `<!-- ... -->`.
 - [ ] **Checkpoint 1.4 (Design Alignment Gate)**:
-  - Verify that discovered sample groups, alignment with `docs/experiment.md`, and Section 3 (`3.A`–`3.F`) scaffolding are complete.
+  - Verify that discovered sample groups, alignment with `docs/experiment.md`, and Section 3 (`3.A`–`3.G`) scaffolding are complete.
   - Phase 1 must NEVER invoke `fail_phase` for pre-ingestion audit warnings, unmapped columns, discovered groups, batch suffixes, or confounding if `tpa_load` loads the data with quantified entities.
 - [ ] **Complete Phase (Automated Blackboard Recording)**:
   - Do NOT manually edit `docs/notes.md` via file tools; the orchestrator automatically records your `complete_phase` summary into `docs/notes.md`.
   - Invoke `complete_phase` with a comprehensive summary including quantified entity count, sample inventory, proposed/confirmed contrast groups, baseline quality stats, and detected upstream operations:
-    `complete_phase(phaseName = "01_INSPECT", summary = "Data ingestion complete (<N> proteins across <M> samples). Audited operations history (normalization/imputation status) and full experiments table, scaffolded study design in docs/experiment.md Section 3 (3.A-3.F), generated count diagnostic plot, and persisted data/tidyproteomics_data.rds.")`
+    `complete_phase(phaseName = "01_INSPECT", summary = "Data ingestion complete (<N> proteins across <M> samples). Audited operations history (normalization/imputation status) and full experiments table, scaffolded study design in docs/experiment.md Section 3 (3.A-3.G), generated count diagnostic plot, and persisted data/tidyproteomics_data.rds.")`

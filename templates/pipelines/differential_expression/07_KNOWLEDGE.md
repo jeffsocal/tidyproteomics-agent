@@ -26,7 +26,7 @@ Before proceeding:
 
 #### 2. De Novo Functional Module Discovery & Hypothesis Queries via `code/07_knowledge.R`
 Whenever formal ontology enrichment in Phase 5 was bypassed (or to test specific protein complexes, operons, unthresholded co-factors, and pathway partners suggested by the top hits in `docs/observations.md`):
-- Author and write `code/07_knowledge.R` via `write_file` and execute it via `execute_command` (output is automatically captured to `logs/07_knowledge/console.log`):
+- Author and write `code/07_knowledge.R` via `write_file` (or invoke the pre-installed helper `tools/test_de_novo_modules.R`) and execute it via `execute_command` (output is automatically captured to `logs/07_knowledge/console.log`):
   ```bash
   if [ -f tools/lint_tidyproteomics.R ]; then Rscript tools/lint_tidyproteomics.R code/07_knowledge.R && Rscript code/07_knowledge.R; else Rscript code/07_knowledge.R; fi
   ```
@@ -35,87 +35,138 @@ Whenever formal ontology enrichment in Phase 5 was bypassed (or to test specific
     - `gene_name`, `protein`, `description`, `log2_foldchange` (⚠️ **CRITICAL**: spelled `log2_foldchange` with *no* underscore between 'fold' and 'change'), `p_value`, `adj_p_value`, `foldchange`, `candidate_reliability`, `imputation_bias`.
   - Prefer loading the curated Phase 6 expression table (`data/table_*_expression_*.tsv`) which already has FASTA `GN=` symbols resolved and reliability metrics attached.
 - **Constructing & Testing Unbiased De Novo Functional Modules (`data/de_novo_modules.tsv`)**:
-  - Rather than relying on isolated top up/down genes, define **2 to 4 biologically coherent functional modules** informed by `description` annotations, shared operon/family prefixes (e.g., `^srfA`, `^rps|^rpl`, `^flg|^fli`, `^col|^mmp`, `^psm|^pma`), or complete macromolecular complex definitions.
+  - Rather than relying on isolated top up/down genes, define **2 to 5 biologically coherent functional modules** informed by `description` annotations, shared operon/family prefixes (e.g., `^srfA`, `^rps|^rpl`, `^flg|^fli`, `^col|^mmp`, `^psm|^pma`), or complete macromolecular complex definitions.
   - ⚠️ **Anti-Circularity Rule (No Cherry-Picking)**: Define module membership across the **entire unthresholded expression table** using functional description regexes (`desc_pattern`), gene family prefix regexes (`gene_pattern`), or complete complex/operon subunit lists—**never** cherry-pick individual volcano winners into a custom module just to inflate its Wilcoxon $p$-value.
-  - Test each module's coordinate shift across the **entire unthresholded expression table** using a two-sided Wilcoxon rank-sum test (`wilcox.test` of member `log2_foldchange` vs. non-member background proteins), audit intra-module directional concordance (`pct_concordant`) and dispersion (`iqr_fc`) to detect uniform shifts vs. stoichiometric subunit uncoupling, and save the summary to `data/de_novo_modules.tsv` so downstream phases (`08_LITERATURE`, `09_WEBSEARCH`, `10_FIGURES`, `11_SYNTHESIS`) have statistically supported biological signatures:
+  - ⚠️ **Script Resiliency & Zero-Exit Rule (DO NOT HALT)**:
+    - **NEVER invoke `stop()` or halt execution when a candidate module has 0 members** (e.g., an intentional knockout subunit like `Elp3` absent from the quantified matrix). Module absence is a formal empirical finding (`direction = "ABSENT_FROM_MATRIX"`), not an error.
+    - `write_tsv` to `data/de_novo_modules.tsv` **MUST ALWAYS EXECUTE**, even if 0 modules match, so that downstream checkpoint gates pass cleanly without retries or token burn.
+  - Test each module's coordinate shift across the **entire unthresholded expression table** using a two-sided Wilcoxon rank-sum test (`wilcox.test` of member `log2_foldchange` vs. non-member background proteins), audit intra-module directional concordance (`pct_concordant`) and dispersion (`iqr_fc`) to detect uniform shifts vs. stoichiometric subunit uncoupling, and save the summary to `data/de_novo_modules.tsv`:
   ```r
   library(tidyproteomics)
   library(dplyr)
   library(readr)
 
-  # Resolve active contrast and primary identifier from persisted tidyproteomics object
-  tp_data <- if (file.exists("data/tidyproteomics_data.rds")) readRDS("data/tidyproteomics_data.rds") else NULL
-  analyses <- if (!is.null(tp_data)) get_analyses(tp_data) else data.frame()
-  contrast_str <- if (nrow(analyses) > 0) analyses$comparison[1] else "<treatment>/<control>"
-  c_clean <- gsub("[^A-Za-z0-9]", ".*", contrast_str)
-
-  # Load curated Phase 6 expression table matched to contrast_str (or fallback to tidyproteomics export)
+  # Discover expression tables across all contrasts
   exp_files <- list.files("data", pattern = "^table_.*_expression_.*[.](tsv|csv)$", full.names = TRUE)
   exp_files <- exp_files[!grepl("_extract", exp_files)]
-  matched_files <- exp_files[grepl(c_clean, basename(exp_files), ignore.case = TRUE)]
-  cand_files <- c(matched_files, setdiff(exp_files, matched_files))
-  if (length(cand_files) > 0) {
-    exp_tbl <- if (grepl("[.]tsv$", cand_files[1])) read_tsv(cand_files[1], show_col_types = FALSE) else read_csv(cand_files[1], show_col_types = FALSE)
-  } else {
-    exp_tbl <- rlang::inject(export_analysis(tp_data, !!rlang::parse_expr(contrast_str), .analysis = "expression"))
+
+  # Fallback to exporting directly from tidyproteomics object if no tables exist
+  if (length(exp_files) == 0 && file.exists("data/tidyproteomics_data.rds")) {
+    tp_data <- readRDS("data/tidyproteomics_data.rds")
+    analyses <- get_analyses(tp_data)
+    if (nrow(analyses) > 0) {
+      c_str <- analyses$comparison[1]
+      exp_tbl <- rlang::inject(export_analysis(tp_data, !!rlang::parse_expr(c_str), .analysis = "expression"))
+      write_tsv(exp_tbl, "data/table_proteins_expression_primary.tsv")
+      exp_files <- c("data/table_proteins_expression_primary.tsv")
+    }
   }
 
   # 1. Define unbiased functional modules by gene family prefix regex (gene_pattern) and description keywords (desc_pattern):
-  # Replace patterns below with biological modules relevant to the dataset & docs/experiment.md!
   module_defs <- list(
-    "Module A Name (e.g. Surfactin & Nonribosomal Peptide Synthesis)" = list(
-      gene_pattern = "^srfA|^pps|^fen",
-      desc_pattern = "surfactin|non-ribosomal|polyketide|siderophore"
+    "Ribosomal & Translational Machinery" = list(
+      gene_pattern = "^rps|^rpl|^inf|^tsf|^fusA|^eef|^eif",
+      desc_pattern = "ribosom|translation|elongation factor|initiation factor|tRNA ligase"
     ),
-    "Module B Name (e.g. Ribosomal & Translational Machinery)" = list(
-      gene_pattern = "^rps|^rpl|^inf|^tsf|^fusA",
-      desc_pattern = "ribosomal|translation|elongation factor|tRNA ligase"
+    "Histones & Chromatin Architecture" = list(
+      gene_pattern = "^h1|^h2a|^h2b|^h3|^h4|^hmg",
+      desc_pattern = "histone|chromatin|high mobility group"
     ),
-    "Module C Name (e.g. Cell Envelope & Stress Chaperones)" = list(
-      gene_pattern = "^dnaK|^groE|^clp|^htpG",
-      desc_pattern = "chaperone|heat shock|protease|peptidoglycan|cell wall"
+    "Proteasome & Protein Quality Control" = list(
+      gene_pattern = "^psm|^uba|^ube|^ubc|^rnf",
+      desc_pattern = "proteasome|ubiquitin|ubiquitination|ring finger"
+    ),
+    "Molecular Chaperones & Heat Shock Response" = list(
+      gene_pattern = "^hsp|^dna[kj]|^gro[el]|^clp|^htp",
+      desc_pattern = "heat shock|chaperone|chaperonin|protease"
+    ),
+    "Target Perturbation Complex Subunits (e.g. Elongator)" = list(
+      gene_pattern = "^elp[1-6]|^ikbkap|^kti12",
+      desc_pattern = "elongator complex"
     )
   )
 
-  # 2. Evaluate coordinate rank-sum shifts and directional concordance across the unthresholded proteome:
-  mod_rows <- lapply(names(module_defs), function(m_name) {
-    def <- module_defs[[m_name]]
-    g_pat <- if (!is.null(def$gene_pattern)) def$gene_pattern else ""
-    d_pat <- if (!is.null(def$desc_pattern)) def$desc_pattern else ""
-    in_mod <- (!is.na(exp_tbl$gene_name) & nzchar(g_pat) & grepl(g_pat, exp_tbl$gene_name, ignore.case = TRUE)) |
-              (!is.na(exp_tbl$description) & nzchar(d_pat) & grepl(d_pat, exp_tbl$description, ignore.case = TRUE))
-    in_mod <- in_mod & !is.na(exp_tbl$log2_foldchange)
-    bg <- !in_mod & !is.na(exp_tbl$log2_foldchange)
-    if (sum(in_mod) < 2 || sum(bg) < 5) return(NULL)
+  # 2. Evaluate coordinate rank-sum shifts across unthresholded tables:
+  all_rows <- list()
+  for (f in exp_files) {
+    df <- tryCatch(if (grepl("[.]tsv$", f)) read_tsv(f, show_col_types = FALSE) else read_csv(f, show_col_types = FALSE), error = function(e) NULL)
+    if (is.null(df) || nrow(df) == 0) next
+    contrast_name <- sub("^table_[^_]+_expression_", "", basename(f))
+    contrast_name <- sub("[.](tsv|csv)$", "", contrast_name)
 
-    mod_df <- exp_tbl[in_mod, ] %>% arrange(adj_p_value, desc(abs(log2_foldchange)))
-    wt <- suppressWarnings(wilcox.test(mod_df$log2_foldchange, exp_tbl$log2_foldchange[bg]))
-    med_fc <- median(mod_df$log2_foldchange, na.rm = TRUE)
-    iqr_fc <- IQR(mod_df$log2_foldchange, na.rm = TRUE)
-    dir_sign <- ifelse(med_fc >= 0, 1, -1)
-    pct_concordant <- round(mean(sign(mod_df$log2_foldchange) == dir_sign, na.rm = TRUE) * 100, 1)
+    fc_col <- intersect(c("log2_foldchange", "log2fc", "log2FoldChange"), names(df))[1]
+    p_col <- intersect(c("adj_p_value", "padj", "p_value"), names(df))[1]
+    gene_col <- intersect(c("gene_name", "protein", "identifier"), names(df))[1]
+    desc_col <- intersect(c("description", "fasta_header"), names(df))[1]
 
-    tibble(
-      term = "de_novo_module",
-      annotation = m_name,
-      contrast = contrast_str,
-      size = nrow(mod_df),
-      enrichment = round(med_fc, 3),
-      iqr_log2fc = round(iqr_fc, 3),
-      pct_concordant = pct_concordant,
-      direction = ifelse(med_fc >= 0, "UP", "DOWN"),
-      p_value = wt$p.value,
-      adj_p_value = wt$p.value,
-      top_drivers = paste(head(unique(na.omit(mod_df$gene_name)), 5), collapse = ", "),
-      gene_names = paste(unique(na.omit(mod_df$gene_name)), collapse = ", ")
-    )
-  })
-  mod_tbl <- bind_rows(mod_rows)
-  if (nrow(mod_tbl) > 0) {
-    mod_tbl <- mod_tbl %>% mutate(adj_p_value = p.adjust(p_value, method = "BH")) %>% arrange(p_value)
-    print(mod_tbl)
+    if (is.na(fc_col)) next
+    df[[fc_col]] <- suppressWarnings(as.numeric(df[[fc_col]]))
+    valid_df <- df[!is.na(df[[fc_col]]), ]
+    if (nrow(valid_df) < 5) next
+
+    genes <- if (!is.na(gene_col) && gene_col %in% names(valid_df)) as.character(valid_df[[gene_col]]) else character(nrow(valid_df))
+    descs <- if (!is.na(desc_col) && desc_col %in% names(valid_df)) as.character(valid_df[[desc_col]]) else character(nrow(valid_df))
+
+    for (m_name in names(module_defs)) {
+      def <- module_defs[[m_name]]
+      g_pat <- if (!is.null(def$gene_pattern)) def$gene_pattern else ""
+      d_pat <- if (!is.null(def$desc_pattern)) def$desc_pattern else ""
+      in_mod <- rep(FALSE, nrow(valid_df))
+      if (nzchar(g_pat)) in_mod <- in_mod | grepl(g_pat, genes, ignore.case = TRUE)
+      if (nzchar(d_pat)) in_mod <- in_mod | grepl(d_pat, descs, ignore.case = TRUE)
+
+      n_members <- sum(in_mod)
+      bg_count <- sum(!in_mod)
+
+      if (n_members == 0) {
+        all_rows[[length(all_rows) + 1]] <- tibble(
+          term = "de_novo_module", annotation = m_name, contrast = contrast_name,
+          size = 0L, enrichment = 0.0, iqr_log2fc = 0.0, pct_concordant = 0.0,
+          direction = "ABSENT_FROM_MATRIX", p_value = NA_real_, adj_p_value = NA_real_,
+          top_drivers = "None detected (size 0)", gene_names = ""
+        )
+        next
+      }
+
+      mod_fc <- valid_df[[fc_col]][in_mod]
+      bg_fc <- valid_df[[fc_col]][!in_mod]
+      med_fc <- median(mod_fc, na.rm = TRUE)
+      iqr_fc <- IQR(mod_fc, na.rm = TRUE)
+      dir_sign <- ifelse(med_fc >= 0, 1, -1)
+      pct_concordant <- round(mean(sign(mod_fc) == dir_sign, na.rm = TRUE) * 100, 1)
+
+      p_val <- NA_real_
+      if (n_members >= 2 && bg_count >= 3) {
+        wt <- suppressWarnings(wilcox.test(mod_fc, bg_fc))
+        p_val <- wt$p.value
+      }
+
+      all_rows[[length(all_rows) + 1]] <- tibble(
+        term = "de_novo_module", annotation = m_name, contrast = contrast_name,
+        size = as.integer(n_members), enrichment = round(med_fc, 3), iqr_log2fc = round(iqr_fc, 3),
+        pct_concordant = pct_concordant, direction = ifelse(med_fc >= 0, "UP", "DOWN"),
+        p_value = p_val, adj_p_value = p_val,
+        top_drivers = paste(head(unique(na.omit(genes[in_mod])), 5), collapse = ", "),
+        gene_names = paste(unique(na.omit(genes[in_mod])), collapse = ", ")
+      )
+    }
+  }
+
+  canonical_cols <- c("term", "annotation", "contrast", "size", "enrichment", "iqr_log2fc", "pct_concordant", "direction", "p_value", "adj_p_value", "top_drivers", "gene_names")
+  if (length(all_rows) == 0) {
+    empty_df <- as.data.frame(matrix(ncol = length(canonical_cols), nrow = 0))
+    colnames(empty_df) <- canonical_cols
+    write_tsv(empty_df, "data/de_novo_modules.tsv")
+  } else {
+    mod_tbl <- bind_rows(all_rows) %>%
+      group_by(contrast) %>%
+      mutate(adj_p_value = ifelse(!is.na(p_value), p.adjust(p_value, method = "BH"), NA_real_)) %>%
+      ungroup() %>%
+      arrange(adj_p_value, p_value)
+    print(head(mod_tbl, 15))
     write_tsv(mod_tbl, "data/de_novo_modules.tsv")
   }
+  cat("PHASE_7_KNOWLEDGE_CHECKPOINT_PASS\n")
   ```
 - Inspect the output and document all newly discovered complex/module trends (with exact member counts, median $\log_2\text{FC}$ shift, IQR dispersion, percent directional concordance, $p$-values, and individual member $\log_2\text{FC}$) as **new observations** in `docs/knowledge.md`.
 

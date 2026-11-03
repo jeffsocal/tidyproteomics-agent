@@ -3,7 +3,7 @@ import * as fsSync from "fs";
 import * as path from "path";
 import { FolderStatus, LLMRole, ModelTokenUsage, PhaseInfo, PhaseStatus, PipelineState, PromptFileInfo, TokenUsage } from "../types";
 import { ContextBuilder } from "../agent/ContextBuilder";
-import { AgentLoop } from "../agent/AgentLoop";
+import { AgentLoop, AgentLoopState } from "../agent/AgentLoop";
 import { ChatLogger } from "../agent/ChatLogger";
 import { ProviderClient } from "../llm/ProviderClient";
 import { ToolRegistry } from "../tools/ToolRegistry";
@@ -15,10 +15,16 @@ export class PipelineOrchestrator {
   private phases: PhaseInfo[] = [];
   private auxiliaryTokens: Record<string, ModelTokenUsage> = {};
   private isRunning = false;
+  private isStopping = false;
   private isFullPipelineRunning = false;
   private shouldStop = false;
   private suppressNotifications = false;
   private chatLogger: ChatLogger;
+  private phaseLoopStates: Map<string, AgentLoopState> = new Map();
+  private activeLoop?: AgentLoop;
+  private currentRunController?: AbortController;
+  private activeRunPromise?: Promise<void>;
+  private activeRunId?: symbol;
 
   constructor(
     private workspaceRoot: string,
@@ -31,7 +37,8 @@ export class PipelineOrchestrator {
     private onAgentObservation?: (phase: PhaseInfo, text: string, metadata?: { badge?: string; metric?: string }) => void,
     private onPhaseStarted?: (phase: PhaseInfo) => void,
     private onPhaseCompleted?: (phase: PhaseInfo) => void,
-    private onPipelineFinished?: (state: PipelineState) => void
+    private onPipelineFinished?: (state: PipelineState) => void,
+    private onPhaseHalted?: (phase: PhaseInfo, reason?: string) => void
   ) {
     this.workspaceRoot = workspaceRoot || "";
     this.chatLogger = new ChatLogger(this.workspaceRoot);
@@ -403,7 +410,11 @@ export class PipelineOrchestrator {
   }
 
   public getIsRunning(): boolean {
-    return this.isRunning;
+    return this.isRunning || this.isStopping;
+  }
+
+  public isBusy(): boolean {
+    return this.isRunning || this.isStopping;
   }
 
   public getIsFullPipelineRunning(): boolean {
@@ -771,6 +782,21 @@ export class PipelineOrchestrator {
         const phaseProvider = isCompleted ? (prev?.provider || noteRec?.provider || phaseCfg.provider) : phaseCfg.provider;
         const phaseModelSource = isCompleted ? (prev?.modelSource || modelSource) : modelSource;
 
+        const baseMaxTurns = configStore.get("maxTurns") || 30;
+        const configuredPhaseTurns = configStore.get("phaseMaxTurns") || {};
+        const tagLower = path.basename(fileName).replace(/\.md$/i, "").toLowerCase();
+        let phaseMaxTurns = configuredPhaseTurns[id] || configuredPhaseTurns[tagLower] || baseMaxTurns;
+        if (!configuredPhaseTurns[id] && !configuredPhaseTurns[tagLower]) {
+          if (tagLower.includes("inspect")) {
+            phaseMaxTurns = Math.max(baseMaxTurns, 40);
+          } else if (tagLower.includes("synthesize") || tagLower.includes("synthesis")) {
+            phaseMaxTurns = Math.max(baseMaxTurns, 45);
+          } else if (tagLower.includes("normalize")) {
+            phaseMaxTurns = Math.max(baseMaxTurns, 30);
+          }
+        }
+        const canContinue = resolvedStatus === "failed";
+
         newPhases.push({
           id,
           fileName,
@@ -782,6 +808,8 @@ export class PipelineOrchestrator {
           endTime: prev?.endTime || noteRec?.endTime,
           durationSeconds: prev?.durationSeconds || noteRec?.durationSeconds,
           turnCount: prev?.turnCount ?? noteRec?.turnCount,
+          maxTurns: prev?.maxTurns || phaseMaxTurns,
+          canContinue: prev?.canContinue ?? canContinue,
           tokenUsage: prev?.tokenUsage || noteRec?.tokenUsage,
           summary: summaryText,
           error: prev?.error || (resolvedStatus === "failed" ? noteRec?.summary : undefined),
@@ -1048,7 +1076,7 @@ Construct and execute code for this phase, capturing output to logs.
       model: config.model,
       provider: config.provider,
       startTime: new Date().toISOString(),
-      isRunning: this.isRunning,
+      isRunning: this.isRunning || this.isStopping,
       isFullPipelineRunning: this.isFullPipelineRunning,
       currentPhaseIndex: this.phases.findIndex((p) => p.status === "running"),
       phases: this.phases,
@@ -1078,18 +1106,47 @@ Construct and execute code for this phase, capturing output to logs.
     }
   }
 
-  public stop() {
+  public async stop(): Promise<void> {
+    if (!this.isRunning && !this.isStopping) {
+      return;
+    }
     this.shouldStop = true;
+    this.isStopping = true;
     this.isFullPipelineRunning = false;
+
+    // Immediately abort active run controller & active loop
+    if (this.currentRunController) {
+      this.currentRunController.abort();
+    }
+    if (this.activeLoop) {
+      this.activeLoop.abort();
+    }
+
     for (const p of this.phases) {
       if (p.status === "running") {
         p.status = "failed";
         p.error = "Stopped by user";
       }
     }
+    this.logPipeline("Execution stopping: abort signal dispatched, waiting for active step to exit...");
+    await this.notifyState();
+
+    if (this.activeRunPromise) {
+      try {
+        await this.activeRunPromise;
+      } catch {
+        // ignore
+      }
+    }
+
     this.isRunning = false;
+    this.isStopping = false;
+    this.shouldStop = false;
+    this.currentRunController = undefined;
+    this.activeRunPromise = undefined;
+    this.activeLoop = undefined;
     this.logPipeline("Execution stopped by user.");
-    this.notifyState();
+    await this.notifyState();
   }
 
   /**
@@ -1144,7 +1201,7 @@ Construct and execute code for this phase, capturing output to logs.
    * Run a single phase in isolation with automatic cascading reset of downstream phases
    */
   public async runSinglePhase(phaseId: string) {
-    if (this.isRunning) {
+    if (this.isRunning || this.isStopping) {
       this.logPipeline("Execution busy: A pipeline or phase is already running. Please wait or stop it first.");
       return;
     }
@@ -1154,8 +1211,14 @@ Construct and execute code for this phase, capturing output to logs.
       return;
     }
 
+    const runController = new AbortController();
+    this.currentRunController = runController;
+    const runId = Symbol("runId");
+    this.activeRunId = runId;
+
     // Immediately acquire lock before any async awaits
     this.isRunning = true;
+    this.isStopping = false;
     this.isFullPipelineRunning = false;
     this.shouldStop = false;
 
@@ -1188,15 +1251,94 @@ Construct and execute code for this phase, capturing output to logs.
     // Notify UI immediately so downstream tasks visibly clear out to PENDING
     await this.notifyState();
 
-    try {
-      await this.executePhase(phaseIndex);
-    } catch (err: any) {
-      this.logPipeline(`Error running phase ${phaseId}: ${err.message}`);
-    } finally {
-      this.isRunning = false;
-      this.isFullPipelineRunning = false;
-      await this.notifyState();
+    const runPromise = (async () => {
+      try {
+        await this.executePhase(phaseIndex, undefined, runController.signal, runId);
+      } catch (err: any) {
+        this.logPipeline(`Error running phase ${phaseId}: ${err.message}`);
+      } finally {
+        if (this.activeRunId === runId) {
+          this.isRunning = false;
+          this.isStopping = false;
+          this.isFullPipelineRunning = false;
+          this.currentRunController = undefined;
+          this.activeRunPromise = undefined;
+          this.activeLoop = undefined;
+          await this.notifyState();
+        }
+      }
+    })();
+    this.activeRunPromise = runPromise;
+    await runPromise;
+  }
+
+  /**
+   * Set custom maximum turn limit for a specific phase
+   */
+  public setPhaseMaxTurns(phaseId: string, maxTurns: number) {
+    const configured = configStore.get("phaseMaxTurns") || {};
+    configured[phaseId] = Math.max(1, maxTurns);
+    configStore.update({ phaseMaxTurns: configured });
+    const p = this.phases.find((ph) => ph.id === phaseId || ph.fileName.includes(phaseId));
+    if (p) {
+      p.maxTurns = Math.max(1, maxTurns);
+      this.notifyState();
     }
+  }
+
+  /**
+   * Continue a paused, turn-limited, or failed phase with additional turns WITHOUT restarting
+   */
+  public async continuePhase(phaseId: string, additionalTurns = 10): Promise<boolean> {
+    if (this.isRunning || this.isStopping) {
+      this.logPipeline("Execution busy: A pipeline or phase is already running. Please wait or stop it first.");
+      return false;
+    }
+    const phaseIndex = this.phases.findIndex((p) => p.id === phaseId || p.fileName.includes(phaseId));
+    if (phaseIndex === -1) {
+      this.logPipeline(`Phase ID '${phaseId}' not found.`);
+      return false;
+    }
+
+    const runController = new AbortController();
+    this.currentRunController = runController;
+    const runId = Symbol("runId");
+    this.activeRunId = runId;
+
+    const phase = this.phases[phaseIndex];
+    this.isRunning = true;
+    this.isStopping = false;
+    this.isFullPipelineRunning = false;
+    this.shouldStop = false;
+
+    // In continuation, DO NOT prune notes from this phase
+    phase.status = "running";
+    phase.error = undefined;
+    await this.notifyState();
+
+    this.logPipeline(`Continuing Phase ${phase.id} (${phase.title}) with +${additionalTurns} additional turns...`);
+
+    let success = false;
+    const runPromise = (async () => {
+      try {
+        success = await this.executePhase(phaseIndex, additionalTurns, runController.signal, runId);
+      } catch (err: any) {
+        this.logPipeline(`Error continuing phase ${phaseId}: ${err.message}`);
+      } finally {
+        if (this.activeRunId === runId) {
+          this.isRunning = false;
+          this.isStopping = false;
+          this.isFullPipelineRunning = false;
+          this.currentRunController = undefined;
+          this.activeRunPromise = undefined;
+          this.activeLoop = undefined;
+          await this.notifyState();
+        }
+      }
+    })();
+    this.activeRunPromise = runPromise;
+    await runPromise;
+    return success;
   }
 
   /**
@@ -1204,7 +1346,7 @@ Construct and execute code for this phase, capturing output to logs.
    * running sequentially through all remaining downstream phases.
    */
   public async resumePipeline(fromPhaseId?: string): Promise<void> {
-    if (this.isRunning) {
+    if (this.isRunning || this.isStopping) {
       this.logPipeline("Execution busy: A pipeline or phase is already running. Please wait or stop it first.");
       return;
     }
@@ -1244,8 +1386,14 @@ Construct and execute code for this phase, capturing output to logs.
       return;
     }
 
+    const runController = new AbortController();
+    this.currentRunController = runController;
+    const runId = Symbol("runId");
+    this.activeRunId = runId;
+
     // Immediately acquire lock before any async awaits
     this.isRunning = true;
+    this.isStopping = false;
     this.isFullPipelineRunning = true;
     this.shouldStop = false;
 
@@ -1271,41 +1419,51 @@ Construct and execute code for this phase, capturing output to logs.
     await this.pruneNotesFromPhase(startIndex);
     await this.notifyState();
 
-    try {
-      for (let i = startIndex; i < this.phases.length; i++) {
-        if (this.shouldStop) {
-          this.logPipeline("Execution stopped by user.");
-          break;
+    const runPromise = (async () => {
+      try {
+        for (let i = startIndex; i < this.phases.length; i++) {
+          if (this.shouldStop || runController.signal.aborted || this.activeRunId !== runId) {
+            this.logPipeline("Execution stopped by user.");
+            break;
+          }
+
+          const phase = this.phases[i];
+          if (!phase.enabled) {
+            this.logPipeline(`Skipping disabled phase: ${phase.title}`);
+            continue;
+          }
+
+          await this.pruneNotesFromPhase(i);
+
+          const success = await this.executePhase(i, undefined, runController.signal, runId);
+          if (!success || this.shouldStop || runController.signal.aborted || this.activeRunId !== runId) {
+            this.logPipeline(`Pipeline paused due to checkpoint failure in ${phase.title}`);
+            break;
+          }
         }
-
-        const phase = this.phases[i];
-        if (!phase.enabled) {
-          this.logPipeline(`Skipping disabled phase: ${phase.title}`);
-          continue;
+        if (!this.shouldStop && !runController.signal.aborted && this.activeRunId === runId && this.phases.length > 0 && this.phases.every((p) => !p.enabled || p.status === "completed")) {
+          this.logPipeline("All phases completed successfully.");
+          if (!this.suppressNotifications) {
+            this.onPipelineFinished?.(await this.getState());
+          }
         }
-
-        await this.pruneNotesFromPhase(i);
-
-        const success = await this.executePhase(i);
-        if (!success) {
-          this.logPipeline(`Pipeline paused due to checkpoint failure in ${phase.title}`);
-          break;
+      } catch (err: any) {
+        this.logPipeline(`Full pipeline error: ${err.message}`);
+      } finally {
+        if (this.activeRunId === runId) {
+          this.isRunning = false;
+          this.isStopping = false;
+          this.isFullPipelineRunning = false;
+          this.shouldStop = false;
+          this.currentRunController = undefined;
+          this.activeRunPromise = undefined;
+          this.activeLoop = undefined;
+          await this.notifyState();
         }
       }
-      if (!this.shouldStop && this.phases.length > 0 && this.phases.every((p) => !p.enabled || p.status === "completed")) {
-        this.logPipeline("All phases completed successfully.");
-        if (!this.suppressNotifications) {
-          this.onPipelineFinished?.(await this.getState());
-        }
-      }
-    } catch (err: any) {
-      this.logPipeline(`Full pipeline error: ${err.message}`);
-    } finally {
-      this.isRunning = false;
-      this.isFullPipelineRunning = false;
-      this.shouldStop = false;
-      await this.notifyState();
-    }
+    })();
+    this.activeRunPromise = runPromise;
+    await runPromise;
   }
 
   /**
@@ -1320,7 +1478,7 @@ Construct and execute code for this phase, capturing output to logs.
    * If not forced from beginning, automatically resumes from the first incomplete phase.
    */
   public async runFullPipeline(forceFromBeginning = false) {
-    if (this.isRunning) {
+    if (this.isRunning || this.isStopping) {
       this.logPipeline("Execution busy: A pipeline is already running.");
       return;
     }
@@ -1339,8 +1497,14 @@ Construct and execute code for this phase, capturing output to logs.
       return;
     }
 
+    const runController = new AbortController();
+    this.currentRunController = runController;
+    const runId = Symbol("runId");
+    this.activeRunId = runId;
+
     // Immediately acquire lock before any async awaits
     this.isRunning = true;
+    this.isStopping = false;
     this.isFullPipelineRunning = true;
     this.shouldStop = false;
 
@@ -1360,45 +1524,63 @@ Construct and execute code for this phase, capturing output to logs.
     this.logPipeline(`Starting autonomous run at ${new Date().toLocaleTimeString()}`);
     this.logPipeline(`Working Directory: ${this.workspaceRoot}`);
 
-    try {
-      for (let i = 0; i < this.phases.length; i++) {
-        if (this.shouldStop) {
-          this.logPipeline("Execution stopped by user.");
-          break;
+    const runPromise = (async () => {
+      try {
+        for (let i = 0; i < this.phases.length; i++) {
+          if (this.shouldStop || runController.signal.aborted || this.activeRunId !== runId) {
+            this.logPipeline("Execution stopped by user.");
+            break;
+          }
+
+          const phase = this.phases[i];
+          if (!phase.enabled) {
+            this.logPipeline(`Skipping disabled phase: ${phase.title}`);
+            continue;
+          }
+
+          // Prune any existing note for phase i before executing it
+          await this.pruneNotesFromPhase(i);
+
+          const success = await this.executePhase(i, undefined, runController.signal, runId);
+          if (!success || this.shouldStop || runController.signal.aborted || this.activeRunId !== runId) {
+            this.logPipeline(`Pipeline paused due to checkpoint failure in ${phase.title}`);
+            break;
+          }
         }
-
-        const phase = this.phases[i];
-        if (!phase.enabled) {
-          this.logPipeline(`Skipping disabled phase: ${phase.title}`);
-          continue;
+        if (!this.shouldStop && !runController.signal.aborted && this.activeRunId === runId && this.phases.length > 0 && this.phases.every((p) => !p.enabled || p.status === "completed")) {
+          this.logPipeline("All phases completed successfully.");
+          if (!this.suppressNotifications) {
+            this.onPipelineFinished?.(await this.getState());
+          }
         }
-
-        // Prune any existing note for phase i before executing it
-        await this.pruneNotesFromPhase(i);
-
-        const success = await this.executePhase(i);
-        if (!success) {
-          this.logPipeline(`Pipeline paused due to checkpoint failure in ${phase.title}`);
-          break;
+      } catch (err: any) {
+        this.logPipeline(`Full pipeline error: ${err.message}`);
+      } finally {
+        if (this.activeRunId === runId) {
+          this.isRunning = false;
+          this.isStopping = false;
+          this.isFullPipelineRunning = false;
+          this.shouldStop = false;
+          this.currentRunController = undefined;
+          this.activeRunPromise = undefined;
+          this.activeLoop = undefined;
+          await this.notifyState();
         }
       }
-      if (!this.shouldStop && this.phases.length > 0 && this.phases.every((p) => !p.enabled || p.status === "completed")) {
-        this.logPipeline("All phases completed successfully.");
-        if (!this.suppressNotifications) {
-          this.onPipelineFinished?.(await this.getState());
-        }
-      }
-    } catch (err: any) {
-      this.logPipeline(`Full pipeline error: ${err.message}`);
-    } finally {
-      this.isRunning = false;
-      this.isFullPipelineRunning = false;
-      this.shouldStop = false;
-      await this.notifyState();
-    }
+    })();
+    this.activeRunPromise = runPromise;
+    await runPromise;
   }
 
-  private async executePhase(index: number): Promise<boolean> {
+  private async executePhase(
+    index: number,
+    continuationTurns?: number,
+    abortSignal?: AbortSignal,
+    runId?: symbol
+  ): Promise<boolean> {
+    if (this.shouldStop || abortSignal?.aborted || (runId && this.activeRunId !== runId)) {
+      return false;
+    }
     const targetId = this.phases[index]?.id;
     const getActivePhase = (): PhaseInfo => {
       if (targetId) {
@@ -1411,13 +1593,14 @@ Construct and execute code for this phase, capturing output to logs.
     const phase = getActivePhase();
     if (!phase) return false;
 
+    const isContinuing = Boolean(continuationTurns && continuationTurns > 0);
     const phaseTagUpper = path.basename(phase.fileName).replace(/\.md$/i, "").toUpperCase();
     const phaseTag = phaseTagUpper;
     const cleanTitle = (phase.title || "").replace(/^Phase\s+\d+:\s*/i, "").trim();
     this.chatLogger.setPhase(phase.fileName);
 
     phase.status = "running";
-    phase.startTime = new Date().toISOString();
+    phase.startTime = phase.startTime || new Date().toISOString();
     phase.endTime = undefined;
     phase.error = undefined;
     if (!phase.tokenUsage) {
@@ -1427,7 +1610,11 @@ Construct and execute code for this phase, capturing output to logs.
     await this.notifyState();
 
     this.onLog(`Phase: ${phaseTagUpper}`);
-    this.logPhase(phaseTagUpper, `[Starting] ${cleanTitle} (${phase.fileName})`);
+    if (isContinuing) {
+      this.logPhase(phaseTagUpper, `[Continuing] ${cleanTitle} (+${continuationTurns} turns granted)`);
+    } else {
+      this.logPhase(phaseTagUpper, `[Starting] ${cleanTitle} (${phase.fileName})`);
+    }
     if (!this.suppressNotifications) {
       this.onPhaseStarted?.(phase);
     }
@@ -1467,6 +1654,35 @@ Construct and execute code for this phase, capturing output to logs.
         phaseTag,
         `Allocated ${roleLabel} (${phaseModelCfg.provider})`
       );
+
+      const baseMaxTurns = configStore.get("maxTurns") || 30;
+      const configuredPhaseTurns = configStore.get("phaseMaxTurns") || {};
+      const phaseTagLower = phaseTag.toLowerCase();
+      let phaseMaxTurns = configuredPhaseTurns[phase.id] || configuredPhaseTurns[phaseTagLower] || baseMaxTurns;
+
+      if (!configuredPhaseTurns[phase.id] && !configuredPhaseTurns[phaseTagLower]) {
+        if (phaseTagLower.includes("inspect")) {
+          phaseMaxTurns = Math.max(baseMaxTurns, 40);
+        } else if (phaseTagLower.includes("synthesize") || phaseTagLower.includes("synthesis")) {
+          phaseMaxTurns = Math.max(baseMaxTurns, 45);
+        } else if (phaseTagLower.includes("normalize")) {
+          phaseMaxTurns = Math.max(baseMaxTurns, 30);
+        } else if (phaseTagLower.includes("integrity")) {
+          phaseMaxTurns = 6;
+        }
+      }
+      phase.maxTurns = phaseMaxTurns;
+
+      let existingState: AgentLoopState | null = null;
+      if (isContinuing) {
+        existingState = this.phaseLoopStates.get(phase.id) || null;
+        if (!existingState) {
+          existingState = await AgentLoop.loadCheckpointState(this.workspaceRoot, phase.fileName);
+          if (existingState) {
+            this.phaseLoopStates.set(phase.id, existingState);
+          }
+        }
+      }
 
       loop = new AgentLoop(
         phase.fileName,
@@ -1556,25 +1772,27 @@ Construct and execute code for this phase, capturing output to logs.
           }
         },
         this.chatLogger,
-        () => this.shouldStop
+        () => this.shouldStop || (abortSignal?.aborted ?? false) || (runId ? this.activeRunId !== runId : false),
+        existingState || undefined,
+        abortSignal
       );
+      this.activeLoop = loop;
 
-      const baseMaxTurns = configStore.get("maxTurns") || 30;
-      let phaseMaxTurns = baseMaxTurns;
-      const phaseTagLower = phaseTag.toLowerCase();
-      // Dynamically balance turn allocations across phases
-      if (phaseTagLower.includes("normalize") || phaseTagLower.includes("synthesis")) {
-        phaseMaxTurns = Math.max(baseMaxTurns, 30);
-      }
-      const result = await loop.run(phaseMaxTurns);
+      const result = (isContinuing && existingState)
+        ? await loop.continue(continuationTurns)
+        : await loop.run(phaseMaxTurns);
+
+      this.phaseLoopStates.set(phase.id, loop.getState());
       const durationSeconds = Math.max(1, Math.round((Date.now() - startTimeMs) / 1000));
       const currentPhase = getActivePhase();
 
       currentPhase.endTime = new Date().toISOString();
       currentPhase.durationSeconds = durationSeconds;
       currentPhase.turnCount = result.turnCount;
+      currentPhase.maxTurns = loop.getState().maxTurns;
       currentPhase.tokenUsage = result.tokensUsed;
       currentPhase.summary = result.summary;
+      currentPhase.canContinue = !result.success;
       currentPhase.associatedFiles = this.resolveAssociatedFiles(currentPhase.fileName, currentPhase.id, result.summary);
 
       if (result.success) {
@@ -1592,12 +1810,19 @@ Construct and execute code for this phase, capturing output to logs.
         }
         return true;
       } else {
-        currentPhase.status = "failed";
-        currentPhase.error = result.summary;
         const summaryText = String(result.summary || "Phase failed").trim();
+        const isHitl = /human-in-the-loop|hitl|study design gate|checkpoint gate|pre-flight|confirmation required|section 3/i.test(
+          summaryText
+        );
+        currentPhase.status = isHitl ? "awaiting_hitl" : "failed";
+        currentPhase.error = result.summary;
         const lines = summaryText.split("\n");
         const firstLine = lines[0];
-        this.logPhase(phaseTag, `❌ [Failed] ${cleanTitle}: ${firstLine}`);
+        if (isHitl) {
+          this.logPhase(phaseTag, `🛑 [HITL Checkpoint] ${cleanTitle}: ${firstLine}`);
+        } else {
+          this.logPhase(phaseTag, `❌ [Failed] ${cleanTitle}: ${firstLine}`);
+        }
         for (let i = 1; i < lines.length; i++) {
           const line = lines[i].trim();
           if (line) {
@@ -1606,18 +1831,28 @@ Construct and execute code for this phase, capturing output to logs.
         }
         await this.appendPhaseRecordToNotes(currentPhase);
         await this.notifyState();
+        if (!this.suppressNotifications) {
+          this.onPhaseHalted?.(currentPhase, result.summary);
+        }
         return false;
       }
     } catch (err: any) {
       const currentPhase = getActivePhase();
-      currentPhase.status = "failed";
+      const isHitl = /human-in-the-loop|hitl|study design gate|confirmation required/i.test(err.message || "");
+      currentPhase.status = isHitl ? "awaiting_hitl" : "failed";
+      currentPhase.canContinue = true;
       currentPhase.error = err.message;
       if (loop && (!currentPhase.tokenUsage || currentPhase.tokenUsage.totalTokens === 0)) {
         currentPhase.tokenUsage = loop.getTotalUsage();
       }
       this.logPhase(phaseTag, `❌ Error in ${cleanTitle}: ${err.message}`);
       await this.notifyState();
+      if (!this.suppressNotifications) {
+        this.onPhaseHalted?.(currentPhase, err.message);
+      }
       return false;
+    } finally {
+      this.activeLoop = undefined;
     }
   }
 

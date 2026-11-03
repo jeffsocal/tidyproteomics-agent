@@ -37,6 +37,7 @@ export interface AppConfig {
   tierToolRunner?: LLMTierConfig;
   tierReasoner?: LLMTierConfig;
   phaseModels?: Record<string, string>;
+  phaseMaxTurns?: Record<string, number>;
 }
 
 export interface TokenUsage {
@@ -46,7 +47,7 @@ export interface TokenUsage {
   cachedPromptTokens?: number;
 }
 
-export type PhaseStatus = "pending" | "running" | "completed" | "failed";
+export type PhaseStatus = "pending" | "running" | "completed" | "failed" | "awaiting_hitl";
 
 export interface PhaseInfo {
   id: string;
@@ -59,6 +60,8 @@ export interface PhaseInfo {
   endTime?: string;
   durationSeconds?: number;
   turnCount?: number;
+  maxTurns?: number;
+  canContinue?: boolean;
   tokenUsage?: TokenUsage;
   summary?: string;
   error?: string;
@@ -116,6 +119,12 @@ export interface ExperimentSpec {
   batchConfoundingAuthorized: boolean;
   batchConfoundingConfirmed: boolean;
   batchConfoundingRationale?: string;
+  annotationSource?: string;
+  annotationFilePath?: string;
+  annotationTaxonId?: string;
+  annotationOntologies?: string;
+  annotationValidationStatus?: string;
+  annotationConfirmed?: boolean;
   missingInitialFields: ("PATH_TO_DATA_FILE" | "PLATFORM" | "ANALYTE" | "DESCRIPTION")[];
 }
 
@@ -166,7 +175,7 @@ export interface ChatSessionSearchResult extends ChatSessionSummary {
 export interface ViewerTab {
   id: string;
   title: string;
-  kind: "experiment" | "progress" | "file" | "settings" | "evaluation";
+  kind: "experiment" | "progress" | "file" | "settings" | "evaluation" | "library" | "howto" | "guides";
   relPath?: string;
   pinned?: boolean;
 }
@@ -204,6 +213,7 @@ export interface LiteratureInfo {
 export interface LiteratureConfig {
   activeLiterature?: string;
   useInSynthesis: boolean;
+  bypassLiterature?: boolean;
   updatedAt?: string;
 }
 
@@ -229,6 +239,7 @@ export interface LiteratureViewState {
   config: LiteratureConfig;
   activeLiterature?: string;
   useInSynthesis?: boolean;
+  bypassLiterature?: boolean;
   activeLiteratureInfo?: LiteratureInfo;
   ingestFolder?: string;
   queue: IngestQueueItem[];
@@ -259,6 +270,7 @@ export function resolvePhaseVisualState(
     isImputationNeeded ||
     isStudyDesignNeeded ||
     /attention|action required|confirm.*proceed/i.test(errText) ||
+    rawStatus === "awaiting_hitl" ||
     rawStatus === "warning" ||
     rawStatus === "needs_attention";
 
@@ -267,6 +279,9 @@ export function resolvePhaseVisualState(
   }
   if (rawStatus === "completed" || rawStatus === "cached") {
     return { state: "completed", label: "COMPLETED", isAttention: false };
+  }
+  if (rawStatus === "awaiting_hitl") {
+    return { state: "warning", label: "AWAITING HITL", isAttention: true };
   }
   if (isAttention) {
     return { state: "warning", label: "ATTENTION", isAttention: true };

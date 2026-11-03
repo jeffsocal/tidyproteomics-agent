@@ -25,12 +25,12 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/03_i
   3. **No Imputation / Complete-Case Bypass (`none`)**:
      - *Characteristics*: Complete-case dataset (e.g. single TMT plex), `0%` missing values detected, or pre-existing imputation already recorded in operations history. Bypass imputation to preserve empirical ground truth.
 - [ ] **Fast-Path Imputation Confirmation Check (`docs/experiment.md` Section 3.C)**:
-  - If pre-existing imputation is recorded in operations history OR total missingness is `0%`, proceed autonomously (pass-through / bypass) without halting.
-  - If Section 3.C was already confirmed during the Phase 2.1b Unified Study Design Gate (`- **Confirm Imputation Strategy**: TRUE`), proceed immediately to **Phase 3.2** in the same turn without halting.
-  - **Autonomous / Headless Mode Check**: If `docs/experiment.md` contains `- **Autonomous Mode**: TRUE` or `- **Auto-Confirm**: TRUE`, ensure Section 3.C is set to `TRUE` via `replace_file_content` and proceed immediately without calling `fail_phase`.
-  - Only if `- **Confirm Imputation Strategy**: FALSE` (and NOT in Autonomous Mode):
-    1. Ensure Section 3.C in `docs/experiment.md` is populated with the recommended `- **Imputation Method**: <randomforest_grouped|min_column>` and a concise HTML comment `<!-- Agent Imputation Rationale: ... -->`.
-    2. Halt execution cleanly via `fail_phase`:
+  - If pre-existing imputation is recorded in operations history OR true matrix missingness is confirmed 0% across all sample replicates, proceed autonomously (pass-through / bypass) without halting.
+  - If Section 3.C was already confirmed during the Phase 2.1b Unified Study Design Gate (`- **Confirm Imputation Strategy**: TRUE`), proceed immediately to **Phase 3.2** in the same turn without halting. Do NOT mutate confirmed `min_column` or `randomforest_grouped` methods to `none`.
+  - If `- **Confirm Imputation Strategy**: FALSE`:
+    1. Ensure Section 3.C in `docs/experiment.md` is populated with the recommended `- **Imputation Method**: <randomforest_grouped|min_column>` and a concise HTML comment `<!-- Agent Imputation Rationale: ... -->`, keeping `Confirm Imputation Strategy: FALSE`.
+    2. **DO NOT self-confirm**: Autonomous agents are strictly prohibited from changing `Confirm Imputation Strategy: FALSE` to `TRUE`.
+    3. Halt execution cleanly via `fail_phase`:
        ```
        fail_phase(
          phaseName = "03_IMPUTE",

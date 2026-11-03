@@ -79,6 +79,13 @@ export class ChatLogger {
     return this.writeQueue;
   }
 
+  /**
+   * Flushes any pending asynchronous file write operations.
+   */
+  public async flush(): Promise<void> {
+    await this.writeQueue;
+  }
+
   private async append(text: string): Promise<void> {
     const target = this.logPath || this.pipelineLogPath;
     return this.appendToFile(target, text);
@@ -116,6 +123,7 @@ export class ChatLogger {
     systemPromptFiles?: string[];
     inputPromptFiles?: string[];
   }): Promise<void> {
+    await this.flush();
     this.setPhase(params.phaseFileName);
     await this.ensurePipelineSummaryHeader();
 
@@ -165,6 +173,32 @@ export class ChatLogger {
     ];
 
     await this.append(lines.join("\n"));
+  }
+
+  public async logPhaseResume(params: {
+    turn: number;
+    newMaxTurns: number;
+    additionalTurns: number;
+  }): Promise<void> {
+    const timestamp = new Date().toISOString();
+    const lines = [
+      "",
+      "---",
+      "",
+      `### [${timestamp}] Phase Resumed (Continuing Turns ${params.turn + 1} to ${params.newMaxTurns})`,
+      `- **Resumed at Turn**: ${params.turn}`,
+      `- **Additional Turns Granted**: +${params.additionalTurns}`,
+      `- **New Turn Budget**: ${params.newMaxTurns} turns`,
+      "",
+    ];
+    await this.append(lines.join("\n"));
+
+    if (this.consoleLogPath) {
+      await this.appendToFile(
+        this.consoleLogPath,
+        `\n=== Phase Resumed: Turn ${params.turn + 1}/${params.newMaxTurns} (+${params.additionalTurns} turns granted) [${timestamp}] ===\n`
+      );
+    }
   }
 
   public async logAssistantResponse(
@@ -402,10 +436,54 @@ export class ChatLogger {
     const targetChatLog = this.resolveLogPath(`logs/${phaseTag}/chat.md`);
     await this.appendToFile(targetChatLog || this.logPath || this.pipelineLogPath, banner);
 
-    // Update master pipeline.md index table
+    // Update master pipeline.md index table (in place if row already exists, otherwise append)
     if (this.pipelineLogPath) {
-      const summaryRow = `| ${statusIcon} **${phaseTag}** | ${params.phaseTitle} | ${statusText} | ${params.durationSeconds}s | ${params.tokensUsed.totalTokens.toLocaleString()} | [Chat](./${phaseTag}/chat.md) \\| [Console](./${phaseTag}/console.log) |`;
-      await this.appendToFile(this.pipelineLogPath, summaryRow);
+      let statusDisplay = statusText;
+      if (!params.success && params.summary) {
+        const firstLine = params.summary.replace(/^[❌⚠️\[\]\s*]+/, "").split("\n")[0].trim();
+        const shortReason = firstLine.length > 45 ? `${firstLine.slice(0, 42)}...` : firstLine;
+        if (shortReason) {
+          statusDisplay = `FAILED: ${shortReason}`;
+        }
+      }
+      const summaryRow = `| ${statusIcon} **${phaseTag}** | ${params.phaseTitle} | ${statusDisplay} | ${params.durationSeconds}s | ${params.tokensUsed.totalTokens.toLocaleString()} | [Chat](./${phaseTag}/chat.md) \\| [Console](./${phaseTag}/console.log) |`;
+      await this.updatePipelineSummaryRow(phaseTag, summaryRow);
     }
+    await this.flush();
+  }
+
+  private async updatePipelineSummaryRow(phaseTag: string, summaryRow: string): Promise<void> {
+    if (!this.pipelineLogPath) return;
+    await this.writeQueue.then(async () => {
+      try {
+        let content = "";
+        try {
+          content = await fs.readFile(this.pipelineLogPath, "utf-8");
+        } catch {
+          await this.ensurePipelineSummaryHeader();
+          content = await fs.readFile(this.pipelineLogPath, "utf-8");
+        }
+
+        const lines = content.split("\n");
+        const regex = new RegExp(`^\\|\\s*(?:✓|❌)?\\s*\\*\\*${phaseTag}\\*\\*\\s*\\|`, "i");
+        let foundIndex = -1;
+        for (let i = 0; i < lines.length; i++) {
+          if (regex.test(lines[i])) {
+            foundIndex = i;
+            break;
+          }
+        }
+
+        if (foundIndex !== -1) {
+          lines[foundIndex] = summaryRow;
+          await fs.writeFile(this.pipelineLogPath, lines.join("\n"), "utf-8");
+        } else {
+          lines.push(summaryRow);
+          await fs.writeFile(this.pipelineLogPath, lines.join("\n"), "utf-8");
+        }
+      } catch (err) {
+        console.warn("[ChatLogger] Error updating pipeline summary row:", err);
+      }
+    });
   }
 }
