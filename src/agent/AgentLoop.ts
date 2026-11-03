@@ -1263,7 +1263,9 @@ DO NOT repeat the identical failing command without structural fixes:
     if (normPhase.includes("inspect") || normPhase.includes("ingest") || normPhase.includes("import_table")) {
       const hasRds = await checkFile("data/tidyproteomics_data.rds");
       const hasCounts = await checkFile("data/*counts*.png");
+      const hasDataMd = await checkFile("docs/data.md");
       if (!hasRds && !hasCounts) missing.push("data/tidyproteomics_data.rds or data/*counts*.png");
+      if (!hasDataMd) missing.push("docs/data.md (dataset overview and ingestion audit document)");
     } else if (normPhase.includes("normalize")) {
       const hasRds = await checkFile("data/tidyproteomics_data.rds");
       if (!hasRds) missing.push("data/tidyproteomics_data.rds");

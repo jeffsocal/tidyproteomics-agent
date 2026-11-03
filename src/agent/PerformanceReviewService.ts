@@ -202,6 +202,7 @@ export class PerformanceReviewService {
 
     // 5. Scientific Findings & Hypotheses Documentation
     const docFiles = [
+      { name: "docs/data.md", label: "Dataset Overview & Ingestion Audit (Phase 01+)" },
       { name: "docs/observations.md", label: "Primary Observations & Inferences (Phase 06)" },
       { name: "docs/knowledge.md", label: "Biological Knowledge & Module Deductions (Phase 07)" },
       { name: "docs/manuscript.md", label: "Scientific Manuscript (Phase 11 Synthesis)" },

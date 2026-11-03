@@ -24,6 +24,10 @@ suppressPackageStartupMessages({
 STATE <- new.env(parent = emptyenv())
 STATE$datasets <- list()
 STATE$active_id <- "rdata"
+STATE$last_input_audit_md <- NULL
+STATE$last_input_audit_file <- NULL
+STATE$last_ingest_config_md <- NULL
+STATE$last_ingest_config_platform <- NULL
 STATE$pipeline_code <- c(
   "# ==============================================================================",
   "# Auto-generated Reproducible tidyproteomics Analysis Pipeline",
@@ -315,6 +319,212 @@ resolve_workspace_file <- function(file_path) {
     if (file.exists(ws_path)) return(ws_path)
   }
   return(trimmed)
+}
+
+# Helper: Write and update docs/data.md with structured tables for Ingestion Configuration,
+# Input Header Audit, Sample Accounting, Sample Variabilities, and Functional Annotations.
+update_data_overview_doc <- function(data, file_path = "docs/data.md", phase_tag = NULL) {
+  if (is.null(data) || !"tidyproteomics" %in% class(data)) return(NULL)
+
+  target_file <- resolve_workspace_file(file_path)
+  dir.create(dirname(target_file), recursive = TRUE, showWarnings = FALSE)
+
+  id_col <- if (!is.null(data$identifier)) data$identifier[1] else "protein"
+  analyte_name <- if (!is.null(data$analyte) && nzchar(data$analyte)) data$analyte else "proteins"
+  platform_name <- if (!is.null(data$platform) && nzchar(data$platform)) data$platform else "Unknown Platform"
+  active_assay <- if (!is.null(data$quantitative_source)) data$quantitative_source else "raw"
+
+  dataset_proteins <- get_unique_variables(data, id_col, format = "vector")
+  n_entities <- length(dataset_proteins)
+  n_files <- if (!is.null(data$experiments)) nrow(data$experiments) else 0
+  n_samples <- if (!is.null(data$experiments$sample)) length(unique(data$experiments$sample)) else 0
+
+  curr_time <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+
+  # 1. Header
+  lines <- c(
+    "# Dataset Overview & Ingestion Audit",
+    "",
+    glue::glue("- **Created / Updated**: `{curr_time}`"),
+    glue::glue("- **Phase Context**: {if (!is.null(phase_tag)) phase_tag else 'Phase 01: Ingestion & Inspection'}"),
+    glue::glue("- **Platform**: `{platform_name}` | **Analyte**: `{analyte_name}`"),
+    glue::glue("- **Active Quantitative Assay**: `{active_assay}`"),
+    glue::glue("- **Dimensions**: {format(n_entities, big.mark = ',')} {analyte_name} across {n_files} raw files ({n_samples} biological sample groups)"),
+    "",
+    "---",
+    ""
+  )
+
+  # 2. Ingestion Configuration
+  lines <- c(lines, "## 1. Ingestion Configuration", "")
+  cfg_table_md <- STATE$last_ingest_config_md
+  if (is.null(cfg_table_md) || !nzchar(cfg_table_md)) {
+    cfg_df <- tryCatch(tidyproteomics::ingest_config(platform = platform_name, analyte = analyte_name, action = "view"), error = function(e) NULL)
+    if (!is.null(cfg_df) && nrow(cfg_df) > 0) {
+      cfg_table_md <- paste0(
+        "| Category | Column Defined | Import Pattern | Pattern Extract | Pivot |\n",
+        "| :--- | :--- | :--- | :--- | :--- |\n",
+        paste(apply(cfg_df, 1, function(r) {
+          sprintf("| %s | %s | `%s` | `%s` | %s |",
+                  r["category"], r["column_defined"],
+                  if (!is.na(r["column_import"])) r["column_import"] else "-",
+                  if (!is.na(r["pattern_extract"])) r["pattern_extract"] else "-",
+                  if (!is.na(r["pivot"])) r["pivot"] else "-")
+        }), collapse = "\n")
+      )
+    }
+  }
+  if (!is.null(cfg_table_md) && nzchar(cfg_table_md)) {
+    lines <- c(lines, cfg_table_md, "")
+  } else {
+    lines <- c(lines, "_Ingestion configuration table loaded from default platform presets._", "")
+  }
+
+  # 3. Input Header Audit
+  lines <- c(lines, "## 2. Input Header Audit (`tpa_input_audit`)", "")
+  audit_table_md <- STATE$last_input_audit_md
+  if (!is.null(audit_table_md) && nzchar(audit_table_md)) {
+    lines <- c(lines, audit_table_md, "")
+  } else {
+    lines <- c(lines, "_Input audit results recorded from pre-flight header inspection._", "")
+  }
+
+  # 4. Sample Accounting Summaries
+  lines <- c(lines, "## 3. Sample Accounting Summaries", "")
+  sm <- tryCatch(tidyproteomics:::stats_summary(data, group_by = "sample"), error = function(e) NULL)
+  exp_tbl <- data$experiments
+  if (!is.null(sm) && nrow(sm) > 0) {
+    rep_counts <- if (!is.null(exp_tbl$sample)) table(exp_tbl$sample) else integer(0)
+    lines <- c(
+      lines,
+      "| Sample Group | Replicates (N) | Quantified Entities | Peptides | Unique Peptides | Quantifiable Fraction |",
+      "| :--- | :---: | :---: | :---: | :---: | :---: |"
+    )
+    for (i in seq_len(nrow(sm))) {
+      s_name <- as.character(sm$sample[i])
+      n_reps <- if (!is.null(rep_counts[[s_name]])) as.character(rep_counts[[s_name]]) else "-"
+      n_prot <- if (!is.na(sm$proteins[i])) format(sm$proteins[i], big.mark = ",") else "-"
+      n_pep <- if (!is.na(sm$peptides[i])) format(sm$peptides[i], big.mark = ",") else "-"
+      n_u_pep <- if (!is.na(sm$peptides_unique[i])) format(sm$peptides_unique[i], big.mark = ",") else "-"
+      q_frac <- if (!is.na(sm$quantifiable[i])) sprintf("%.1f%%", sm$quantifiable[i] * 100) else "-"
+      lines <- c(lines, sprintf("| %s | %s | %s | %s | %s | %s |", s_name, n_reps, n_prot, n_pep, n_u_pep, q_frac))
+    }
+    lines <- c(lines, "")
+  } else {
+    lines <- c(lines, "_Sample accounting summaries not available._", "")
+  }
+
+  # 5. Sample Variabilities & Replicate Quality
+  lines <- c(lines, "## 4. Sample Variabilities & Replicate Quality", "")
+  if (!is.null(sm) && nrow(sm) > 0) {
+    lines <- c(
+      lines,
+      "| Sample Group | Replicate CV (Median) | PC1 Variance | PC2 Variance | Replicate Consistency Tag |",
+      "| :--- | :---: | :---: | :---: | :---: |"
+    )
+    for (i in seq_len(nrow(sm))) {
+      s_name <- as.character(sm$sample[i])
+      cv_val <- sm$CV[i]
+      cv_str <- if (!is.na(cv_val) && is.finite(cv_val)) sprintf("%.1f%%", cv_val * 100) else "UNDEFINED (N<=1)"
+      pc1_str <- if (!is.na(sm$PC1[i]) && is.finite(sm$PC1[i])) sprintf("%.1f%%", sm$PC1[i] * 100) else "-"
+      pc2_str <- if (!is.na(sm$PC2[i]) && is.finite(sm$PC2[i])) sprintf("%.1f%%", sm$PC2[i] * 100) else "-"
+      tag <- if (is.na(cv_val) || !is.finite(cv_val)) "UNDEFINED" else if (cv_val < 0.15) "HIGH_PRECISION (<15%)" else if (cv_val <= 0.25) "ACCEPTABLE (15-25%)" else "HIGH_VARIANCE (>25%)"
+      lines <- c(lines, sprintf("| %s | %s | %s | %s | %s |", s_name, cv_str, pc1_str, pc2_str, tag))
+    }
+    lines <- c(lines, "")
+  } else {
+    lines <- c(lines, "_Sample variability metrics not available._", "")
+  }
+
+  # 6. Sample & Replicate File Inventory
+  if (!is.null(exp_tbl) && nrow(exp_tbl) > 0) {
+    lines <- c(lines, "## 5. Sample & Replicate File Inventory", "")
+    lines <- c(
+      lines,
+      "| Sample ID | Sample Group | Replicate | Sample File | Import File |",
+      "| :--- | :--- | :---: | :--- | :--- |"
+    )
+    for (i in seq_len(nrow(exp_tbl))) {
+      sid <- if (!is.null(exp_tbl$sample_id)) exp_tbl$sample_id[i] else as.character(i)
+      sg <- if (!is.null(exp_tbl$sample)) exp_tbl$sample[i] else "-"
+      rep_idx <- if (!is.null(exp_tbl$replicate)) exp_tbl$replicate[i] else "-"
+      sfile <- if (!is.null(exp_tbl$sample_file)) exp_tbl$sample_file[i] else "-"
+      ifile <- if (!is.null(exp_tbl$import_file)) exp_tbl$import_file[i] else "-"
+      lines <- c(lines, sprintf("| `%s` | %s | %s | `%s` | `%s` |", sid, sg, rep_idx, sfile, ifile))
+    }
+    lines <- c(lines, "")
+  }
+
+  # 7. Functional Annotation Terms & Coverage
+  lines <- c(lines, "## 6. Functional Annotation Terms & Coverage", "")
+  terms <- get_annotation_terms(data, format = "vector")
+  if (length(terms) > 0) {
+    annot_df <- data$annotations
+    total_proteins <- length(dataset_proteins)
+    lines <- c(
+      lines,
+      "| Annotation Term | Term Category | Unique Values | Feature Coverage |",
+      "| :--- | :--- | :---: | :---: |"
+    )
+    for (tm in terms) {
+      cat_type <- if (tm %in% c("biological_process", "cellular_component", "molecular_function")) "Gene Ontology (GO)" else if (grepl("reactome", tm)) "Reactome Pathway" else if (grepl("kegg", tm)) "KEGG Pathway" else if (tm %in% c("gene_name", "gene_id_entrez", "gene_id_ensemble")) "Gene Identifier" else "Metadata / Annotation"
+      sub_df <- if (!is.null(annot_df) && "term" %in% names(annot_df)) annot_df[annot_df$term == tm, ] else NULL
+      n_vals <- if (!is.null(sub_df) && "annotation" %in% names(sub_df)) format(length(unique(sub_df$annotation)), big.mark = ",") else "-"
+      cov_str <- "-"
+      if (!is.null(sub_df) && id_col %in% names(sub_df) && total_proteins > 0) {
+        n_cov <- length(intersect(dataset_proteins, unique(sub_df[[id_col]])))
+        cov_str <- sprintf("%s / %s (%.1f%%)", format(n_cov, big.mark = ","), format(total_proteins, big.mark = ","), 100 * n_cov / total_proteins)
+      }
+      lines <- c(lines, sprintf("| `%s` | %s | %s | %s |", tm, cat_type, n_vals, cov_str))
+    }
+    lines <- c(lines, "")
+  } else {
+    lines <- c(lines, "_No functional annotations currently attached to dataset._", "")
+  }
+
+  # 8. Quantitative Normalization Benchmarking (if multiple assays exist)
+  quant_names <- get_quant_names(data, format = "vector")
+  if (length(quant_names) > 1 || any(quant_names != "raw")) {
+    lines <- c(lines, "## 7. Quantitative Assays & Normalization Benchmarking", "")
+    norm_sm <- tryCatch(tidyproteomics:::stats_summary(data, group_by = "normalization"), error = function(e) NULL)
+    if (!is.null(norm_sm) && nrow(norm_sm) > 0) {
+      lines <- c(
+        lines,
+        "| Normalization Method | Proteins | Peptides | Unique Peptides | Quantifiable | Median CV | PC1 | PC2 | Active |",
+        "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |"
+      )
+      for (i in seq_len(nrow(norm_sm))) {
+        nm <- as.character(norm_sm$normalization[i])
+        n_prot <- if (!is.na(norm_sm$proteins[i])) format(norm_sm$proteins[i], big.mark = ",") else "-"
+        n_pep <- if (!is.na(norm_sm$peptides[i])) format(norm_sm$peptides[i], big.mark = ",") else "-"
+        n_u_pep <- if (!is.na(norm_sm$peptides_unique[i])) format(norm_sm$peptides_unique[i], big.mark = ",") else "-"
+        q_frac <- if (!is.na(norm_sm$quantifiable[i])) sprintf("%.1f%%", norm_sm$quantifiable[i] * 100) else "-"
+        cv_val <- norm_sm$CV[i]
+        cv_str <- if (!is.na(cv_val) && is.finite(cv_val)) sprintf("%.1f%%", cv_val * 100) else "NaN"
+        pc1_str <- if (!is.na(norm_sm$PC1[i]) && is.finite(norm_sm$PC1[i])) sprintf("%.1f%%", norm_sm$PC1[i] * 100) else "-"
+        pc2_str <- if (!is.na(norm_sm$PC2[i]) && is.finite(norm_sm$PC2[i])) sprintf("%.1f%%", norm_sm$PC2[i] * 100) else "-"
+        is_act <- if (identical(nm, active_assay)) "**YES**" else "No"
+        lines <- c(lines, sprintf("| `%s` | %s | %s | %s | %s | %s | %s | %s | %s |", nm, n_prot, n_pep, n_u_pep, q_frac, cv_str, pc1_str, pc2_str, is_act))
+      }
+      lines <- c(lines, "")
+    }
+  }
+
+  # 9. Operations History
+  lines <- c(lines, "## 8. Dataset Operations History", "")
+  ops <- if (!is.null(data$operations)) unlist(data$operations) else character(0)
+  if (length(ops) > 0) {
+    for (op in ops) {
+      lines <- c(lines, sprintf("- %s", op))
+    }
+    lines <- c(lines, "")
+  } else {
+    lines <- c(lines, "_No operations recorded yet (raw initial state)._", "")
+  }
+
+  writeLines(lines, con = target_file)
+  cat(glue::glue("[TidyDaemon] Wrote updated data overview to {target_file}\n"))
+  return(target_file)
 }
 
 # Helper: Load and normalize annotation table from CSV/TSV/delimited file
@@ -736,6 +946,7 @@ handle_request <- function(req) {
         }
 
         set_active_data(data, data_id)
+        tryCatch(update_data_overview_doc(data, file_path = "docs/data.md", phase_tag = "Phase 01: Ingestion & Inspection"), error = function(e) NULL)
         summary_text <- format_state_card(data, data_id)
         list(success = TRUE, id = data_id, summary = summary_text)
       },
@@ -1525,6 +1736,7 @@ handle_request <- function(req) {
           }
         }
 
+        tryCatch(update_data_overview_doc(data, file_path = "docs/data.md", phase_tag = "Phase 02: Normalization"), error = function(e) NULL)
         list(success = TRUE, active_source = data$quantitative_source, note = selection_note)
       },
 
@@ -1553,6 +1765,7 @@ handle_request <- function(req) {
         set_active_data(data)
         log_code(glue::glue("{STATE$active_id} <- {STATE$active_id} %>% impute({method_str})"))
 
+        tryCatch(update_data_overview_doc(data, file_path = "docs/data.md", phase_tag = "Phase 03: Imputation"), error = function(e) NULL)
         summary_text <- format_state_card(data, STATE$active_id)
         list(success = TRUE, summary = summary_text)
       },
@@ -2663,6 +2876,8 @@ handle_request <- function(req) {
         )
 
         log_code(glue::glue("# Audited raw headers for {basename(raw_file)} ({platform}_{analyte}): {matched_cols}/{total_cols} matched"))
+        STATE$last_input_audit_md <- audit_md
+        STATE$last_input_audit_file <- basename(raw_file)
 
         list(
           success = TRUE,
@@ -2807,6 +3022,8 @@ handle_request <- function(req) {
         )
 
         log_code(glue::glue("# Ingest config ({action}) for {platform}_{analyte}"))
+        STATE$last_ingest_config_md <- cfg_md
+        STATE$last_ingest_config_platform <- platform
 
         list(
           success = TRUE,
@@ -2960,10 +3177,28 @@ handle_request <- function(req) {
         full_script <- c(STATE$pipeline_code, "", audit_trail)
         writeLines(full_script, con = script_path)
 
+        data_doc <- tryCatch(
+          update_data_overview_doc(data, file_path = "docs/data.md", phase_tag = params$phase),
+          error = function(e) NULL
+        )
+
         list(
           success = TRUE,
           rds_saved = rds_path,
-          script_saved = script_path
+          script_saved = script_path,
+          data_doc = data_doc
+        )
+      },
+
+      "/update_data_doc" = {
+        data <- get_active_data(params$id)
+        doc_file <- if (!is.null(params$file_path) && nzchar(params$file_path)) params$file_path else "docs/data.md"
+        phase_label <- params$phase
+        saved_file <- update_data_overview_doc(data, file_path = doc_file, phase_tag = phase_label)
+        list(
+          success = TRUE,
+          file = saved_file,
+          message = glue::glue("Updated {doc_file} successfully.")
         )
       },
 

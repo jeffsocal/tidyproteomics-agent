@@ -1,5 +1,5 @@
 ---
-tools: [tpa_health, tpa_input_audit, tpa_ingest_config, tpa_export_config, tpa_load, tpa_inspect, tpa_summary, tpa_plot, tpa_export_state, tpa_set_workspace]
+tools: [tpa_health, tpa_input_audit, tpa_ingest_config, tpa_export_config, tpa_load, tpa_inspect, tpa_summary, tpa_plot, tpa_update_data_doc, tpa_export_state, tpa_set_workspace, write_file, edit_file]
 ---
 
 ### Phase 1: Data Ingestion & Library Quality Inspection
@@ -69,12 +69,15 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/01_i
       4. Section 3.D: Scaffold suggested **Sample Group Renaming & Pooling Map** table if batch/technical suffixes are present.
       5. Section 3.E: Scaffold suggested **Target Contrasts**.
       6. Section 3.F: Set `- **Batch Confounding Detected**: FALSE` (or `TRUE` if severe confounding is evident).
-- [ ] **State Persistence & Phase Gate Verification**:
+- [ ] **State Persistence, Overview Documentation & Phase Gate Verification**:
+  - Run `tpa_update_data_doc(file_path = "docs/data.md", phase_tag = "01_INSPECT")` (note: `tpa_load` and `tpa_export_state` also auto-generate and refresh `docs/data.md`).
+  - Verify that `docs/data.md` contains comprehensive markdown tables for `Ingestion Configuration`, `Input Header Audit`, `Sample Accounting Summaries`, `Sample Variabilities & Replicate Quality`, `Sample & Replicate File Inventory`, and `Functional Annotation Terms & Coverage`.
   - Invoke `tpa_export_state(rds_path = "data/tidyproteomics_data.rds", script_path = "code/01_inspect.R")`.
 - [ ] **Checkpoint 1.3 (Phase Gate & Log Verification)**:
   1. `logs/01_inspect/console.log` exists on disk with non-zero file size.
   2. `data/tidyproteomics_data.rds` and `code/01_inspect.R` exist on disk with non-zero file size.
-  3. Count diagnostic plot (`data/plot_proteins_counts.png` or `data/plot_peptides_counts.png`) exists in `data/`.
+  3. `docs/data.md` exists on disk with non-zero file size, containing Ingestion Configuration, Input Header Audit, Sample Accounting Summaries, and Annotation Terms tables.
+  4. Count diagnostic plot (`data/plot_proteins_counts.png` or `data/plot_peptides_counts.png`) exists in `data/`.
 - [ ] **Complete Phase (Automated Blackboard Recording)**:
   - Invoke `complete_phase` with a summary of data ingestion, total proteins/samples, contaminant fraction, and scaffolded groups:
     `complete_phase(phaseName = "01_INSPECT", summary = "Data ingestion and library quality inspection complete (<N> proteins across <M> samples). Ingestion topology verified, contaminant levels profiled (<C>% CRAP), identification counts plotted (data/plot_proteins_counts.png), and persisted data/tidyproteomics_data.rds.")`

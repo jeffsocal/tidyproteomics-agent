@@ -1,5 +1,5 @@
 ---
-tools: [tpa_health, tpa_input_audit, tpa_ingest_config, tpa_export_config, tpa_load, tpa_inspect, tpa_summary, tpa_plot, tpa_export_state, tpa_set_workspace]
+tools: [tpa_health, tpa_input_audit, tpa_ingest_config, tpa_export_config, tpa_load, tpa_inspect, tpa_summary, tpa_plot, tpa_update_data_doc, tpa_export_state, tpa_set_workspace, write_file, edit_file]
 ---
 
 ### Phase 1: Data Ingestion & Exploratory Quality Inspection
@@ -46,14 +46,18 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/01_i
   - If discovered sample groups in `experiments` already reflect clean biological condition cohorts ($\le 5$ groups), inspect condition-unique presence/absence using `tpa_plot(type = "venn")` or `tpa_plot(type = "euler")` (saved to `data/`). If sample names are ungrouped individual sample/batch labels that require pooling in Phase 2.1b, defer `venn`/`euler` plotting to Phase 2.1b after sample recoding.
 - [ ] **Checkpoint 1.2**: Verify that contaminant metrics, sample-level replicate CVs, and identification count plots are recorded in `logs/01_inspect/console.log`.
 
-#### Phase 1.3: State Persistence & Phase Gate Verification
+#### Phase 1.3: State Persistence, Overview Documentation & Phase Gate Verification
+- [ ] Generate and verify dataset overview document:
+  - Run `tpa_update_data_doc(file_path = "docs/data.md", phase_tag = "01_INSPECT")` (note: `tpa_load` and `tpa_export_state` also auto-generate and refresh `docs/data.md`).
+  - Verify that `docs/data.md` contains comprehensive markdown tables for `Ingestion Configuration`, `Input Header Audit`, `Sample Accounting Summaries`, `Sample Variabilities & Replicate Quality`, `Sample & Replicate File Inventory`, and `Functional Annotation Terms & Coverage`.
 - [ ] Persist the imported dataset and generate reproducible R script:
   - Invoke `tpa_export_state(rds_path = "data/tidyproteomics_data.rds", script_path = "code/01_inspect.R")`.
 - [ ] **Checkpoint 1.3 (Phase Gate & Log Verification)**:
   1. `logs/01_inspect/console.log` exists on disk with non-zero file size.
   2. `data/tidyproteomics_data.rds` and `code/01_inspect.R` exist on disk with non-zero file size.
-  3. Complete sample inventory (`experiments`) and functional annotation terms (`annotation_terms`) are verified in log.
-  4. Count diagnostic plot (`data/plot_proteins_counts.png` or `data/plot_peptides_counts.png`) exists in `data/` with non-zero file size (along with optional `data/plot_*_venn.png` or `data/plot_*_euler.png` if generated).
+  3. `docs/data.md` exists on disk with non-zero file size, containing Ingestion Configuration, Input Header Audit, Sample Accounting Summaries, and Annotation Terms tables.
+  4. Complete sample inventory (`experiments`) and functional annotation terms (`annotation_terms`) are verified in log.
+  5. Count diagnostic plot (`data/plot_proteins_counts.png` or `data/plot_peptides_counts.png`) exists in `data/` with non-zero file size (along with optional `data/plot_*_venn.png` or `data/plot_*_euler.png` if generated).
 
 #### Phase 1.4: Experimental Alignment, Contrast Scaffolding & Hypothesis Verification
 - [ ] **Inspect User Hypothesis & Parameters (`docs/experiment.md` Sections 1 & 2)**:

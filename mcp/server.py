@@ -1134,6 +1134,27 @@ TOOLS = [
         }
     },
     {
+        "name": "tpa_update_data_doc",
+        "description": "Compiles and writes or updates 'docs/data.md' containing structured tables for Ingestion Configuration, Input Header Audit, Sample Accounting Summaries, Sample Variabilities, and Functional Annotations. Can be called during Phase 01 or subsequent phases to keep data overview current.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Path to data document (default: 'docs/data.md')."
+                },
+                "phase": {
+                    "type": "string",
+                    "description": "Optional phase label or context string (e.g. 'Phase 01: Ingestion & Inspection')."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Optional dataset ID."
+                }
+            }
+        }
+    },
+    {
         "name": "tpa_compile_summary",
         "description": "Compiles the authoritative primary observations summary (docs/observations_summary.md) from the active tidyproteomics dataset, extracting quality metrics, target perturbation efficacy, top upregulated/downregulated candidates with statistical precision and imputation risk scoring, multi-category pathway enrichments, and cross-contrast concordances. Automatically writes the reproducible code/06_observations.R script and verifies checkpoints.",
         "inputSchema": {
@@ -1479,13 +1500,26 @@ def handle_tool_call(name, args):
     elif name == "tpa_export_state":
         res = call_daemon("/export", args)
         if res.get("success"):
+            data_doc_note = f"\n- **Data Overview:** `{res.get('data_doc')}`" if res.get("data_doc") else ""
             return (
                 f"### State Successfully Exported\n"
                 f"- **Data Object (RDS):** `{res.get('rds_saved')}`\n"
-                f"- **Reproducible R Script:** `{res.get('script_saved')}`\n"
+                f"- **Reproducible R Script:** `{res.get('script_saved')}`"
+                f"{data_doc_note}\n"
                 f"\nYou can now open `{res.get('script_saved')}` outside Docker to reproduce the exact pipeline."
             )
         return f"Error exporting state: {res.get('error')}"
+
+    elif name == "tpa_update_data_doc":
+        res = call_daemon("/update_data_doc", args)
+        if res.get("success"):
+            return (
+                f"### Data Overview Document Successfully Updated\n"
+                f"- **File:** `{res.get('file')}`\n\n"
+                f"Generated/updated tables for **Ingestion Configuration**, **Input Header Audit**, "
+                f"**Sample Accounting Summaries**, **Sample Variabilities**, and **Functional Annotations**."
+            )
+        return f"Error updating data overview document: {res.get('error')}"
 
     elif name == "tpa_compile_summary":
         res = call_daemon("/compile_summary", args)

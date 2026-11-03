@@ -1975,8 +1975,10 @@ Construct and execute code for this phase, capturing output to logs.
       addIfExists("docs/notes.md");
     } else if (phaseId === "01" || phaseId === "02" || phaseId === "03") {
       addIfExists("docs/experiment.md");
+      addIfExists("docs/data.md");
       addIfExists("data/tidyproteomics_data.rds");
     } else if (phaseId === "06") {
+      addIfExists("docs/data.md");
       addIfExists("docs/observations.md");
       addIfExists("docs/observations_summary.md");
       addIfExists("data/observations_summary.md");
