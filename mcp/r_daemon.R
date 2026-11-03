@@ -150,19 +150,14 @@ format_state_card <- function(data, id = NULL) {
   }
   missing_cells <- max(0, total_cells - observed_cells)
   missing_pct <- if (total_cells > 0) {
-    if (is_imputed) {
-      residual_na <- sum(is.na(data$quantitative[[quant_col]]) | data$quantitative[[quant_col]] <= 0)
-      round(100 * (residual_na / total_cells), 1)
-    } else {
-      round(100 * (missing_cells / total_cells), 1)
-    }
+    round(100 * (missing_cells / total_cells), 1)
   } else "N/A"
 
   paste0(
     "[TidyProteomics State: ", target_id, "]\n",
     "- Analyte & Origin: ", analyte, " (", origin, ")\n",
     "- Quantified Entities: ", n_entities, " ", analyte, " across ", n_files, " files (grouped into ", n_samples, " cohorts: ", samples_str, ")\n",
-    "- Active Assay: ", source, " | Imputed: ", imputed_str, " (Missing values: ", missing_pct, "%)\n",
+    "- Active Assay: ", source, " | Imputed: ", imputed_str, " (Residual missing values: ", missing_pct, "% [", missing_cells, " of ", total_cells, " cells])\n",
     "- Matrix Dimensions: ", n_entities, " x ", n_files, " = ", total_cells, " data points (observed: ", observed_cells, ", missing: ", missing_cells, ")\n",
     "- Operations History: ", ops_count, " operation(s) recorded"
   )
@@ -401,7 +396,7 @@ load_and_normalize_annotation_table <- function(file_path, target_id_col = "prot
 }
 
 # Helper: Fetch annotations from UniProt KB REST API for accessions
-fetch_uniprot_annotations <- function(orig_ids, target_id_col = "protein", target_categories = NULL, batch_size = 150) {
+fetch_uniprot_annotations <- function(orig_ids, target_id_col = "protein", target_categories = NULL, batch_size = 40) {
   if (length(orig_ids) == 0) {
     empty_res <- tibble::tibble(x = character(0), term = character(0), annotation = character(0))
     names(empty_res)[1] <- target_id_col
@@ -427,28 +422,39 @@ fetch_uniprot_annotations <- function(orig_ids, target_id_col = "protein", targe
   cat(glue::glue("[TidyDaemon] Fetching UniProt annotations for {length(unique_clean)} distinct accessions across {total_batches} batches...\n"))
 
   all_rows <- list()
-  old_to <- getOption("timeout")
-  on.exit(options(timeout = old_to), add = TRUE)
-  options(timeout = 30)
-
-  base_url <- "https://rest.uniprot.org/uniprotkb/accessions"
+  last_err <- NULL
   fields_arg <- "accession,id,gene_names,go_p,go_c,go_f,xref_reactome,xref_kegg"
 
   for (b in seq_len(total_batches)) {
     start_i <- (b - 1) * batch_size + 1
     end_i <- min(b * batch_size, length(unique_clean))
     batch_accs <- unique_clean[start_i:end_i]
-    acc_param <- paste(batch_accs, collapse = ",")
-
-    query_url <- paste0(base_url, "?accessions=", utils::URLencode(acc_param), "&fields=", fields_arg)
+    
+    # Use UniProt search endpoint: /uniprotkb/search?query=accession:X OR accession:Y
+    query_param <- paste0("accession:", batch_accs, collapse = " OR ")
+    query_url <- paste0(
+      "https://rest.uniprot.org/uniprotkb/search?query=",
+      utils::URLencode(query_param),
+      "&fields=", fields_arg,
+      "&format=json&size=", length(batch_accs)
+    )
     
     res_text <- NULL
     tryCatch({
-      con <- url(query_url, open = "r")
-      res_lines <- readLines(con, warn = FALSE)
-      close(con)
-      res_text <- paste(res_lines, collapse = "\n")
+      resp <- httr::GET(
+        query_url,
+        httr::user_agent("TidyProteomicsAgent/1.0"),
+        httr::timeout(35)
+      )
+      st <- httr::status_code(resp)
+      if (st == 200) {
+        res_text <- httr::content(resp, as = "text", encoding = "UTF-8")
+      } else {
+        last_err <- glue::glue("HTTP {st} from UniProt API")
+        cat(glue::glue("[TidyDaemon] Warning: batch {b}/{total_batches} HTTP {st}\n"))
+      }
     }, error = function(e) {
+      last_err <- e$message
       cat(glue::glue("[TidyDaemon] Warning: batch {b}/{total_batches} fetch error: {e$message}\n"))
     })
 
@@ -514,6 +520,9 @@ fetch_uniprot_annotations <- function(orig_ids, target_id_col = "protein", targe
   }
 
   if (length(all_rows) == 0) {
+    if (!is.null(last_err)) {
+      attr(all_rows, "last_error") <- last_err
+    }
     empty_res <- tibble::tibble(x = character(0), term = character(0), annotation = character(0))
     names(empty_res)[1] <- target_id_col
     return(empty_res)

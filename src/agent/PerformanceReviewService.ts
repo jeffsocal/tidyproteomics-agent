@@ -444,22 +444,85 @@ Format your entire review in clean, publication-grade GitHub-style Markdown:
 ## 5. Actionable Recommendations for Engineering & Prompt Architecture
 (Concrete improvements to prompt directives, MCP tool definitions, and agent loop policies)
 
-Be rigorous, frank, and specific. Quote exact tool names, error strings, and file names from the logs.`;
+Be rigorous, frank, and specific. Quote exact tool names, error strings, and file names from the logs.
+
+======================================================================
+CRITICAL GENERATION REQUIREMENTS:
+======================================================================
+- You MUST output the ENTIRE Markdown performance review report in your response, beginning directly with the header:
+  # Autonomous Agent Performance Review & System Audit
+- Do NOT output conversational preambles, acknowledgments, or preliminary plans (e.g. "I will audit...").
+- Do NOT ask questions or request additional logs—conduct the full audit immediately using the comprehensive Blackboard digest provided.
+- Fill out all five sections with complete analysis, detailed scorecard, and evidence from the traces.`;
 
     const userPrompt = `Please evaluate the following execution logs and workspace artifacts to generate the comprehensive Performance Review:
 
 ${customFocus ? `Researcher's Custom Focus Area / Specific Questions:\n${customFocus}\n\n` : ""}
 EXECUTION LOGS & RUNTIME BLACKBOARD DIGEST:
-${logsDigest}`;
+${logsDigest}
+
+Generate the complete, publication-grade Performance Review report now following the required structure, starting directly with "# Autonomous Agent Performance Review & System Audit".`;
+
+    const isValidReport = (text: string): boolean => {
+      const trimmed = (text || "").trim();
+      return (
+        trimmed.length >= 800 &&
+        (trimmed.includes("# Autonomous Agent Performance Review") ||
+          trimmed.includes("## 1. Executive Summary") ||
+          trimmed.includes("Executive Summary") ||
+          trimmed.includes("Scorecard") ||
+          trimmed.includes("Pillar 1"))
+      );
+    };
 
     try {
-      const response = await reasonerClient.chat({
+      let response = await reasonerClient.chat({
         system: systemPrompt,
         messages: [{ role: "user", content: userPrompt }],
         tools: [],
       });
 
-      const reviewMarkdown = response.content || "# Autonomous Agent Performance Review\n\nNo content returned.";
+      let reviewMarkdown = response.content?.trim() || "";
+
+      // If response is a conversational prelude or incomplete stub, perform an autonomous recovery turn
+      if (!isValidReport(reviewMarkdown)) {
+        console.warn(
+          `[PerformanceReviewService] Initial reasoner response was insufficient (${reviewMarkdown.length} chars). Executing recovery follow-up turn...`
+        );
+        const recoveryResponse = await reasonerClient.chat({
+          system: systemPrompt,
+          messages: [
+            { role: "user", content: userPrompt },
+            {
+              role: "assistant",
+              content:
+                reviewMarkdown ||
+                "I will audit the phase traces, console errors, and scientific artifacts.",
+            },
+            {
+              role: "user",
+              content:
+                "Please proceed immediately with generating the complete, comprehensive Markdown audit report following the required format starting with '# Autonomous Agent Performance Review & System Audit'. Do not stop or ask questions; provide the full report now.",
+            },
+          ],
+          tools: [],
+        });
+
+        if (recoveryResponse.content && isValidReport(recoveryResponse.content)) {
+          reviewMarkdown = recoveryResponse.content.trim();
+          response = recoveryResponse;
+        }
+      }
+
+      if (!isValidReport(reviewMarkdown)) {
+        return {
+          ok: false,
+          reviewMarkdown: reviewMarkdown || "",
+          filePath: "docs/report_performance_review.md",
+          lastGenerated: new Date().toISOString(),
+          error: `Reasoner model returned incomplete or conversational audit text (${reviewMarkdown.length} chars) instead of the full performance review report. Please try generating again.`,
+        };
+      }
 
       // Write to docs/report_performance_review.md
       const docsDir = path.join(workspaceRoot, "docs");

@@ -32,8 +32,8 @@ To ensure full reproducibility and auditable provenance:
 
 #### Execution Schedule (Strictly 2–3 Turns)
 
-#### **Turn 1: Defect Ingestion via Pre-Computed Catalog or `check_integrity`**
-1. Read `data/integrity_defects.json` directly (pre-computed before this phase starts), or invoke the `check_integrity` tool.
+#### **Turn 1: Defect Ingestion via `check_integrity` or Pre-Computed Catalog**
+1. Invoke the `check_integrity` tool (which scans `docs/manuscript.md` against quantitative tables and persists `data/integrity_defects.json`), or read `data/integrity_defects.json` directly if already present.
 2. Review the defects catalog:
    - **Direction Errors**: Contradictions between narrative wording ("decreased", "depleted", "suppressed", "downregulated") and actual table fold-change sign ($log_2\text{FC} > 0$ means accumulated/increased/upregulated; $log_2\text{FC} < 0$ means depleted/decreased/downregulated).
    - **Numeric Mismatches**: Values of fold-changes, p-values, or q-values in text that diverge from table records.

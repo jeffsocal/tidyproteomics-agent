@@ -1247,7 +1247,8 @@ def handle_tool_call(name, args):
         res = call_daemon("/fetch_annotations", args)
         if res.get("success"):
             return res.get("summary", "UniProt annotations fetched successfully.")
-        return f"Error in fetch_annotations: {res.get('error')}"
+        err_msg = res.get("error") or res.get("message") or "Unknown error from annotation daemon."
+        return f"Error in fetch_annotations: {err_msg}"
 
     elif name == "tpa_list_annotations":
         res = call_daemon("/list_annotations", args)

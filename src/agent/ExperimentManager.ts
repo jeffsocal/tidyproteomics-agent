@@ -117,7 +117,7 @@ export class ExperimentManager {
 <!-- Configures functional ontology annotation (GO terms, KEGG, Reactome) for pathway enrichment -->
 - **Annotation Source**: uniprot
 - **Annotation File Path**: NONE
-- **Taxon / Organism ID**: 9606
+- **Taxon / Organism ID**: (Pending Phase 1 target organism identification)
 - **Annotation Ontologies**: biological_process, cellular_component, molecular_function, reactome_pathway
 - **Annotation Validation Status**: PENDING
 - **Confirm Functional Annotation Strategy**: FALSE
@@ -158,7 +158,7 @@ export class ExperimentManager {
         batchConfoundingConfirmed: false,
         annotationSource: "uniprot",
         annotationFilePath: "NONE",
-        annotationTaxonId: "9606",
+        annotationTaxonId: "(Pending Phase 1 target organism identification)",
         annotationOntologies: "biological_process, cellular_component, molecular_function, reactome_pathway",
         annotationValidationStatus: "PENDING",
         annotationConfirmed: false,
@@ -228,7 +228,7 @@ export class ExperimentManager {
       }
     }
     // Also parse backticked or slash-separated contrasts in Section 3.E / 3.C
-    const secCMatch = content.match(/###\s*(?:3\.E|E|3\.C|C)\.?\s*Target [Cc]ontrasts[\s\S]*?(?=###\s*(?:3\.[A-F]|[A-F])\.|$|##)/i);
+    const secCMatch = content.match(/###\s*(?:3\.E|E|3\.C|C)\.?\s*Target [Cc]ontrasts[\s\S]*?(?=###\s*(?:3\.[A-Z]|[A-Z])\.|$|##)/i);
     if (secCMatch) {
       const lines = secCMatch[0].split("\n");
       for (const line of lines) {
@@ -263,7 +263,7 @@ export class ExperimentManager {
 
     // 7. Parse discovered sample groups from Section 3.A & cleaned groups from Section 3.D / 3.B
     const rawGroups: string[] = [];
-    const secAMatch = content.match(/###\s*(?:3\.A|A)\.?\s*Discovered sample groups[\s\S]*?(?=###\s*(?:3\.[B-F]|[B-F])\.|$|##)/i);
+    const secAMatch = content.match(/###\s*(?:3\.A|A)\.?\s*Discovered sample groups[\s\S]*?(?=###\s*(?:3\.[B-Z]|[B-Z])\.|$|##)/i);
     if (secAMatch) {
       const rows = secAMatch[0].split("\n");
       for (const row of rows) {
@@ -281,7 +281,7 @@ export class ExperimentManager {
     }
 
     const cleanBiologicalGroups: string[] = [];
-    const secBMatch = content.match(/###\s*(?:3\.D|D|3\.B|B)\.?\s*Sample Group Renaming[\s\S]*?(?=###\s*(?:3\.[A-F]|[A-F])\.|$|##)/i);
+    const secBMatch = content.match(/###\s*(?:3\.D|D|3\.B|B)\.?\s*Sample Group Renaming[\s\S]*?(?=###\s*(?:3\.[A-Z]|[A-Z])\.|$|##)/i);
     if (secBMatch) {
       const rows = secBMatch[0].split("\n");
       for (const row of rows) {
@@ -357,7 +357,7 @@ export class ExperimentManager {
     const annotationFilePath = annotFileMatch ? annotFileMatch[1].trim() : "NONE";
 
     const annotTaxonMatch = content.match(/-\s*\*\*Taxon \/ Organism ID\*\*:\s*([^\n\r]+)/i);
-    const annotationTaxonId = annotTaxonMatch ? annotTaxonMatch[1].trim() : "9606";
+    const annotationTaxonId = annotTaxonMatch ? annotTaxonMatch[1].trim() : "(Pending Phase 1 target organism identification)";
 
     const annotOntMatch = content.match(/-\s*\*\*Annotation Ontologies\*\*:\s*([^\n\r]+)/i);
     const annotationOntologies = annotOntMatch ? annotOntMatch[1].trim() : "biological_process, cellular_component, molecular_function, reactome_pathway";
@@ -365,7 +365,8 @@ export class ExperimentManager {
     const annotStatusMatch = content.match(/-\s*\*\*Annotation Validation Status\*\*:\s*([^\n\r]+)/i);
     const annotationValidationStatus = annotStatusMatch ? annotStatusMatch[1].trim() : "PENDING";
 
-    const annotationConfirmed = /-\s*\*\*Confirm Functional Annotation Strategy\*\*:\s*TRUE/i.test(content);
+    const annotationConfirmed =
+      /(?:-\s*|\*\s*)?\*{0,2}Confirm Functional Annotation Strategy\*{0,2}\s*:\s*(?:TRUE|YES|1|\[x\])/i.test(content);
 
     return {
       exists: true,
@@ -526,7 +527,7 @@ export class ExperimentManager {
           `$1- **Confirm Sample Pooling Map**: ${initialConfirm}\n`
         );
       } else {
-        const secDRegex = /(###\s*(?:3\.D|D|3\.B|B)\.?\s*Sample Group Renaming[\s\S]*?)(?=###\s*(?:3\.[A-F]|[A-F])\.|$|##)/i;
+        const secDRegex = /(###\s*(?:3\.D|D|3\.B|B)\.?\s*Sample Group Renaming[\s\S]*?)(?=###\s*(?:3\.[A-Z]|[A-Z])\.|$|##)/i;
         if (secDRegex.test(content)) {
           content = content.replace(secDRegex, (m) => `${m.trimEnd()}\n- **Confirm Sample Pooling Map**: ${initialConfirm}\n\n`);
         }
@@ -552,7 +553,7 @@ export class ExperimentManager {
         `$1- **Confirm Sample Pooling Map**: ${val}\n`
       );
     } else {
-      const secDRegex = /(###\s*(?:3\.D|D|3\.B|B)\.?\s*Sample Group Renaming[\s\S]*?)(?=###\s*(?:3\.[A-F]|[A-F])\.|$|##)/i;
+      const secDRegex = /(###\s*(?:3\.D|D|3\.B|B)\.?\s*Sample Group Renaming[\s\S]*?)(?=###\s*(?:3\.[A-Z]|[A-Z])\.|$|##)/i;
       if (secDRegex.test(content)) {
         content = content.replace(secDRegex, (match) => {
           return `${match.trimEnd()}\n- **Confirm Sample Pooling Map**: ${val}\n\n`;
@@ -585,7 +586,7 @@ export class ExperimentManager {
     const confirmVal = confirmed ? "TRUE" : "FALSE";
     const newSectionE = `### E. Target Contrasts\n${contrastList}\n- **Confirm Target Contrasts**: ${confirmVal}\n\nStatus: ${statusText}\n\n`;
 
-    const sectionRegex = /(###\s*(?:3\.E|E|3\.C|C)\.?\s*Target [Cc]ontrasts[\s\S]*?)(?=###\s*(?:3\.[A-F]|[A-F])\.|$|##)/i;
+    const sectionRegex = /(###\s*(?:3\.E|E|3\.C|C)\.?\s*Target [Cc]ontrasts[\s\S]*?)(?=###\s*(?:3\.[A-Z]|[A-Z])\.|$|##)/i;
     if (sectionRegex.test(content)) {
       content = content.replace(sectionRegex, newSectionE);
     } else {
@@ -610,7 +611,7 @@ export class ExperimentManager {
     }
 
     // If no explicit target contrasts parsed, clean any pending text and add Status: CONFIRMED
-    const sectionRegex = /(###\s*(?:3\.E|E|3\.C|C)\.?\s*Target [Cc]ontrasts[\s\S]*?)(?=###\s*(?:3\.[A-F]|[A-F])\.|$|##)/i;
+    const sectionRegex = /(###\s*(?:3\.E|E|3\.C|C)\.?\s*Target [Cc]ontrasts[\s\S]*?)(?=###\s*(?:3\.[A-Z]|[A-Z])\.|$|##)/i;
     const match = content.match(sectionRegex);
     if (match) {
       let secText = match[1];
@@ -937,13 +938,13 @@ export class ExperimentManager {
     const spec = await this.readSpec();
     const finalSource = source ?? spec.annotationSource ?? "uniprot";
     const finalFile = filePath ?? spec.annotationFilePath ?? "NONE";
-    const finalTaxon = taxonId ?? spec.annotationTaxonId ?? "9606";
+    const finalTaxon = taxonId ?? spec.annotationTaxonId ?? "(Pending Phase 1 target organism identification)";
     const finalOnt = ontologies ?? spec.annotationOntologies ?? "biological_process, cellular_component, molecular_function, reactome_pathway";
     const finalStatus = validationStatus ?? spec.annotationValidationStatus ?? "PENDING";
     const finalConfirmed = confirmed !== undefined ? confirmed : spec.annotationConfirmed;
     const confirmStr = finalConfirmed ? "TRUE" : "FALSE";
 
-    const sectionRegex = /###\s*(?:3\.G|G)\.?\s*Functional Annotation Strategy[\s\S]*?(?=\n###|\n##|$)/i;
+    const sectionRegex = /#{2,4}\s*(?:3\.G|G)[\.\:\-]?\s*Functional Annotation Strategy[\s\S]*?(?=\n#{2,4}\s|\n##|$)/i;
     const sectionBody = `### G. Functional Annotation Strategy
 <!-- Configures functional ontology annotation (GO terms, KEGG, Reactome) for pathway enrichment -->
 - **Annotation Source**: ${finalSource}
@@ -968,8 +969,9 @@ export class ExperimentManager {
     let content = await fs.readFile(expPath, "utf-8");
     const confirmStr = confirmed ? "TRUE" : "FALSE";
 
-    if (/-\s*\*\*Confirm Functional Annotation Strategy\*\*:/i.test(content)) {
-      content = content.replace(/(-\s*\*\*Confirm Functional Annotation Strategy\*\*:\s*)(TRUE|FALSE)/i, `$1${confirmStr}`);
+    const lineRegex = /((?:-\s*|\*\s*)?\*{0,2}Confirm Functional Annotation Strategy\*{0,2}\s*:\s*)(?:TRUE|FALSE)/i;
+    if (lineRegex.test(content)) {
+      content = content.replace(lineRegex, `$1${confirmStr}`);
       await fs.writeFile(expPath, content, "utf-8");
     } else {
       await this.setAnnotationStrategy(undefined, undefined, undefined, undefined, undefined, confirmed);

@@ -689,6 +689,25 @@ export class AgentService {
         },
       },
       {
+        name: "confirm_all_study_design",
+        description: "Confirms ALL Section 3 Human-in-the-Loop study design subtasks (3.A Discovered Groups, 3.B Normalization, 3.C Imputation, 3.D Sample Group Renaming & Pooling, 3.E Target Contrasts, 3.F Batch Confounding, 3.G Functional Annotation Strategy) in docs/experiment.md and optionally resumes the pipeline.",
+        parameters: {
+          type: "object",
+          properties: {
+            contrasts: {
+              type: "array",
+              items: { type: "string" },
+              description: "Optional explicit contrasts to confirm, or omit to confirm existing contrasts.",
+            },
+            resumePipeline: {
+              type: "boolean",
+              description: "Whether to resume the autonomous pipeline after confirming study design (default TRUE).",
+            },
+          },
+          required: [],
+        },
+      },
+      {
         name: "start_or_resume_pipeline",
         description: "Triggers or resumes execution of the autonomous analysis pipeline when initial configuration is satisfied or when a halted phase's questions have been resolved.",
         parameters: {
@@ -1014,8 +1033,18 @@ export class AgentService {
     const isImputationNeeded = /imputation|Section 3\.?[EC]|Confirm Imputation Strategy|randomforest_grouped|min_column/i.test(errorText);
     const isStudyDesignGate = phase.id === "02" || /Pre-flight Study Design Gate|Human-in-the-loop|Section 3/i.test(errorText);
 
+    const isOrganismPending =
+      !spec.annotationTaxonId ||
+      /pending|unknown|none|required|^$/i.test(spec.annotationTaxonId.trim()) ||
+      spec.annotationTaxonId.includes("(") ||
+      spec.annotationTaxonId.includes("<");
+    const hasTargetOrganism = Boolean((spec.rawSampleGroups?.length || spec.discoveredGroups?.length) && !isOrganismPending);
+    const annotationLine = hasTargetOrganism
+      ? `7. **3.G Functional Annotation Strategy**: Verify annotation source (\`uniprot\` default, custom file, or bypass) for identified organism \`${spec.annotationTaxonId}\` and check \`Confirm Functional Annotation Strategy: TRUE\`.\n`
+      : "";
+
     if (isStudyDesignGate) {
-      questionPrompt = `🛑 **HUMAN-IN-THE-LOOP (HITL) CHECKPOINT: Unified Study Design Gate**\n**Phase**: ${phase.title || phase.fileName} (Phase ${phase.id})\n\n**Reason Execution Paused**:\nMandatory Section 3 subtask confirmation checks are pending in \`docs/experiment.md\`. All unconfirmed subtasks must be verified before normalization benchmarking and replicate variation analysis proceed.\n\n**Specific Required Actions (Mandatory)**:\n1. **3.A Discovered Sample Groups**: Verify detected sample groups and check \`Confirm Discovered Sample Groups: TRUE\`.\n2. **3.B Quantitative Normalization**: Confirm normalization methods (default \`scaled, median, linear, limma, loess\`) and check \`Confirm Normalization Strategy: TRUE\`.\n3. **3.C Missing Value Imputation**: Verify imputation method (\`randomforest_grouped\` for general MAR vs \`min_column\` for knockouts/MNAR) and check \`Confirm Imputation Strategy: TRUE\`.\n4. **3.D Sample Group Renaming & Pooling Map**: Verify raw replicate mapping into clean biological cohorts and check \`Confirm Sample Pooling Map: TRUE\`.\n5. **3.E Target Contrasts**: Verify pairwise comparison pair (e.g. \`Treated vs Control\`) and check \`Confirm Target Contrasts: TRUE\`.\n${isConfounding ? "6. **3.F Confounded Batch Gate**: Review detected batch confounding and check `Proceed With Potential Batch Confounding: TRUE`.\n" : ""}7. **3.G Functional Annotation Strategy**: Verify annotation source (\`uniprot\` default, custom file, or bypass) and check \`Confirm Functional Annotation Strategy: TRUE\`.\n\n👉 *All items needing your confirmation are highlighted with an **orange outline** in the \`docs/experiment.md\` form pane.*`;
+      questionPrompt = `🛑 **HUMAN-IN-THE-LOOP (HITL) CHECKPOINT: Unified Study Design Gate**\n**Phase**: ${phase.title || phase.fileName} (Phase ${phase.id})\n\n**Reason Execution Paused**:\nMandatory Section 3 subtask confirmation checks are pending in \`docs/experiment.md\`. All unconfirmed subtasks must be verified before normalization benchmarking and replicate variation analysis proceed.\n\n**Specific Required Actions (Mandatory)**:\n1. **3.A Discovered Sample Groups**: Verify detected sample groups and check \`Confirm Discovered Sample Groups: TRUE\`.\n2. **3.B Quantitative Normalization**: Confirm normalization methods (default \`scaled, median, linear, limma, loess\`) and check \`Confirm Normalization Strategy: TRUE\`.\n3. **3.C Missing Value Imputation**: Verify imputation method (\`randomforest_grouped\` for general MAR vs \`min_column\` for knockouts/MNAR) and check \`Confirm Imputation Strategy: TRUE\`.\n4. **3.D Sample Group Renaming & Pooling Map**: Verify raw replicate mapping into clean biological cohorts and check \`Confirm Sample Pooling Map: TRUE\`.\n5. **3.E Target Contrasts**: Verify pairwise comparison pair (e.g. \`Treated vs Control\`) and check \`Confirm Target Contrasts: TRUE\`.\n${isConfounding ? "6. **3.F Confounded Batch Gate**: Review detected batch confounding and check `Proceed With Potential Batch Confounding: TRUE`.\n" : ""}${annotationLine}\n👉 *All items needing your confirmation are highlighted with an **orange outline** in the \`docs/experiment.md\` form pane.*`;
       chips = ["🎯 Confirm All Study Design & Proceed", "🌐 Fetch UniProt Annotations", "Review docs/experiment.md ↗"];
     } else if (phase.id === "03" || isImputationNeeded) {
       questionPrompt = `🛑 **HUMAN-IN-THE-LOOP (HITL) CHECKPOINT: Imputation Strategy Gate**\n**Phase**: ${phase.title || phase.fileName} (Phase ${phase.id})\n\n**Reason Execution Paused**:\nMissing Value Imputation Strategy confirmation is required in Section 3.C of \`docs/experiment.md\`.\n\n**Specific Required Actions (Mandatory)**:\n1. Review the recommended method in Section 3.C (highlighted in orange outline):\n   • \`randomforest_grouped\` (MAR Default — Karpievitch et al., 2012)\n   • \`min_column\` (LOD minimum for intentional gene knockouts / suppressions)\n2. Check \`Confirm Imputation Strategy: TRUE\` or click a confirmation button below to resume.`;
@@ -2019,6 +2048,17 @@ The workspace includes two exhaustive markdown manuals in \`reference/\` (also v
                 );
                 executedActionSummary += `\n• Configured Functional Annotation Strategy (Source: \`${tc.args?.source || "uniprot"}\`, Confirmed: \`${tc.args?.confirmed ? "TRUE" : "FALSE"}\`) in Section 3.G`;
                 pipelineTriggered = true;
+                break;
+              }
+              case "confirm_all_study_design": {
+                const confirmedContrasts = await this.experimentManager.confirmContrastAndAuthorizeConfounding(tc.args?.contrasts);
+                const detail = confirmedContrasts && confirmedContrasts.length > 0
+                  ? `Confirmed target contrasts (${confirmedContrasts.join(", ")}) & all study design subtasks (3.A through 3.G) in docs/experiment.md`
+                  : "Confirmed all study design subtasks (3.A through 3.G) in docs/experiment.md";
+                executedActionSummary += `\n• ${detail}`;
+                if (tc.args?.resumePipeline !== false) {
+                  pipelineTriggered = true;
+                }
                 break;
               }
               case "start_or_resume_pipeline":

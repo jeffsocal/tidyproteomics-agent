@@ -26,16 +26,16 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/02_n
       4. **3.D Sample Group Renaming & Pooling Map**: `- **Confirm Sample Pooling Map**: TRUE` (and `- **Reassign Sample Names According to Pooling Map**: TRUE` if raw replicates map into cohorts).
       5. **3.E Target Contrasts**: `- **Confirm Target Contrasts**: TRUE` or `Status: CONFIRMED` (with non-empty `<treatment>/<control>` contrast).
       6. **3.F Confounded Batch Gate**: If batch confounding was detected (`- **Batch Confounding Detected**: TRUE`), verify `- **Proceed With Potential Batch Confounding**: TRUE` and `- **Confirm Batch Confounding Authorization**: TRUE`. **CRITICAL**: If `- **Batch Confounding Detected**: FALSE`, Section 3.F is completely unexposed, inactive, and SATISFIED. Do NOT treat `FALSE` for batch confounding detection as an unconfirmed gate or blocker.
-      7. **3.G Functional Annotation Strategy**: Verify `- **Confirm Functional Annotation Strategy**: TRUE` (specifying `uniprot` default, custom file path, or bypass).
+      7. **3.G Functional Annotation Strategy**: If the target organism has been identified (i.e. `- **Taxon / Organism ID**` is populated with an identified organism/taxon ID and is not pending or unknown), verify `- **Confirm Functional Annotation Strategy**: TRUE` (specifying `uniprot` default, custom file path, or bypass). **CRITICAL**: If the target organism has NOT yet been identified (e.g. Taxon / Organism ID is PENDING or awaiting Phase 1 detection), Section 3.G is NOT a blocking gate and does NOT halt Phase 2 pre-flight execution.
     - **Mandatory Pre-Flight HITL Halt Check**:
-      - If ANY required confirmation check (3.A Discovered Groups, 3.B Normalization, 3.C Imputation, 3.D Sample Pooling, 3.E Target Contrasts, or 3.G Annotation Strategy) is `FALSE`:
-        - Ensure Section 3 subtasks (`3.A` through `3.E`, `3.G`, and `3.F` if detected) are cleanly populated with standard analytical defaults in `docs/experiment.md`, keeping `Confirm ...: FALSE`.
+      - If ANY required confirmation check (3.A Discovered Groups, 3.B Normalization, 3.C Imputation, 3.D Sample Pooling, 3.E Target Contrasts, or 3.G Annotation Strategy once target organism has been identified) is `FALSE`:
+        - Ensure Section 3 subtasks (`3.A` through `3.E`, `3.G` if target organism identified, and `3.F` if detected) are cleanly populated with standard analytical defaults in `docs/experiment.md`, keeping `Confirm ...: FALSE`.
         - **DO NOT self-confirm gates**: Autonomous agents are strictly prohibited from editing `Confirm ...: FALSE` to `TRUE`.
         - Halt execution cleanly via a single `fail_phase` call listing ALL unconfirmed items so the researcher can review and confirm all items in one click:
           ```
           fail_phase(
             phaseName = "02_NORMALIZE",
-            reason = "Pre-flight Study Design Gate: Human-in-the-loop (HITL) confirmation required for Section 3 subtasks (3.A Discovered Groups, 3.B Normalization, 3.C Imputation, 3.D Sample Pooling, 3.E Target Contrasts, 3.G Annotation Strategy) in docs/experiment.md.",
+            reason = "Pre-flight Study Design Gate: Human-in-the-loop (HITL) confirmation required for Section 3 subtasks (3.A Discovered Groups, 3.B Normalization, 3.C Imputation, 3.D Sample Pooling, 3.E Target Contrasts, and 3.G Annotation Strategy if organism identified) in docs/experiment.md.",
             actionableInsights = "ACTION REQUIRED: Open docs/experiment.md (highlighted in orange outline), verify each Section 3 subtask confirmation check, and click '🎯 Confirm All Study Design & Proceed' in the sidebar or Live Agent to resume Phases 02–11 uninterrupted."
           )
           ```

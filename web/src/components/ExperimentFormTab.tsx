@@ -84,7 +84,7 @@ export const ExperimentFormTab: React.FC<ExperimentFormTabProps> = ({
   // 3.G Annotation Strategy state
   const [annotationSource, setAnnotationSource] = useState("uniprot");
   const [annotationFilePath, setAnnotationFilePath] = useState("NONE");
-  const [annotationTaxonId, setAnnotationTaxonId] = useState("9606");
+  const [annotationTaxonId, setAnnotationTaxonId] = useState("(Pending Phase 1 target organism identification)");
   const [annotationOntologies, setAnnotationOntologies] = useState("biological_process, cellular_component, molecular_function, reactome_pathway");
   const [annotationValidationStatus, setAnnotationValidationStatus] = useState("PENDING");
   const [annotationConfirmed, setAnnotationConfirmed] = useState(false);
@@ -114,7 +114,7 @@ export const ExperimentFormTab: React.FC<ExperimentFormTabProps> = ({
     setNormalizationConfirmed(!!spec.normalizationConfirmed);
     setAnnotationSource(spec.annotationSource || "uniprot");
     setAnnotationFilePath(spec.annotationFilePath || "NONE");
-    setAnnotationTaxonId(spec.annotationTaxonId || "9606");
+    setAnnotationTaxonId(spec.annotationTaxonId || "(Pending Phase 1 target organism identification)");
     setAnnotationOntologies(spec.annotationOntologies || "biological_process, cellular_component, molecular_function, reactome_pathway");
     setAnnotationValidationStatus(spec.annotationValidationStatus || "PENDING");
     setAnnotationConfirmed(!!spec.annotationConfirmed);
@@ -309,6 +309,7 @@ export const ExperimentFormTab: React.FC<ExperimentFormTabProps> = ({
 
   // Section 3 sub-tasks needing confirmation / input:
   // 3.d and 3.e only need to be engaged as an Action Required after preliminary data inspection and/or ingestion.
+  // 3.g only needs to be engaged as a HITL stopping point after target organism has been identified.
   const needs3A = hasPreliminaryData && !discoveredGroupsConfirmed;
   const needs3B = !normalizationConfirmed;
   const needs3C = !imputationConfirmed;
@@ -316,7 +317,20 @@ export const ExperimentFormTab: React.FC<ExperimentFormTabProps> = ({
   const hasValidContrast = contrastRows.some((c) => c.treatment.trim() && c.control.trim());
   const needs3E = hasPreliminaryData && (!contrastConfirmed || !hasValidContrast);
   const needs3F = isBatchConfoundingIssue && !batchConfoundingAuthorized;
-  const needs3G = !annotationConfirmed;
+
+  const isOrganismPending =
+    !annotationTaxonId ||
+    /pending|unknown|none|required|^$/i.test(annotationTaxonId.trim()) ||
+    annotationTaxonId.includes("(") ||
+    annotationTaxonId.includes("<");
+
+  const hasTargetOrganism = Boolean(hasPreliminaryData && !isOrganismPending);
+
+  const needs3G = annotationSource === "none"
+    ? false
+    : annotationSource === "file"
+      ? (hasPreliminaryData && !annotationConfirmed)
+      : (hasTargetOrganism && !annotationConfirmed);
 
   const hitlActionCount = [
     needsDataFile,
@@ -1264,13 +1278,26 @@ export const ExperimentFormTab: React.FC<ExperimentFormTabProps> = ({
                           value={annotationTaxonId}
                           onChange={(e) => setAnnotationTaxonId(e.target.value)}
                         >
+                          {isOrganismPending && (
+                            <option value={annotationTaxonId}>
+                              ⏳ (Pending Phase 1 organism identification)
+                            </option>
+                          )}
                           <option value="9606">9606 - Homo sapiens (Human)</option>
                           <option value="10090">10090 - Mus musculus (Mouse)</option>
                           <option value="10116">10116 - Rattus norvegicus (Rat)</option>
                           <option value="559292">559292 - S. cerevisiae (Yeast)</option>
                           <option value="7227">7227 - Drosophila melanogaster</option>
                           <option value="6239">6239 - C. elegans</option>
+                          {!["9606", "10090", "10116", "559292", "7227", "6239"].includes(annotationTaxonId) && !isOrganismPending && (
+                            <option value={annotationTaxonId}>{annotationTaxonId} (Custom Taxon)</option>
+                          )}
                         </select>
+                        {isOrganismPending && (
+                          <div style={{ fontSize: "10.5px", color: "var(--muted)", marginTop: "4px" }}>
+                            Target organism will be automatically identified during Phase 1 from FASTA headers and protein accessions.
+                          </div>
+                        )}
                       </div>
                       <div>
                         <span style={{ fontSize: "11px", fontWeight: 600, color: "var(--fg)" }}>Target Ontologies</span>
@@ -1312,8 +1339,13 @@ export const ExperimentFormTab: React.FC<ExperimentFormTabProps> = ({
                     onChange={(e) => setAnnotationConfirmed(e.target.checked)}
                     style={{ accentColor: "var(--primary)" }}
                   />
-                  <span style={{ fontWeight: 500, color: annotationConfirmed ? "var(--fg-bright)" : "var(--attention-orange)" }}>
+                  <span style={{ fontWeight: 500, color: annotationConfirmed ? "var(--fg-bright)" : needs3G ? "var(--attention-orange)" : "var(--muted)" }}>
                     Confirm Functional Annotation Strategy (<code>Confirm Functional Annotation Strategy: TRUE</code>)
+                    {!hasTargetOrganism && annotationSource === "uniprot" && (
+                      <span style={{ fontSize: "11px", marginLeft: "6px", color: "var(--muted)" }}>
+                        (HITL stopping point after target organism is identified)
+                      </span>
+                    )}
                   </span>
                 </label>
               </div>

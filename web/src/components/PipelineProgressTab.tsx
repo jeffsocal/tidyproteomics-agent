@@ -115,7 +115,16 @@ export const PipelineProgressTab: React.FC<PipelineProgressTabProps> = ({
     }
   };
 
-  const totalDuration = phases.reduce((acc, p) => acc + (p.durationSeconds || 0), 0);
+  // Real-time active total duration: completed phase durations + active elapsed seconds of currently running phase
+  const totalDuration = phases.reduce((acc, p) => {
+    if (p.status === "running") {
+      const activeElapsed = p.startTime
+        ? Math.max(0, Math.round((nowMs - new Date(p.startTime).getTime()) / 1000))
+        : (p.durationSeconds || 0);
+      return acc + activeElapsed;
+    }
+    return acc + (p.durationSeconds || 0);
+  }, 0);
   const totalTurns = phases.reduce((acc, p) => acc + (p.turnCount || 0), 0);
   const totalInputTokens = pipelineState?.totalTokens?.promptTokens || 0;
   const totalCachedTokens = pipelineState?.totalTokens?.cachedPromptTokens || 0;

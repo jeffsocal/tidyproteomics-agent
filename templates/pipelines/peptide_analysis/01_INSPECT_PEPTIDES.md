@@ -87,17 +87,18 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/01_i
          - `- **Confirm Sample Pooling Map**: FALSE` as the scaffolded default awaiting researcher review.
       5. **Section 3.E**: Label with `👉 [USER ACTION REQUIRED - DEFINE & CONFIRM TARGET CONTRASTS]:` and suggest logical **Target Contrasts** structured as `<treatment>/<control>` (so $\log_2\text{FC} > 0$ reflects induction in treatment/perturbation), setting `Status: PENDING` and `- **Confirm Target Contrasts**: FALSE`.
       6. **Section 3.F**: Label with `⚠️ [PRE-FLIGHT GATE DECISION - EXPOSE ONLY IF BATCH CONFOUNDING DETECTED]:`. If disease/treatment condition is confounded with batch across cohorts (e.g. healthy only in batch 8, disease in batches 5/6/9), explicitly document the confounding in HTML comments, set `- **Batch Confounding Detected**: TRUE`, `- **Proceed With Potential Batch Confounding**: FALSE`, and `- **Confirm Batch Confounding Authorization**: FALSE` to expose this gate for researcher review. If NO batch confounding is detected, set `- **Batch Confounding Detected**: FALSE`. Setting these defaults does NOT fail or halt Phase 1.
-      7. **Section 3.G**: Label with `👉 [USER ACTION REQUIRED - CONFIGURE & CONFIRM ANNOTATION STRATEGY]:` and scaffold the **Functional Annotation Strategy**:
+      7. **Section 3.G**: Once the target organism has been identified from accessions and FASTA headers, scaffold the **Functional Annotation Strategy** and expose it as a HITL stopping point:
          - Inspect active annotations from `tpa_inspect(what = "annotation_terms")`.
          - If canonical functional ontologies (`biological_process`, `cellular_component`, `molecular_function`, `reactome_pathway`, `kegg`) are absent or unmapped:
            - Inspect accessions and FASTA headers to detect organism/taxon ID (e.g., `9606` for Human, `10090` for Mouse).
            - Scaffold default UniProt remote fetch parameters awaiting user confirmation:
              - `- **Annotation Source**: uniprot`
              - `- **Annotation File Path**: NONE`
-             - `- **Taxon / Organism ID**: <taxon_id>`
+             - `- **Taxon / Organism ID**: <identified_taxon_id>`
              - `- **Annotation Ontologies**: biological_process, cellular_component, molecular_function, reactome_pathway`
              - `- **Annotation Validation Status**: PENDING`
              - `- **Confirm Functional Annotation Strategy**: FALSE`
+           - Expose with `👉 [USER ACTION REQUIRED - CONFIGURE & CONFIRM ANNOTATION STRATEGY]:` only after the target organism has been identified so the researcher can verify the detected species.
          - If full canonical ontologies are already present from data ingestion, record status as `VALIDATED` and set `TRUE`.
   - If Section 3 already contains user-customized renaming, contrast definitions, or a confirmed imputation strategy, preserve them exactly!
   - **Enforce Clean Boolean/Enum Values & Badge Preservation**: Keep all configuration lines strictly as clean tokens (`TRUE`, `FALSE`, or the method identifier) without appending conversational notes. Place any rationale inside HTML comments `<!-- ... -->`.

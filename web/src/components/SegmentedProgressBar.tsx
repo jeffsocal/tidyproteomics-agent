@@ -1,16 +1,19 @@
 import React from "react";
+import { AlertCircle, CheckCircle2 } from "lucide-react";
 import { PhaseInfo, PipelineState, resolvePhaseVisualState } from "../types";
 
 interface SegmentedProgressBarProps {
   pipelineState?: PipelineState;
   onSelectPhase?: (phaseId: string) => void;
   showLegend?: boolean;
+  isHitlPending?: boolean;
 }
 
 export const SegmentedProgressBar: React.FC<SegmentedProgressBarProps> = ({
   pipelineState,
   onSelectPhase,
   showLegend = false,
+  isHitlPending,
 }) => {
   const phases: PhaseInfo[] = pipelineState?.phases || [];
   const anyRunning =
@@ -31,6 +34,12 @@ export const SegmentedProgressBar: React.FC<SegmentedProgressBarProps> = ({
   }
 
   const completedCount = phases.filter((p) => p.status === "completed").length;
+  const hitlHaltedPhase = phases.find((p) => {
+    if (!p) return false;
+    if (p.status === "awaiting_hitl") return true;
+    const errText = String(p.error || p.summary || "").trim();
+    return /human-in-the-loop|hitl|study design gate|confirmation required|section 3/i.test(errText);
+  });
 
   return (
     <div className="pipeline-progress-container">
@@ -52,6 +61,18 @@ export const SegmentedProgressBar: React.FC<SegmentedProgressBarProps> = ({
             ▶ {phases[runningIndex].fileName.replace(/\.md$/i, "")}
             {phases[runningIndex].turnCount ? ` (Turn ${phases[runningIndex].turnCount})` : ""}
           </span>
+        ) : hitlHaltedPhase ? (
+          isHitlPending === false ? (
+            <span style={{ color: "var(--success)", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: "4px" }}>
+              <CheckCircle2 size={10} color="var(--success)" />
+              Ready to resume: {hitlHaltedPhase.title || hitlHaltedPhase.fileName.replace(/\.md$/i, "")}
+            </span>
+          ) : (
+            <span style={{ color: "var(--attention-orange)", fontWeight: 700, display: "inline-flex", alignItems: "center", gap: "4px" }}>
+              <AlertCircle size={10} color="var(--attention-orange)" />
+              Paused at HITL: {hitlHaltedPhase.title || hitlHaltedPhase.fileName.replace(/\.md$/i, "")} (Action Required)
+            </span>
+          )
         ) : (
           <span>Click segment for details</span>
         )}

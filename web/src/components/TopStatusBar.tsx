@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Clock, Folder, FlaskConical, BookOpen, Bot, Cpu, Sparkles } from "lucide-react";
+import { Clock, Folder, FlaskConical, BookOpen, Bot, Cpu, Sparkles, AlertCircle } from "lucide-react";
 import { AppConfig, ExperimentSpec, FileTreeNode, LiteratureViewState, McpStatus, PipelineState } from "../types";
 import { SegmentedProgressBar } from "./SegmentedProgressBar";
 
@@ -34,15 +34,25 @@ export const TopStatusBar: React.FC<TopStatusBarProps> = ({
   const anyRunning =
     Boolean(pipelineState?.isRunning) || phases.some((p) => p && p.status === "running");
 
-  // Live timer tick for total pipeline time
-  const [, setNowMs] = useState<number>(Date.now());
+  // Live timer tick for total pipeline time while any phase is active
+  const [nowMs, setNowMs] = useState<number>(Date.now());
   useEffect(() => {
     if (!anyRunning) return;
+    setNowMs(Date.now());
     const interval = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(interval);
   }, [anyRunning]);
 
-  const totalDuration = phases.reduce((acc, p) => acc + (p.durationSeconds || 0), 0);
+  // Real-time active total duration: completed phase durations + active elapsed seconds of currently running phase
+  const totalDuration = phases.reduce((acc, p) => {
+    if (p.status === "running") {
+      const activeElapsed = p.startTime
+        ? Math.max(0, Math.round((nowMs - new Date(p.startTime).getTime()) / 1000))
+        : (p.durationSeconds || 0);
+      return acc + activeElapsed;
+    }
+    return acc + (p.durationSeconds || 0);
+  }, 0);
 
   const formatDuration = (sec?: number) => {
     if (sec === undefined || sec === null || sec < 0) return "0s";
@@ -63,21 +73,82 @@ export const TopStatusBar: React.FC<TopStatusBarProps> = ({
     ? `Workspace Ready: ${config?.workspaceRoot || "Configured"} • Click to view settings`
     : `Workspace Attention: ${!config?.workspaceRoot ? "No directory selected" : "Analysis directory uninitialized"} • Click to configure`;
 
-  // 2. Experiments: docs/experiment.md exists with data file and no missing mandatory fields
-  const isExperimentReady = Boolean(
+  // 2. Experiments: docs/experiment.md exists with data file, no missing initial fields, and no pending HITL checkpoints
+  const isExperimentInitialReady = Boolean(
     experimentSpec?.exists &&
     experimentSpec.pathToDataFile &&
     experimentSpec.pathToDataFile.trim() !== "" &&
     (!experimentSpec.missingInitialFields || experimentSpec.missingInitialFields.length === 0)
   );
-  const experimentTooltip = isExperimentReady
-    ? `Experiments Ready: Data file defined (${experimentSpec?.pathToDataFile}) • Click to view setup`
-    : `Experiments Incomplete: ${!experimentSpec?.exists
+
+  const hasPreliminaryData = Boolean(
+    (experimentSpec?.rawSampleGroups && experimentSpec.rawSampleGroups.length > 0) ||
+    (experimentSpec?.discoveredGroups && experimentSpec.discoveredGroups.length > 0)
+  );
+
+  const isBatchConfoundingIssue = Boolean(
+    experimentSpec?.batchConfoundingDetected
+  );
+
+  // Section 3 study design subtasks needing confirmation / input
+  const needs3A = hasPreliminaryData && !experimentSpec?.discoveredGroupsConfirmed;
+  const needs3B = !experimentSpec?.normalizationConfirmed;
+  const needs3C = !experimentSpec?.imputationConfirmed;
+  const needs3D = hasPreliminaryData && !experimentSpec?.samplePoolingConfirmed;
+  const hasValidContrast = Boolean(
+    experimentSpec?.targetContrasts &&
+    experimentSpec.targetContrasts.length > 0 &&
+    experimentSpec.contrastConfirmed
+  );
+  const needs3E = hasPreliminaryData && (!experimentSpec?.contrastConfirmed || !hasValidContrast);
+  const needs3F = isBatchConfoundingIssue && !experimentSpec?.batchConfoundingAuthorized;
+
+  const isOrganismPending =
+    !experimentSpec?.annotationTaxonId ||
+    /pending|unknown|none|required|^$/i.test(experimentSpec.annotationTaxonId.trim()) ||
+    experimentSpec.annotationTaxonId.includes("(") ||
+    experimentSpec.annotationTaxonId.includes("<");
+
+  const hasTargetOrganism = Boolean(hasPreliminaryData && !isOrganismPending);
+
+  const needs3G = experimentSpec?.annotationSource === "none"
+    ? false
+    : experimentSpec?.annotationSource === "file"
+      ? (hasPreliminaryData && !experimentSpec?.annotationConfirmed)
+      : (hasTargetOrganism && !experimentSpec?.annotationConfirmed);
+
+  const hitlHaltedPhase = phases.find((p) => {
+    if (!p) return false;
+    if (p.status === "awaiting_hitl") return true;
+    const errText = String(p.error || p.summary || "").trim();
+    return /human-in-the-loop|hitl|study design gate|confirmation required|section 3/i.test(errText);
+  });
+
+  const pendingHitlItems: string[] = [];
+  if (needs3A) pendingHitlItems.push("3.A Discovered Groups");
+  if (needs3B) pendingHitlItems.push("3.B Normalization");
+  if (needs3C) pendingHitlItems.push("3.C Imputation");
+  if (needs3D) pendingHitlItems.push("3.D Sample Pooling");
+  if (needs3E) pendingHitlItems.push("3.E Contrasts");
+  if (needs3F) pendingHitlItems.push("3.F Batch Confounding");
+  if (needs3G) pendingHitlItems.push("3.G Annotation Strategy");
+
+  const isHitlEngaged = Boolean(
+    pendingHitlItems.length > 0 && (hitlHaltedPhase || hasPreliminaryData)
+  );
+
+  const isExperimentReady = isExperimentInitialReady && !isHitlEngaged;
+
+  const experimentTooltip = !isExperimentInitialReady
+    ? `Experiments Incomplete: ${!experimentSpec?.exists
       ? "docs/experiment.md missing"
       : !experimentSpec?.pathToDataFile
         ? "Missing data file path"
         : "Missing fields: " + (experimentSpec.missingInitialFields || []).join(", ")
-    } • Click to configure`;
+    } • Click to configure`
+    : isHitlEngaged
+      ? `HITL Checkpoint Active: Human-in-the-loop confirmation required in docs/experiment.md (${pendingHitlItems.join(", ") || hitlHaltedPhase?.fileName || "Study Design Gate"}) • Click to review & confirm`
+      : `Experiments Ready: Data file defined (${experimentSpec?.pathToDataFile}) • All study design parameters confirmed • Click to view setup`;
 
   // Local bypass state synchronization
   const [localBypass, setLocalBypass] = useState<boolean>(() => {
@@ -281,16 +352,21 @@ export const TopStatusBar: React.FC<TopStatusBarProps> = ({
             gap: "5px",
             padding: "4px 8px",
             borderRadius: "5px",
-            border: isExperimentReady ? "1px solid var(--border)" : "1px solid var(--attention-orange-border)",
+            border: isExperimentReady
+              ? "1px solid var(--border)"
+              : isHitlEngaged
+                ? "1.5px solid var(--attention-orange)"
+                : "1px solid var(--attention-orange-border)",
             background: isExperimentReady ? "rgba(255, 255, 255, 0.03)" : "var(--attention-orange-bg)",
-            color: "var(--fg-bright)",
+            color: isHitlEngaged ? "var(--attention-orange-light)" : "var(--fg-bright)",
             fontSize: "11px",
             fontWeight: 600,
             cursor: "pointer",
             transition: "all 0.15s ease",
             whiteSpace: "nowrap",
+            boxShadow: isHitlEngaged ? "0 0 8px rgba(249, 115, 22, 0.35)" : "none",
           }}
-          className="status-indicator-btn"
+          className={`status-indicator-btn ${isHitlEngaged ? "hitl-highlight-orange" : ""}`}
         >
           <span
             style={{
@@ -300,12 +376,31 @@ export const TopStatusBar: React.FC<TopStatusBarProps> = ({
               backgroundColor: isExperimentReady ? "#10b981" : "var(--attention-orange)",
               boxShadow: isExperimentReady
                 ? "0 0 5px rgba(16, 185, 129, 0.6)"
-                : "0 0 5px var(--attention-orange)",
+                : "0 0 7px var(--attention-orange)",
               flexShrink: 0,
             }}
           />
-          <FlaskConical size={12} color="var(--muted)" />
-          <span>Experiments</span>
+          {isHitlEngaged ? (
+            <AlertCircle size={12} color="var(--attention-orange)" />
+          ) : (
+            <FlaskConical size={12} color="var(--muted)" />
+          )}
+          <span>{isHitlEngaged ? "Experiments (HITL Action Required)" : "Experiments"}</span>
+          {isHitlEngaged && pendingHitlItems.length > 0 && (
+            <span
+              style={{
+                fontSize: "9px",
+                background: "var(--attention-orange)",
+                color: "#fff",
+                padding: "1px 5px",
+                borderRadius: "10px",
+                fontWeight: 800,
+                marginLeft: "2px",
+              }}
+            >
+              {pendingHitlItems.length}
+            </span>
+          )}
         </button>
 
         {/* [Literature] */}
@@ -454,6 +549,7 @@ export const TopStatusBar: React.FC<TopStatusBarProps> = ({
           pipelineState={pipelineState}
           onSelectPhase={onSelectPhaseSegment}
           showLegend={false}
+          isHitlPending={isHitlEngaged}
         />
       </div>
 
@@ -477,9 +573,21 @@ export const TopStatusBar: React.FC<TopStatusBarProps> = ({
             width: "28px",
             height: "28px",
             borderRadius: "6px",
-            background: anyRunning ? "rgba(59, 130, 246, 0.12)" : "rgba(255, 255, 255, 0.04)",
-            border: anyRunning ? "1px solid rgba(59, 130, 246, 0.35)" : "1px solid var(--border)",
-            color: anyRunning ? "var(--primary)" : "var(--muted)",
+            background: anyRunning
+              ? "rgba(59, 130, 246, 0.12)"
+              : isHitlEngaged
+                ? "var(--attention-orange-bg)"
+                : "rgba(255, 255, 255, 0.04)",
+            border: anyRunning
+              ? "1px solid rgba(59, 130, 246, 0.35)"
+              : isHitlEngaged
+                ? "1px solid var(--attention-orange-border)"
+                : "1px solid var(--border)",
+            color: anyRunning
+              ? "var(--primary)"
+              : isHitlEngaged
+                ? "var(--attention-orange)"
+                : "var(--muted)",
           }}
         >
           <Clock size={14} />
@@ -488,19 +596,23 @@ export const TopStatusBar: React.FC<TopStatusBarProps> = ({
           <span
             style={{
               fontSize: "9.5px",
-              color: "var(--muted)",
+              color: isHitlEngaged ? "var(--attention-orange)" : "var(--muted)",
               textTransform: "uppercase",
               fontWeight: 700,
               letterSpacing: "0.4px",
             }}
           >
-            Total Time
+            {isHitlEngaged ? "Paused (HITL)" : "Total Time"}
           </span>
           <span
             style={{
               fontSize: "13px",
               fontWeight: 700,
-              color: anyRunning ? "var(--primary)" : "var(--fg-bright)",
+              color: anyRunning
+                ? "var(--primary)"
+                : isHitlEngaged
+                  ? "var(--attention-orange)"
+                  : "var(--fg-bright)",
               fontVariantNumeric: "tabular-nums",
             }}
           >

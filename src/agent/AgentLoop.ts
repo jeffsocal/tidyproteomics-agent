@@ -861,6 +861,27 @@ DO NOT repeat the identical failing command without structural fixes:
           if (tc.name === "fail_phase") {
             const failReason = tc.args.reason || "Phase gate or checkpoint failed";
             const actionable = tc.args.actionableInsights || "";
+
+            // Guard against premature Turn 1 aborts unless there was a prior tool error or explicit HITL gate
+            const isHitlHalt = /human-in-the-loop|hitl|confirmation required|section 3|checkpoint gate|study design/i.test(
+              failReason + " " + actionable
+            );
+            const hasPriorToolError = this.messages.some(
+              (m) => m.role === "tool" && (m.content.includes("[FAILED]") || m.content.toLowerCase().includes("error"))
+            );
+            if (turn <= 1 && !isHitlHalt && !hasPriorToolError) {
+              this.messages.push({
+                role: "user",
+                content:
+                  "[System Policy]: fail_phase cannot be invoked on Turn 1 without an explicit Human-in-the-Loop gate or prior tool error payload. Please execute initial inspection or data loading tools before deciding to halt.",
+              });
+              this.onProgress({
+                type: "thought",
+                data: "Turn 1 fail_phase rejected by system policy: no prior tool error or HITL gate.",
+              });
+              continue;
+            }
+
             const summary = actionable
               ? `[Failed] Pre-flight Gate / Checkpoint: ${failReason}\n\nActionable Insights:\n${actionable}`
               : `[Failed] Pre-flight Gate / Checkpoint: ${failReason}`;
@@ -1047,25 +1068,40 @@ DO NOT repeat the identical failing command without structural fixes:
     let recoveredSuccess = false;
     let recoveredSummary = "";
 
-    const gateErrors = await this.verifyPhaseGateDeliverables(this.phaseName);
-    if (gateErrors.length === 0) {
-      recoveredSuccess = true;
-      recoveredSummary = `Phase completed: All required checkpoint deliverables were successfully generated and verified on disk before turn budget expired.`;
+    // For review and correction phases (12_integrity, 13_critique), require that deliverables were
+    // actually written or modified DURING THIS RUN (mtimeMs >= startTimeMs) to prevent false completion
+    // from stale files left over from prior runs or earlier phases.
+    if (this.phaseName?.includes("12_") || this.phaseName?.includes("integrity")) {
+      const repPath = path.join(wsRoot, "docs", "report_integrity.md");
+      const revPath = path.join(wsRoot, "docs", "manuscript_rev_01.md");
+      if (fsSync.existsSync(repPath) && fsSync.existsSync(revPath)) {
+        try {
+          const statRep = fsSync.statSync(repPath);
+          const statRev = fsSync.statSync(revPath);
+          if (statRep.size > 500 && statRep.mtimeMs >= startTimeMs && statRev.mtimeMs >= startTimeMs) {
+            recoveredSuccess = true;
+            recoveredSummary = `Phase completed: Integrity report (docs/report_integrity.md) and corrected manuscript (docs/manuscript_rev_01.md) were successfully finalized on disk before turn budget expired.`;
+          }
+        } catch {}
+      }
+    } else if (this.phaseName?.includes("13_") || this.phaseName?.includes("critique")) {
+      const repPath = path.join(wsRoot, "docs", "report_critique.md");
+      const revPath = path.join(wsRoot, "docs", "manuscript_rev_02.md");
+      if (fsSync.existsSync(repPath) && fsSync.existsSync(revPath)) {
+        try {
+          const statRep = fsSync.statSync(repPath);
+          const statRev = fsSync.statSync(revPath);
+          if (statRep.size > 500 && statRep.mtimeMs >= startTimeMs && statRev.mtimeMs >= startTimeMs) {
+            recoveredSuccess = true;
+            recoveredSummary = `Phase completed: Report (docs/report_critique.md) and revised manuscript (docs/manuscript_rev_02.md) were successfully finalized on disk before turn budget expired.`;
+          }
+        } catch {}
+      }
     } else {
-      if (this.phaseName?.includes("13_") || this.phaseName?.includes("critique")) {
-        const repPath = path.join(wsRoot, "docs", "report_critique.md");
-        const revPath = path.join(wsRoot, "docs", "manuscript_rev_02.md");
-        if (fsSync.existsSync(repPath) && fsSync.statSync(repPath).size > 500 && fsSync.existsSync(revPath)) {
-          recoveredSuccess = true;
-          recoveredSummary = `Phase completed: Report (docs/report_critique.md) and revised manuscript (docs/manuscript_rev_02.md) were successfully finalized on disk before turn budget expired.`;
-        }
-      } else if (this.phaseName?.includes("12_") || this.phaseName?.includes("integrity")) {
-        const repPath = path.join(wsRoot, "docs", "report_integrity.md");
-        const revPath = path.join(wsRoot, "docs", "manuscript_rev_01.md");
-        if (fsSync.existsSync(repPath) && fsSync.statSync(repPath).size > 500 && fsSync.existsSync(revPath)) {
-          recoveredSuccess = true;
-          recoveredSummary = `Phase completed: Integrity report (docs/report_integrity.md) and corrected manuscript (docs/manuscript_rev_01.md) were successfully finalized on disk before turn budget expired.`;
-        }
+      const gateErrors = await this.verifyPhaseGateDeliverables(this.phaseName);
+      if (gateErrors.length === 0) {
+        recoveredSuccess = true;
+        recoveredSummary = `Phase completed: All required checkpoint deliverables were successfully generated and verified on disk before turn budget expired.`;
       }
     }
 
@@ -1257,6 +1293,18 @@ DO NOT repeat the identical failing command without structural fixes:
     } else if (normPhase.includes("synthesis")) {
       const hasManuscript = (await checkFile("manuscript.md")) || (await checkFile("docs/manuscript.md"));
       if (!hasManuscript) missing.push("manuscript.md or docs/manuscript.md");
+    } else if (normPhase.includes("integrity")) {
+      const hasRep = (await checkFile("docs/report_integrity.md")) || (await checkFile("report_integrity.md"));
+      const hasRev1 = (await checkFile("docs/manuscript_rev_01.md")) || (await checkFile("manuscript_rev_01.md"));
+      const hasRev0 = (await checkFile("docs/manuscript_rev_00.md")) || (await checkFile("manuscript_rev_00.md"));
+      if (!hasRep) missing.push("docs/report_integrity.md (>500 characters)");
+      if (!hasRev1) missing.push("docs/manuscript_rev_01.md");
+      if (!hasRev0) missing.push("docs/manuscript_rev_00.md");
+    } else if (normPhase.includes("critique")) {
+      const hasRep = (await checkFile("docs/report_critique.md")) || (await checkFile("report_critique.md"));
+      const hasRev2 = (await checkFile("docs/manuscript_rev_02.md")) || (await checkFile("manuscript_rev_02.md"));
+      if (!hasRep) missing.push("docs/report_critique.md (>500 characters)");
+      if (!hasRev2) missing.push("docs/manuscript_rev_02.md");
     }
 
     return missing;

@@ -44,7 +44,7 @@
 <!-- Configures functional ontology annotation (GO terms, KEGG, Reactome) for pathway enrichment -->
 - **Annotation Source**: uniprot
 - **Annotation File Path**: NONE
-- **Taxon / Organism ID**: 9606
+- **Taxon / Organism ID**: (Pending Phase 1 target organism identification)
 - **Annotation Ontologies**: biological_process, cellular_component, molecular_function, reactome_pathway
 - **Annotation Validation Status**: PENDING
 - **Confirm Functional Annotation Strategy**: FALSE
