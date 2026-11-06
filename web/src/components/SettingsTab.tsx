@@ -220,6 +220,27 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     }
   }, [initialSection]);
 
+  // Fallback for browsers without <dialog closedby> support per modern-web-guidance `light-dismiss-a-dialog`
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (!("closedBy" in HTMLDialogElement.prototype)) {
+      const handleBackdropClick = (event: MouseEvent) => {
+        if (event.target !== dialog) return;
+        const rect = dialog.getBoundingClientRect();
+        const isDialogContent =
+          rect.top <= event.clientY &&
+          event.clientY <= rect.top + rect.height &&
+          rect.left <= event.clientX &&
+          event.clientX <= rect.left + rect.width;
+        if (isDialogContent) return;
+        dialog.close();
+      };
+      dialog.addEventListener("click", handleBackdropClick);
+      return () => dialog.removeEventListener("click", handleBackdropClick);
+    }
+  }, []);
+
   const handleApplyPreset = (presetKey: string) => {
     switch (presetKey) {
       case "anthropic":
@@ -1031,6 +1052,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       {/* Directory Browser Modal */}
       <dialog
         ref={dialogRef}
+        {...({ closedby: "any" } as any)}
         style={{
           background: "var(--panel-bg)",
           color: "var(--fg)",

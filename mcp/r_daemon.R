@@ -120,6 +120,154 @@ resolve_comparison <- function(data, comp = NULL) {
   return(format_comparison(comp))
 }
 
+# Helper: Resolve canonical platform name from data object, daemon state, or docs/experiment.md
+resolve_platform_name <- function(data = NULL) {
+  candidates <- c(
+    if (!is.null(data) && !is.null(data$platform)) as.character(data$platform) else character(0),
+    if (!is.null(data) && !is.null(data$origin)) as.character(data$origin) else character(0),
+    if (!is.null(STATE$last_platform)) as.character(STATE$last_platform) else character(0),
+    if (!is.null(STATE$last_ingest_config_platform)) as.character(STATE$last_ingest_config_platform) else character(0)
+  )
+  candidates <- trimws(candidates[!is.na(candidates) & nzchar(trimws(candidates))])
+  candidates <- candidates[!tolower(candidates) %in% c("unknown", "unknown platform", "rds", "tidyproteomics", "none")]
+  if (length(candidates) > 0) return(candidates[1])
+
+  exp_path <- tryCatch(resolve_workspace_file("docs/experiment.md"), error = function(e) "docs/experiment.md")
+  if (!is.null(exp_path) && file.exists(exp_path)) {
+    exp_lines <- tryCatch(readLines(exp_path, warn = FALSE), error = function(e) character(0))
+    plat_line <- grep("-\\s*\\*\\*PLATFORM\\*\\*\\s*:", exp_lines, ignore.case = TRUE, value = TRUE)
+    if (length(plat_line) > 0) {
+      val <- trimws(sub("^.*-\\s*\\*\\*PLATFORM\\*\\*\\s*:\\s*", "", plat_line[1], ignore.case = TRUE))
+      val <- gsub("^[`'\"]+|[`'\"]+$", "", val)
+      if (nzchar(val) && !grepl("^\\{\\{", val) && !tolower(val) %in% c("unknown", "unknown platform", "rds", "tidyproteomics")) {
+        return(val)
+      }
+    }
+  }
+  return("Unknown Platform")
+}
+
+# Helper: Determine missingness scope ('raw', 'filtered', or 'post_impute') from operations history
+resolve_missingness_scope <- function(data) {
+  ops <- if (!is.null(data) && !is.null(data$operations)) unlist(data$operations) else character(0)
+  if (any(grepl("impute|Missing values imputed", ops, ignore.case = TRUE))) {
+    return("post_impute")
+  }
+  if (any(grepl("subset|rm\\.mbr|filter", ops, ignore.case = TRUE))) {
+    return("filtered")
+  }
+  return("raw")
+}
+
+# Helper: Normalize imputation method string to canonical token
+canonical_impute_method <- function(m) {
+  if (is.null(m) || !nzchar(trimws(as.character(m)))) return("unknown")
+  s <- tolower(trimws(as.character(m)))
+  s <- gsub("<!--.*-->", "", s)
+  s <- trimws(s)
+  if (s %in% c("none", "bypass", "unimputed", "false")) return("none")
+  if (s %in% c("min_column", "column_min", "lod_column") || (grepl("base::min|\\bmin\\b", s) && grepl("column", s))) return("min_column")
+  if (s %in% c("min_row_grouped", "row_min_grouped") || (grepl("base::min|\\bmin\\b", s) && grepl("row", s))) return("min_row_grouped")
+  if (s %in% c("randomforest", "randomforest_grouped", "rf") || grepl("randomforest", s)) return("randomforest_grouped")
+  return(s)
+}
+
+# Helper: Annotate enrichment table with set_md5, statistic_id, score_tie_group, and tie warnings
+annotate_enrichment_ties <- function(enr_df, data = NULL) {
+  if (is.null(enr_df) || !is.data.frame(enr_df) || nrow(enr_df) == 0) {
+    return(list(table = enr_df, tie_warning = NULL, tie_groups = list()))
+  }
+  score_col <- intersect(c("enrichment", "score", "statistic", "enrichment_score"), names(enr_df))[1]
+  p_col <- intersect(c("adj_p_value", "q_value", "p_value"), names(enr_df))[1]
+  size_col <- intersect(c("size", "leading_edge_count", "n"), names(enr_df))[1]
+  member_col <- intersect(c("member_proteins", "member_genes", "gene_names", "top_drivers"), names(enr_df))[1]
+  id_col <- if (!is.null(data) && !is.null(data$identifier)) data$identifier[1] else "protein"
+  annot_df <- if (!is.null(data) && !is.null(data$annotations)) data$annotations else NULL
+
+  # Simple deterministic hash of sorted member set
+  simple_set_hash <- function(members_str) {
+    if (is.null(members_str) || is.na(members_str) || !nzchar(trimws(members_str))) return("empty_set")
+    tokens <- sort(unique(trimws(unlist(strsplit(as.character(members_str), "[,;\\s]+")))))
+    tokens <- tokens[nzchar(tokens)]
+    if (length(tokens) == 0) return("empty_set")
+    joined <- paste(tokens, collapse = ",")
+    tf <- tempfile("set_md5_")
+    on.exit(unlink(tf), add = TRUE)
+    writeChar(joined, tf, eos = NULL)
+    unname(as.character(tools::md5sum(tf)))
+  }
+
+  set_hashes <- character(nrow(enr_df))
+  for (i in seq_len(nrow(enr_df))) {
+    m_str <- if (!is.na(member_col)) as.character(enr_df[[member_col]][i]) else ""
+    if ((is.na(m_str) || !nzchar(trimws(m_str))) && !is.null(annot_df) && "annotation" %in% names(enr_df) && "annotation" %in% names(annot_df)) {
+      ann_val <- as.character(enr_df$annotation[i])
+      sub_a <- annot_df[!is.na(annot_df$annotation) & annot_df$annotation == ann_val, , drop = FALSE]
+      if ("term" %in% names(enr_df) && "term" %in% names(sub_a) && !is.na(enr_df$term[i])) {
+        sub_a <- sub_a[sub_a$term == as.character(enr_df$term[i]), , drop = FALSE]
+      }
+      if (nrow(sub_a) > 0 && id_col %in% names(sub_a)) {
+        m_str <- paste(sort(unique(as.character(sub_a[[id_col]]))), collapse = ",")
+      }
+    }
+    set_hashes[i] <- substr(simple_set_hash(m_str), 1, 12)
+  }
+  enr_df$set_md5 <- set_hashes
+
+  tie_warning <- NULL
+  tie_groups_info <- list()
+  if (!is.na(score_col) && !is.na(p_col)) {
+    sc_round <- ifelse(is.na(enr_df[[score_col]]), "NA", sprintf("%.6f", as.numeric(enr_df[[score_col]])))
+    qv_round <- ifelse(is.na(enr_df[[p_col]]), "NA", sprintf("%.6e", as.numeric(enr_df[[p_col]])))
+    stat_id <- paste0("score_", sc_round, "_q_", qv_round)
+    enr_df$statistic_id <- stat_id
+
+    stat_counts <- table(stat_id)
+    tied_keys <- names(stat_counts[stat_counts >= 2 & names(stat_counts) != "score_NA_q_NA"])
+    tie_group_vec <- rep("UNIQUE", nrow(enr_df))
+    warn_lines <- character(0)
+    if (length(tied_keys) > 0) {
+      for (k_idx in seq_along(tied_keys)) {
+        tk <- tied_keys[k_idx]
+        idx <- which(stat_id == tk)
+        grp_label <- sprintf("TIE_GROUP_%02d (n=%d)", k_idx, length(idx))
+        tie_group_vec[idx] <- grp_label
+        terms_in_tie <- if ("annotation" %in% names(enr_df)) as.character(enr_df$annotation[idx]) else as.character(idx)
+        sizes_in_tie <- if (!is.na(size_col)) as.character(enr_df[[size_col]][idx]) else rep("?", length(idx))
+        hashes_in_tie <- enr_df$set_md5[idx]
+        unequal_sizes <- length(unique(sizes_in_tie)) > 1 || length(unique(hashes_in_tie)) > 1
+        q_num <- suppressWarnings(as.numeric(enr_df[[p_col]][idx[1]]))
+        if (length(idx) >= 2 && (unequal_sizes || (!is.na(q_num) && q_num <= 0.05))) {
+          tie_groups_info[[grp_label]] <- list(
+            statistic_id = tk,
+            count = length(idx),
+            terms = terms_in_tie,
+            sizes = sizes_in_tie,
+            set_md5 = hashes_in_tie,
+            unequal_membership = unequal_sizes
+          )
+          if (length(idx) >= 3 || (!is.na(q_num) && q_num <= 0.05)) {
+            warn_lines <- c(warn_lines, sprintf(
+              "- %s [%s]: %d terms (%s) share identical score/q-value with set sizes [%s] and set_md5 [%s]. Treat as a single tied/shared-driver pathway family rather than independent pathway hits.",
+              grp_label, tk, length(idx), paste(head(terms_in_tie, 5), collapse = "; "),
+              paste(head(sizes_in_tie, 5), collapse = ", "), paste(head(hashes_in_tie, 5), collapse = ", ")
+            ))
+          }
+        }
+      }
+    }
+    enr_df$score_tie_group <- tie_group_vec
+    if (length(warn_lines) > 0) {
+      tie_warning <- paste(c(
+        "[ENRICHMENT TIE / OVERLAP WARNING]:",
+        warn_lines
+      ), collapse = "\n")
+    }
+  }
+
+  list(table = enr_df, tie_warning = tie_warning, tie_groups = tie_groups_info)
+}
+
 # Helper: Format lean state summary card (~50 tokens vs ~2000 tokens for print(data))
 format_state_card <- function(data, id = NULL) {
   if (is.null(data) || !"tidyproteomics" %in% class(data)) {
@@ -127,7 +275,7 @@ format_state_card <- function(data, id = NULL) {
   }
   target_id <- if (!is.null(id)) id else STATE$active_id
   analyte <- if (!is.null(data$analyte)) data$analyte else "proteins"
-  origin <- if (!is.null(data$origin)) data$origin else "unknown"
+  origin <- resolve_platform_name(data)
   source <- if (!is.null(data$quantitative_source)) data$quantitative_source else "raw"
   samples <- if (!is.null(data$experiments$sample)) unique(data$experiments$sample) else character(0)
   n_samples <- length(samples)
@@ -144,6 +292,7 @@ format_state_card <- function(data, id = NULL) {
   is_imputed <- isTRUE(has_imputed_vals) || isTRUE(has_impute_op)
   imputed_str <- if (is_imputed) "Yes" else "No"
   ops_count <- length(data$operations)
+  scope_label <- resolve_missingness_scope(data)
 
   # Calculate true matrix missingness across the full entities x files grid
   total_cells <- n_entities * n_files
@@ -161,8 +310,8 @@ format_state_card <- function(data, id = NULL) {
     "[TidyProteomics State: ", target_id, "]\n",
     "- Analyte & Origin: ", analyte, " (", origin, ")\n",
     "- Quantified Entities: ", n_entities, " ", analyte, " across ", n_files, " files (grouped into ", n_samples, " cohorts: ", samples_str, ")\n",
-    "- Active Assay: ", source, " | Imputed: ", imputed_str, " (Residual missing values: ", missing_pct, "% [", missing_cells, " of ", total_cells, " cells])\n",
-    "- Matrix Dimensions: ", n_entities, " x ", n_files, " = ", total_cells, " data points (observed: ", observed_cells, ", missing: ", missing_cells, ")\n",
+    "- Active Assay: ", source, " | Imputed: ", imputed_str, " (Missingness [scope=", scope_label, "]: ", missing_pct, "% [missing: ", missing_cells, ", observed: ", observed_cells, " of ", total_cells, " cells])\n",
+    "- Matrix Dimensions: ", n_entities, " x ", n_files, " = ", total_cells, " data points (observed_cells: ", observed_cells, ", missing_cells: ", missing_cells, ", scope: ", scope_label, ")\n",
     "- Operations History: ", ops_count, " operation(s) recorded"
   )
 }
@@ -331,7 +480,10 @@ update_data_overview_doc <- function(data, file_path = "docs/data.md", phase_tag
 
   id_col <- if (!is.null(data$identifier)) data$identifier[1] else "protein"
   analyte_name <- if (!is.null(data$analyte) && nzchar(data$analyte)) data$analyte else "proteins"
-  platform_name <- if (!is.null(data$platform) && nzchar(data$platform)) data$platform else "Unknown Platform"
+  platform_name <- resolve_platform_name(data)
+  if ((is.null(data$platform) || !nzchar(data$platform) || tolower(data$platform) == "unknown platform") && platform_name != "Unknown Platform") {
+    data$platform <- platform_name
+  }
   active_assay <- if (!is.null(data$quantitative_source)) data$quantitative_source else "raw"
 
   dataset_proteins <- get_unique_variables(data, id_col, format = "vector")
@@ -419,7 +571,7 @@ update_data_overview_doc <- function(data, file_path = "docs/data.md", phase_tag
   if (!is.null(sm) && nrow(sm) > 0) {
     lines <- c(
       lines,
-      "| Sample Group | Replicate CV (Median) | PC1 Variance | PC2 Variance | Replicate Consistency Tag |",
+      "| Sample Group | Replicate CV (Median) | Within-Group PC1 (`within_group_PC1`) | Within-Group PC2 (`within_group_PC2`) | Replicate Consistency Tag |",
       "| :--- | :---: | :---: | :---: | :---: |"
     )
     for (i in seq_len(nrow(sm))) {
@@ -431,7 +583,7 @@ update_data_overview_doc <- function(data, file_path = "docs/data.md", phase_tag
       tag <- if (is.na(cv_val) || !is.finite(cv_val)) "UNDEFINED" else if (cv_val < 0.15) "HIGH_PRECISION (<15%)" else if (cv_val <= 0.25) "ACCEPTABLE (15-25%)" else "HIGH_VARIANCE (>25%)"
       lines <- c(lines, sprintf("| %s | %s | %s | %s | %s |", s_name, cv_str, pc1_str, pc2_str, tag))
     }
-    lines <- c(lines, "")
+    lines <- c(lines, "", "_Note: `within_group_PC1` and `within_group_PC2` measure intra-cohort replicate dispersion within each sample group (summing to ~100% when N=3); global cross-cohort PCA variance explained is reported in Section 7._", "")
   } else {
     lines <- c(lines, "_Sample variability metrics not available._", "")
   }
@@ -467,13 +619,19 @@ update_data_overview_doc <- function(data, file_path = "docs/data.md", phase_tag
       "| :--- | :--- | :---: | :---: |"
     )
     for (tm in terms) {
-      cat_type <- if (tm %in% c("biological_process", "cellular_component", "molecular_function")) "Gene Ontology (GO)" else if (grepl("reactome", tm)) "Reactome Pathway" else if (grepl("kegg", tm)) "KEGG Pathway" else if (tm %in% c("gene_name", "gene_id_entrez", "gene_id_ensemble")) "Gene Identifier" else "Metadata / Annotation"
       sub_df <- if (!is.null(annot_df) && "term" %in% names(annot_df)) annot_df[annot_df$term == tm, ] else NULL
-      n_vals <- if (!is.null(sub_df) && "annotation" %in% names(sub_df)) format(length(unique(sub_df$annotation)), big.mark = ",") else "-"
-      cov_str <- "-"
-      if (!is.null(sub_df) && id_col %in% names(sub_df) && total_proteins > 0) {
-        n_cov <- length(intersect(dataset_proteins, unique(sub_df[[id_col]])))
-        cov_str <- sprintf("%s / %s (%.1f%%)", format(n_cov, big.mark = ","), format(total_proteins, big.mark = ","), 100 * n_cov / total_proteins)
+      if (identical(tm, id_col) || (tm %in% c("protein", "accession", "peptide") && (is.null(sub_df) || nrow(sub_df) == 0))) {
+        cat_type <- "Primary Entity Identifier"
+        n_vals <- format(total_proteins, big.mark = ",")
+        cov_str <- if (total_proteins > 0) sprintf("%s / %s (100.0%%)", format(total_proteins, big.mark = ","), format(total_proteins, big.mark = ",")) else "-"
+      } else {
+        cat_type <- if (tm %in% c("biological_process", "cellular_component", "molecular_function")) "Gene Ontology (GO)" else if (grepl("reactome", tm)) "Reactome Pathway" else if (grepl("kegg", tm)) "KEGG Pathway" else if (tm %in% c("gene_name", "gene_id_entrez", "gene_id_ensemble")) "Gene Identifier" else "Metadata / Annotation"
+        n_vals <- if (!is.null(sub_df) && "annotation" %in% names(sub_df)) format(length(unique(sub_df$annotation)), big.mark = ",") else "-"
+        cov_str <- "-"
+        if (!is.null(sub_df) && id_col %in% names(sub_df) && total_proteins > 0) {
+          n_cov <- length(intersect(dataset_proteins, unique(sub_df[[id_col]])))
+          cov_str <- sprintf("%s / %s (%.1f%%)", format(n_cov, big.mark = ","), format(total_proteins, big.mark = ","), 100 * n_cov / total_proteins)
+        }
       }
       lines <- c(lines, sprintf("| `%s` | %s | %s | %s |", tm, cat_type, n_vals, cov_str))
     }
@@ -945,6 +1103,18 @@ handle_request <- function(req) {
           }
         }
 
+        # Persist platform metadata on data object and daemon state so docs/data.md never shows Unknown Platform
+        if (!is.null(platform) && nzchar(platform) && !tolower(platform) %in% c("rds", "tidyproteomics")) {
+          data$platform <- platform
+          STATE$last_platform <- platform
+        } else {
+          resolved_plat <- resolve_platform_name(data)
+          if (resolved_plat != "Unknown Platform") {
+            data$platform <- resolved_plat
+            STATE$last_platform <- resolved_plat
+          }
+        }
+
         set_active_data(data, data_id)
         tryCatch(update_data_overview_doc(data, file_path = "docs/data.md", phase_tag = "Phase 01: Ingestion & Inspection"), error = function(e) NULL)
         summary_text <- format_state_card(data, data_id)
@@ -1252,7 +1422,53 @@ handle_request <- function(req) {
           }), collapse = "\n")
         }
 
-        list(success = TRUE, output = output_txt)
+        # Append authoritative median CV and scoped missingness footer so agent never quotes unsourced CV ratios
+        scope_lbl <- resolve_missingness_scope(data)
+        id_col_sm <- if (!is.null(data$identifier)) data$identifier[1] else "protein"
+        n_ent_sm <- if (!is.null(data$quantitative[[id_col_sm]])) length(unique(data$quantitative[[id_col_sm]])) else 0
+        n_fil_sm <- if (!is.null(data$experiments)) nrow(data$experiments) else 0
+        tot_cells_sm <- n_ent_sm * n_fil_sm
+        act_src_sm <- if (!is.null(data$quantitative_source)) data$quantitative_source else "raw"
+        q_col_sm <- paste0("abundance_", act_src_sm)
+        obs_sm <- if (tot_cells_sm > 0 && !is.null(data$quantitative[[q_col_sm]])) sum(!is.na(data$quantitative[[q_col_sm]]) & data$quantitative[[q_col_sm]] > 0) else 0
+        miss_sm <- max(0, tot_cells_sm - obs_sm)
+        miss_pct_sm <- if (tot_cells_sm > 0) round(100 * (miss_sm / tot_cells_sm), 1) else NA_real_
+
+        norm_stats_sm <- tryCatch(tidyproteomics:::stats_summary(data, group_by = "normalization"), error = function(e) NULL)
+        median_cv_raw <- NA_real_
+        median_cv_active <- NA_real_
+        if (!is.null(norm_stats_sm) && "CV" %in% names(norm_stats_sm) && "normalization" %in% names(norm_stats_sm)) {
+          raw_idx <- which(norm_stats_sm$normalization == "raw")
+          act_idx <- which(norm_stats_sm$normalization == act_src_sm)
+          if (length(raw_idx) > 0 && is.finite(norm_stats_sm$CV[raw_idx[1]])) {
+            median_cv_raw <- round(100 * norm_stats_sm$CV[raw_idx[1]], 1)
+          }
+          if (length(act_idx) > 0 && is.finite(norm_stats_sm$CV[act_idx[1]])) {
+            median_cv_active <- round(100 * norm_stats_sm$CV[act_idx[1]], 1)
+          }
+        }
+        cv_footer <- if (!is.na(median_cv_raw) || !is.na(median_cv_active)) {
+          sprintf("\n[Authoritative Summary Metrics: median_cv_raw = %s%%, median_cv_active (%s) = %s%%, missing_pct = %s%% (scope = %s)]",
+                  if (!is.na(median_cv_raw)) sprintf("%.1f", median_cv_raw) else "N/A",
+                  act_src_sm,
+                  if (!is.na(median_cv_active)) sprintf("%.1f", median_cv_active) else "N/A",
+                  if (!is.na(miss_pct_sm)) sprintf("%.1f", miss_pct_sm) else "N/A",
+                  scope_lbl)
+        } else {
+          sprintf("\n[Authoritative Summary Metrics: missing_pct = %s%% (scope = %s)]",
+                  if (!is.na(miss_pct_sm)) sprintf("%.1f", miss_pct_sm) else "N/A",
+                  scope_lbl)
+        }
+        output_txt <- paste0(output_txt, cv_footer)
+
+        list(
+          success = TRUE,
+          output = output_txt,
+          scope = scope_lbl,
+          missing_pct = miss_pct_sm,
+          median_cv_raw = median_cv_raw,
+          median_cv_active = median_cv_active
+        )
       },
 
       # ------------------------------------------------------------------------
@@ -1293,9 +1509,21 @@ handle_request <- function(req) {
         data <- get_active_data(params$id)
         target <- if (!is.null(params$target)) params$target else "sample"
         mapping <- params$mapping
+        n_total <- if (!is.null(data$experiments)) nrow(data$experiments) else 0
+        old_samples <- if (!is.null(data$experiments$sample)) as.character(data$experiments$sample) else character(0)
 
         if (!is.null(mapping) && length(mapping) > 0) {
           map_list <- as.list(mapping)
+          # Guard against partial sample-group mapping when recoding raw cohorts
+          if (target != "origin" && length(old_samples) > 0) {
+            known_keys <- c(names(map_list), as.character(unlist(map_list)))
+            unmapped_groups <- setdiff(unique(old_samples), known_keys)
+            if (length(unmapped_groups) > 0) {
+              stop(glue::glue(
+                "PARTIAL_REASSIGN_REJECTED: Pooling map covers {length(unique(old_samples)) - length(unmapped_groups)} of {length(unique(old_samples))} active sample group(s), leaving [{paste(unmapped_groups, collapse = ', ')}] unmapped. Pass the complete Section 3.D pooling map covering all {n_total} samples in a single tpa_reassign call."
+              ))
+            }
+          }
           for (raw_name in names(map_list)) {
             clean_name <- map_list[[raw_name]]
             if (target == "origin") {
@@ -1324,10 +1552,27 @@ handle_request <- function(req) {
           }
         }
 
+        new_samples <- if (!is.null(data$experiments$sample)) as.character(data$experiments$sample) else character(0)
+        n_changed <- if (length(old_samples) == length(new_samples)) sum(old_samples != new_samples) else n_total
+        n_reassigned <- if (!is.null(mapping) && length(mapping) > 0) {
+          sum(old_samples %in% c(names(as.list(mapping)), as.character(unlist(mapping))))
+        } else {
+          n_changed
+        }
+
         set_active_data(data)
+        tryCatch(update_data_overview_doc(data, file_path = "docs/data.md", phase_tag = "Phase 02: Sample Pooling & Normalization"), error = function(e) NULL)
         state_summary <- format_state_card(data, STATE$active_id)
         exp_summary <- paste(capture.output(print(data$experiments)), collapse = "\n")
-        list(success = TRUE, target = target, summary = state_summary, experiments = exp_summary)
+        list(
+          success = TRUE,
+          target = target,
+          n_changed = n_changed,
+          n_reassigned = n_reassigned,
+          n_total = n_total,
+          summary = state_summary,
+          experiments = exp_summary
+        )
       },
 
       "/rm_mbr" = {
@@ -1742,7 +1987,69 @@ handle_request <- function(req) {
 
       "/impute" = {
         data <- get_active_data(params$id)
-        method_str <- if (!is.null(params$method) && nzchar(trimws(params$method))) trimws(params$method) else "impute.randomforest, method = 'matrix', group_by_sample = TRUE"
+
+        # Read docs/experiment.md Section 3.C to bind confirmed imputation method and reject mismatches
+        exp_path <- tryCatch(resolve_workspace_file("docs/experiment.md"), error = function(e) "docs/experiment.md")
+        spec_method <- ""
+        spec_confirmed <- FALSE
+        if (!is.null(exp_path) && file.exists(exp_path)) {
+          exp_lines <- tryCatch(readLines(exp_path, warn = FALSE), error = function(e) character(0))
+          m_line <- grep("-\\s*\\*\\*Imputation Method\\*\\*\\s*:", exp_lines, ignore.case = TRUE, value = TRUE)
+          c_line <- grep("-\\s*\\*\\*Confirm Imputation Strategy\\*\\*\\s*:", exp_lines, ignore.case = TRUE, value = TRUE)
+          if (length(m_line) > 0) {
+            spec_method <- trimws(gsub("<!--.*-->", "", sub("^.*-\\s*\\*\\*Imputation Method\\*\\*\\s*:\\s*", "", m_line[1], ignore.case = TRUE)))
+            spec_method <- gsub("^[`'\"]+|[`'\"]+$", "", spec_method)
+          }
+          if (length(c_line) > 0) {
+            c_val <- trimws(gsub("<!--.*-->", "", sub("^.*-\\s*\\*\\*Confirm Imputation Strategy\\*\\*\\s*:\\s*", "", c_line[1], ignore.case = TRUE)))
+            spec_confirmed <- identical(toupper(c_val), "TRUE")
+          }
+        }
+
+        raw_method_arg <- if (!is.null(params$method) && nzchar(trimws(params$method))) trimws(params$method) else ""
+        if (!nzchar(raw_method_arg)) {
+          raw_method_arg <- if (nzchar(spec_method)) spec_method else "impute.randomforest, method = 'matrix', group_by_sample = TRUE"
+        }
+
+        req_canon <- canonical_impute_method(raw_method_arg)
+        spec_canon <- if (nzchar(spec_method)) canonical_impute_method(spec_method) else "unknown"
+
+        # Deterministic Method-Identity Enforcement: if Section 3.C is confirmed, refuse a conflicting tpa_impute call
+        if (spec_confirmed && spec_canon != "unknown" && req_canon != spec_canon) {
+          stop(glue::glue(
+            "METHOD_MISMATCH: docs/experiment.md Section 3.C has confirmed '- **Imputation Method**: {spec_method}' (canonical: '{spec_canon}'), but tpa_impute was invoked with method = '{raw_method_arg}' (canonical: '{req_canon}'). Re-read Section 3.C of docs/experiment.md immediately and call tpa_impute(method = '{spec_method}')."
+          ))
+        }
+
+        # Compute pre-imputation matrix metrics
+        id_col_imp <- if (!is.null(data$identifier)) data$identifier[1] else "protein"
+        n_ent_imp <- if (!is.null(data$quantitative[[id_col_imp]])) length(unique(data$quantitative[[id_col_imp]])) else 0
+        n_fil_imp <- if (!is.null(data$experiments)) nrow(data$experiments) else 0
+        total_cells_imp <- n_ent_imp * n_fil_imp
+        act_src_imp <- if (!is.null(data$quantitative_source)) data$quantitative_source else "raw"
+        q_col_imp <- paste0("abundance_", act_src_imp)
+        n_obs_pre <- if (total_cells_imp > 0 && !is.null(data$quantitative[[q_col_imp]])) sum(!is.na(data$quantitative[[q_col_imp]]) & data$quantitative[[q_col_imp]] > 0) else 0L
+        n_miss_pre <- max(0L, as.integer(total_cells_imp - n_obs_pre))
+        pct_miss_pre <- if (total_cells_imp > 0) round(100 * (n_miss_pre / total_cells_imp), 1) else 0.0
+
+        method_str <- raw_method_arg
+        if (req_canon == "none") {
+          summary_text <- format_state_card(data, STATE$active_id)
+          return(list(
+            success = TRUE,
+            method = "none",
+            canonical_method = "none",
+            spec_method = if (nzchar(spec_method)) spec_method else "none",
+            n_imputed = 0L,
+            n_observed = n_obs_pre,
+            n_missing = n_miss_pre,
+            total_cells = total_cells_imp,
+            pct_missing_pre = pct_miss_pre,
+            pct_missing_post = pct_miss_pre,
+            scope = "post_impute",
+            summary = summary_text
+          ))
+        }
 
         # Normalize convenient shorthands and ensure impute.randomforest always includes method = 'matrix'
         if (tolower(method_str) %in% c("randomforest", "randomforest_grouped", "rf")) {
@@ -1762,12 +2069,57 @@ handle_request <- function(req) {
 
         eval_str <- glue::glue("data %>% impute({method_str})")
         data <- eval(parse(text = eval_str))
+
+        # Compute post-imputation matrix metrics
+        n_obs_post <- if (total_cells_imp > 0 && !is.null(data$quantitative[[q_col_imp]])) sum(!is.na(data$quantitative[[q_col_imp]]) & data$quantitative[[q_col_imp]] > 0) else 0L
+        n_miss_post <- max(0L, as.integer(total_cells_imp - n_obs_post))
+        pct_miss_post <- if (total_cells_imp > 0) round(100 * (n_miss_post / total_cells_imp), 1) else 0.0
+        n_imputed_cells <- max(0L, as.integer(n_obs_post - n_obs_pre))
+        if (n_imputed_cells == 0L && !is.null(data$accounting$imputed)) {
+          n_imputed_cells <- as.integer(sum(as.numeric(data$accounting$imputed) > 0, na.rm = TRUE))
+        }
+
+        imp_metrics <- list(
+          method = method_str,
+          canonical_method = req_canon,
+          spec_method = if (nzchar(spec_method)) spec_method else req_canon,
+          n_imputed = n_imputed_cells,
+          n_observed = n_obs_post,
+          n_missing = n_miss_post,
+          total_cells = total_cells_imp,
+          pct_missing_pre = pct_miss_pre,
+          pct_missing_post = pct_miss_post,
+          scope = "post_impute"
+        )
+        attr(data, "imputation_metrics") <- imp_metrics
+        STATE$last_imputation_metrics <- imp_metrics
+
         set_active_data(data)
         log_code(glue::glue("{STATE$active_id} <- {STATE$active_id} %>% impute({method_str})"))
 
         tryCatch(update_data_overview_doc(data, file_path = "docs/data.md", phase_tag = "Phase 03: Imputation"), error = function(e) NULL)
         summary_text <- format_state_card(data, STATE$active_id)
-        list(success = TRUE, summary = summary_text)
+        summary_text <- paste0(
+          summary_text,
+          sprintf(
+            "\n- Imputation Audit: method = %s (canonical: %s) | n_imputed = %d | n_observed = %d | n_missing = %d | pct_missing_pre = %.1f%% -> pct_missing_post = %.1f%% (scope = post_impute)",
+            method_str, req_canon, n_imputed_cells, n_obs_post, n_miss_post, pct_miss_pre, pct_miss_post
+          )
+        )
+        list(
+          success = TRUE,
+          method = method_str,
+          canonical_method = req_canon,
+          spec_method = if (nzchar(spec_method)) spec_method else req_canon,
+          n_imputed = n_imputed_cells,
+          n_observed = n_obs_post,
+          n_missing = n_miss_post,
+          total_cells = total_cells_imp,
+          pct_missing_pre = pct_miss_pre,
+          pct_missing_post = pct_miss_post,
+          scope = "post_impute",
+          summary = summary_text
+        )
       },
 
       # ------------------------------------------------------------------------
@@ -1951,7 +2303,10 @@ handle_request <- function(req) {
           }
           summary_txt <- paste(table_lines, collapse = "\n")
 
-          msg <- glue::glue("Batch differential expression analysis completed via analyze_expressions() across {length(contrast_stats)} contrast(s).\n\n### Per-Contrast Differential Expression Summary\n{summary_txt}\n\n- Unique significant entities across contrasts: {length(all_sig_genes)}")
+          single_contrast_note <- if (length(contrast_stats) == 1) {
+            " (Note: n_contrasts == 1; analyze_expressions() formatted and exported the volcano plot and expression tables for the existing contrast model without running a second statistical test.)"
+          } else ""
+          msg <- glue::glue("Batch differential expression export completed via analyze_expressions() across {length(contrast_stats)} contrast(s){single_contrast_note}.\n\n### Per-Contrast Differential Expression Summary\n{summary_txt}\n\n- Unique significant entities across contrasts: {length(all_sig_genes)}")
 
           list(
             success = TRUE,
@@ -1974,6 +2329,7 @@ handle_request <- function(req) {
           enrich_pngs <- list.files(".", pattern = glue::glue("^{data$analyte}_enrichment_.*\\.png$"), full.names = TRUE)
           enrich_csvs <- list.files(".", pattern = glue::glue("^table_{data$analyte}_enrichment_.*\\.csv$"), full.names = TRUE)
           created_files <- c()
+          tie_warnings <- character(0)
 
           for (ep in enrich_pngs) {
             base_f <- basename(ep)
@@ -1991,17 +2347,30 @@ handle_request <- function(req) {
             dst_f <- file.path(data_dir, base_f)
             file.copy(ec, dst_f, overwrite = TRUE)
             file.remove(ec)
-            # Also create TSV variant
+            # Also create TSV variant and annotate enrichment ties (set_md5, statistic_id, score_tie_group)
             tsv_f <- file.path(data_dir, sub("\\.csv$", ".tsv", base_f))
             df_tmp <- tryCatch(read.csv(dst_f, check.names = FALSE), error = function(e) NULL)
-            if (!is.null(df_tmp)) write.table(df_tmp, tsv_f, sep = "\t", row.names = FALSE, quote = FALSE)
+            if (!is.null(df_tmp) && nrow(df_tmp) > 0) {
+              tie_res <- annotate_enrichment_ties(df_tmp, data)
+              df_tmp <- tie_res$table
+              if (!is.null(tie_res$tie_warning)) {
+                tie_warnings <- c(tie_warnings, tie_res$tie_warning)
+              }
+              write.csv(df_tmp, dst_f, row.names = FALSE)
+              write.table(df_tmp, tsv_f, sep = "\t", row.names = FALSE, quote = FALSE)
+            }
             created_files <- c(created_files, file.path("data", base_f), file.path("data", basename(tsv_f)))
           }
+
+          n_c_enr <- length(names(data$analysis))
+          single_enr_note <- if (n_c_enr == 1) " (Note: n_contrasts == 1; analyze_enrichments() exported the faceted plot and enrichment tables from the existing contrast enrichment without running a second statistical test.)" else ""
+          tie_warn_txt <- if (length(tie_warnings) > 0) paste0("\n\n", paste(unique(tie_warnings), collapse = "\n")) else ""
 
           list(
             success = TRUE,
             type = "enrichments",
-            message = glue::glue("Batch functional enrichment analysis completed via analyze_enrichments(). Generated multi-ontology faceted plot {data$analyte}_enrichment."),
+            message = glue::glue("Batch functional enrichment export completed via analyze_enrichments(){single_enr_note}. Generated multi-ontology faceted plot {data$analyte}_enrichment.{tie_warn_txt}"),
+            tie_warning = if (length(tie_warnings) > 0) paste(unique(tie_warnings), collapse = "\n") else NULL,
             files_created = unique(created_files)
           )
         }
@@ -2340,6 +2709,10 @@ handle_request <- function(req) {
           }
         }
 
+        # Annotate set_md5, statistic_id, score_tie_group, and tie warnings
+        tie_res <- annotate_enrichment_ties(enr_tbl, data)
+        enr_tbl <- tie_res$table
+
         # Sort
         sort_by <- if (!is.null(params$sort_by) && nzchar(params$sort_by)) params$sort_by else "adj_p_value"
         if (sort_by %in% names(enr_tbl)) {
@@ -2369,7 +2742,7 @@ handle_request <- function(req) {
         }
 
         # Format markdown table
-        cols_to_show <- intersect(c("term", "annotation", "enrichment", "size", "p_value", "adj_p_value", "top_drivers"), names(preview_tbl))
+        cols_to_show <- intersect(c("term", "annotation", "enrichment", "size", "p_value", "adj_p_value", "top_drivers", "set_md5", "score_tie_group"), names(preview_tbl))
         if (length(cols_to_show) < 3) cols_to_show <- head(names(preview_tbl), 6)
         disp_tbl <- preview_tbl[, cols_to_show, drop = FALSE]
 
@@ -2389,12 +2762,16 @@ handle_request <- function(req) {
         })
 
         md_table <- paste(c(md_header, md_sep, md_rows), collapse = "\n")
+        if (!is.null(tie_res$tie_warning)) {
+          md_table <- paste0(md_table, "\n\n", tie_res$tie_warning)
+        }
 
         list(
           success = TRUE,
           comparison = comp_key,
           total_terms = total_matching,
           returned_count = nrow(preview_tbl),
+          tie_warning = tie_res$tie_warning,
           markdown_table = md_table,
           saved_file = save_csv
         )
@@ -2606,6 +2983,24 @@ handle_request <- function(req) {
           log_fn <- if (!is.null(file_name)) glue::glue('export_analysis({comp_str}, .analysis = "{analysis}"{term_arg}{append_arg}, .file_name = "{file_name}")') else glue::glue('export_analysis({comp_str}, .analysis = "{analysis}"{term_arg}{append_arg})')
           log_code(glue::glue('{STATE$active_id} %>% {log_fn}'))
           output_msg <- if (!is.null(file_name)) glue::glue("Exported analysis data to {file_name}") else "Returned analysis tibble."
+          if (identical(tolower(analysis), "enrichment") && !is.null(file_name) && nzchar(file_name)) {
+            abs_fn <- resolve_workspace_file(file_name)
+            if (file.exists(abs_fn)) {
+              df_exp_enr <- tryCatch(if (grepl("\\.tsv$", abs_fn, ignore.case = TRUE)) read.delim(abs_fn, check.names = FALSE) else read.csv(abs_fn, check.names = FALSE), error = function(e) NULL)
+              if (!is.null(df_exp_enr) && nrow(df_exp_enr) > 0) {
+                tie_res <- annotate_enrichment_ties(df_exp_enr, data)
+                df_exp_enr <- tie_res$table
+                if (grepl("\\.tsv$", abs_fn, ignore.case = TRUE)) {
+                  write.table(df_exp_enr, abs_fn, sep = "\t", row.names = FALSE, quote = FALSE)
+                } else {
+                  write.csv(df_exp_enr, abs_fn, row.names = FALSE)
+                }
+                if (!is.null(tie_res$tie_warning)) {
+                  output_msg <- paste0(output_msg, "\n\n", tie_res$tie_warning)
+                }
+              }
+            }
+          }
         } else if (export_type == "compexp") {
           fn_call <- if (!is.null(file_name)) glue::glue('export_compexp(data, file_name = "{file_name}")') else 'export_compexp(data)'
           tbl <- eval(parse(text = fn_call))
@@ -2878,6 +3273,9 @@ handle_request <- function(req) {
         log_code(glue::glue("# Audited raw headers for {basename(raw_file)} ({platform}_{analyte}): {matched_cols}/{total_cols} matched"))
         STATE$last_input_audit_md <- audit_md
         STATE$last_input_audit_file <- basename(raw_file)
+        if (!is.null(platform) && nzchar(platform)) {
+          STATE$last_platform <- platform
+        }
 
         list(
           success = TRUE,
@@ -3223,15 +3621,80 @@ handle_request <- function(req) {
             tgt_line <- grep("Target\\s*(?:Protein|Gene)?:\\s*([A-Za-z0-9_/-]+)", exp_lines, value = TRUE, ignore.case = TRUE)
             if (length(tgt_line) > 0) {
               target_gene_arg <- trimws(sub(".*Target\\s*(?:Protein|Gene)?:\\s*([A-Za-z0-9_/-]+).*", "\\1", tgt_line[1], ignore.case = TRUE))
+            } else {
+              # Also check Section 2 hypothesis text for explicit knockout/knockdown target mentions e.g. p97 (VCP)
+              exp_txt <- paste(exp_lines, collapse = " ")
+              if (grepl("\\b(p97|VCP|P55072)\\b", exp_txt, ignore.case = TRUE)) {
+                target_gene_arg <- "VCP, p97, P55072"
+              }
             }
           }
         }
 
         analyte_name <- if (!is.null(data$analyte)) data$analyte else "proteins"
-        id_col <- if (!is.null(data$identifier)) data$identifier else "protein"
+        id_col <- if (!is.null(data$identifier)) data$identifier[1] else "protein"
         features <- if (!is.null(data$quantitative[[id_col]])) unique(as.character(data$quantitative[[id_col]])) else character(0)
         samples <- if (!is.null(data$experiments$sample)) unique(as.character(data$experiments$sample)) else character(0)
         source_norm <- if (!is.null(data$quantitative_source)) data$quantitative_source else "raw"
+
+        # Build authoritative gene_name and description lookup maps from data$annotations and exported tables
+        annot_gene_map <- character(0)
+        annot_desc_map <- character(0)
+        if (!is.null(data$annotations) && is.data.frame(data$annotations) && nrow(data$annotations) > 0 &&
+            all(c(id_col, "term", "annotation") %in% names(data$annotations))) {
+          adf <- data$annotations
+          g_rows <- adf[!is.na(adf$term) & tolower(adf$term) %in% c("gene_name", "gene", "gene_symbol", "symbol") & !is.na(adf$annotation) & nzchar(trimws(adf$annotation)), , drop = FALSE]
+          if (nrow(g_rows) > 0) {
+            g_rows <- g_rows[!duplicated(g_rows[[id_col]]), , drop = FALSE]
+            annot_gene_map <- setNames(trimws(as.character(g_rows$annotation)), as.character(g_rows[[id_col]]))
+          }
+          d_rows <- adf[!is.na(adf$term) & tolower(adf$term) %in% c("description", "protein_name", "protein_names", "fasta_header", "header") & !is.na(adf$annotation) & nzchar(trimws(adf$annotation)), , drop = FALSE]
+          if (nrow(d_rows) > 0) {
+            d_rows <- d_rows[!duplicated(d_rows[[id_col]]), , drop = FALSE]
+            annot_desc_map <- setNames(trimws(as.character(d_rows$annotation)), as.character(d_rows[[id_col]]))
+          }
+        }
+
+        # Supplement from exported expression tables on disk if present
+        data_dir_cs <- file.path(STATE$output_dir, "data")
+        exp_disk_files <- list.files(data_dir_cs, pattern = "^table_.*_expression_.*\\.(csv|tsv)$", full.names = TRUE, ignore.case = TRUE)
+        for (ef in exp_disk_files) {
+          edf <- tryCatch(if (grepl("\\.csv$", ef, ignore.case = TRUE)) read.csv(ef, check.names = FALSE, stringsAsFactors = FALSE) else read.delim(ef, check.names = FALSE, stringsAsFactors = FALSE), error = function(e) NULL)
+          if (!is.null(edf) && id_col %in% names(edf)) {
+            pids <- as.character(edf[[id_col]])
+            if ("gene_name" %in% names(edf)) {
+              gvals <- trimws(as.character(edf$gene_name))
+              valid_g <- !is.na(gvals) & nzchar(gvals) & gvals != pids
+              if (any(valid_g)) {
+                new_keys <- setdiff(pids[valid_g], names(annot_gene_map))
+                if (length(new_keys) > 0) {
+                  idx_m <- match(new_keys, pids)
+                  annot_gene_map[new_keys] <- gvals[idx_m]
+                }
+              }
+            }
+            if ("description" %in% names(edf)) {
+              dvals <- trimws(as.character(edf$description))
+              valid_d <- !is.na(dvals) & nzchar(dvals) & dvals != "-"
+              if (any(valid_d)) {
+                new_dkeys <- setdiff(pids[valid_d], names(annot_desc_map))
+                if (length(new_dkeys) > 0) {
+                  idx_d <- match(new_dkeys, pids)
+                  annot_desc_map[new_dkeys] <- dvals[idx_d]
+                }
+              }
+            }
+          }
+        }
+
+        # Extract GN= from descriptions when gene_name is missing
+        if (length(annot_desc_map) > 0) {
+          for (pid in names(annot_desc_map)) {
+            if ((!pid %in% names(annot_gene_map) || !nzchar(annot_gene_map[[pid]])) && grepl("GN=([A-Za-z0-9_.-]+)", annot_desc_map[[pid]])) {
+              annot_gene_map[[pid]] <- sub(".*GN=([A-Za-z0-9_.-]+).*", "\\1", annot_desc_map[[pid]])
+            }
+          }
+        }
 
         out_md <- character()
         emit <- function(...) out_md <<- c(out_md, paste0(...))
@@ -3272,8 +3735,33 @@ handle_request <- function(req) {
           if (is.null(exp_tbl) || nrow(exp_tbl) == 0) next
 
           if (!"gene_name" %in% names(exp_tbl)) exp_tbl$gene_name <- NA_character_
-          exp_tbl$gene_name[is.na(exp_tbl$gene_name) | !nzchar(trimws(exp_tbl$gene_name))] <- exp_tbl[[id_col]][is.na(exp_tbl$gene_name) | !nzchar(trimws(exp_tbl$gene_name))]
-          if (!"description" %in% names(exp_tbl)) exp_tbl$description <- ""
+          if (!"description" %in% names(exp_tbl)) exp_tbl$description <- NA_character_
+
+          # Join gene_name and description from lookup maps by accession (id_col)
+          pids_vec <- as.character(exp_tbl[[id_col]])
+          missing_g <- is.na(exp_tbl$gene_name) | !nzchar(trimws(as.character(exp_tbl$gene_name))) | exp_tbl$gene_name == pids_vec
+          if (any(missing_g) && length(annot_gene_map) > 0) {
+            mapped_g <- unname(annot_gene_map[pids_vec[missing_g]])
+            has_mg <- !is.na(mapped_g) & nzchar(mapped_g)
+            exp_tbl$gene_name[which(missing_g)[has_mg]] <- mapped_g[has_mg]
+          }
+          missing_d <- is.na(exp_tbl$description) | !nzchar(trimws(as.character(exp_tbl$description))) | exp_tbl$description == "-"
+          if (any(missing_d) && length(annot_desc_map) > 0) {
+            mapped_d <- unname(annot_desc_map[pids_vec[missing_d]])
+            has_md <- !is.na(mapped_d) & nzchar(mapped_d)
+            exp_tbl$description[which(missing_d)[has_md]] <- mapped_d[has_md]
+          }
+          # Parse GN= from description if gene_name is still unpopulated
+          still_missing_g <- is.na(exp_tbl$gene_name) | !nzchar(trimws(as.character(exp_tbl$gene_name))) | exp_tbl$gene_name == pids_vec
+          has_gn_in_desc <- still_missing_g & !is.na(exp_tbl$description) & grepl("GN=([A-Za-z0-9_.-]+)", exp_tbl$description)
+          if (any(has_gn_in_desc)) {
+            exp_tbl$gene_name[has_gn_in_desc] <- sub(".*GN=([A-Za-z0-9_.-]+).*", "\\1", exp_tbl$description[has_gn_in_desc])
+          }
+          exp_tbl$gene_name[is.na(exp_tbl$gene_name) | !nzchar(trimws(exp_tbl$gene_name))] <- pids_vec[is.na(exp_tbl$gene_name) | !nzchar(trimws(exp_tbl$gene_name))]
+          exp_tbl$description[is.na(exp_tbl$description) | !nzchar(trimws(exp_tbl$description))] <- "-"
+          # Persist enriched exp_tbl back into active data object so downstream queries have gene_name & description
+          data$analysis[[contrast_str]]$expression <- exp_tbl
+          set_active_data(data)
 
           # Condition-specific imputation columns
           parts <- strsplit(contrast_str, "\\s*/\\s*")[[1]]
@@ -3331,8 +3819,34 @@ handle_request <- function(req) {
           emit("### 2. Target Efficacy / Leading Perturbation Status", "")
           target_match <- NULL
           if (!is.null(target_gene_arg) && nzchar(target_gene_arg)) {
-            targets_clean <- unlist(strsplit(target_gene_arg, "[,/ ]+"))
-            target_match <- exp_tbl %>% dplyr::filter(toupper(gene_name) %in% toupper(targets_clean) | toupper(.data[[id_col]]) %in% toupper(targets_clean))
+            targets_clean <- unique(trimws(unlist(strsplit(target_gene_arg, "[,;/ ()]+"))))
+            targets_clean <- targets_clean[nzchar(targets_clean)]
+            # Expand common biological synonyms (e.g. p97 <-> VCP <-> P55072)
+            alias_dict <- list(
+              "P97" = c("VCP", "P55072", "TERA"),
+              "VCP" = c("P97", "P55072", "TERA"),
+              "P55072" = c("VCP", "P97", "TERA")
+            )
+            for (tc in toupper(targets_clean)) {
+              if (tc %in% names(alias_dict)) {
+                targets_clean <- unique(c(targets_clean, alias_dict[[tc]]))
+              }
+            }
+            # Also resolve any target symbols against data$annotations across all terms
+            if (!is.null(data$annotations) && all(c(id_col, "annotation") %in% names(data$annotations))) {
+              ann_hits <- data$annotations[!is.na(data$annotations$annotation) & toupper(trimws(data$annotations$annotation)) %in% toupper(targets_clean), , drop = FALSE]
+              if (nrow(ann_hits) > 0) {
+                targets_clean <- unique(c(targets_clean, as.character(ann_hits[[id_col]])))
+              }
+            }
+            target_match <- exp_tbl %>% dplyr::filter(
+              toupper(gene_name) %in% toupper(targets_clean) |
+              toupper(.data[[id_col]]) %in% toupper(targets_clean)
+            )
+            if (nrow(target_match) == 0 && "description" %in% names(exp_tbl)) {
+              patt <- paste0("\\b(", paste(gsub("([^A-Za-z0-9])", "\\\\\\1", targets_clean), collapse = "|"), ")\\b")
+              target_match <- exp_tbl %>% dplyr::filter(!is.na(description) & grepl(patt, description, ignore.case = TRUE))
+            }
           }
           if (!is.null(target_match) && nrow(target_match) > 0) {
             target_display <- target_match %>% dplyr::transmute(
@@ -3459,6 +3973,8 @@ handle_request <- function(req) {
 
             if (nrow(sig_enr) > 0) {
               sig_enr$annotation <- resolve_reactome_ids(sig_enr$annotation)
+              tie_res_cs <- annotate_enrichment_ties(sig_enr, data)
+              sig_enr <- tie_res_cs$table
               score_col <- intersect(c("enrichment", "score", "statistic"), names(sig_enr))[1]
               driver_col <- intersect(c("gene_names", "member_genes", "member_proteins"), names(sig_enr))[1]
               edge_col <- intersect(c("leading_edge_count", "size", "n"), names(sig_enr))[1]
@@ -3475,9 +3991,14 @@ handle_request <- function(req) {
                 `Enrichment Score` = if (!is.na(score_col)) sprintf("%.3f", sig_enr[[score_col]]) else "-",
                 `q-value` = fmt_pvalue(sig_enr$adj_p_value),
                 `Leading Drivers` = driver_vec,
-                `Set Size` = if (!is.na(edge_col)) sig_enr[[edge_col]] else NA
+                `Set Size` = if (!is.na(edge_col)) sig_enr[[edge_col]] else NA,
+                `Set MD5` = if ("set_md5" %in% names(sig_enr)) sig_enr$set_md5 else "-",
+                `Tie Group` = if ("score_tie_group" %in% names(sig_enr)) sig_enr$score_tie_group else "UNIQUE"
               )
               emit_tbl(enr_disp)
+              if (!is.null(tie_res_cs$tie_warning)) {
+                emit(tie_res_cs$tie_warning, "")
+              }
               emit("Wilcoxon enrichment-score direction: positive indicates a shift toward higher abundance in the treatment; negative indicates a shift toward lower abundance.\n")
             } else {
               emit("_No pathway terms met the q <= 0.05 significance threshold._\n")

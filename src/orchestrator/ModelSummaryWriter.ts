@@ -12,11 +12,17 @@ export function formatDateTime(d = new Date()): string {
   return `${year}-${month}-${day} ${hours}:${minutes}`;
 }
 
+export interface PhaseModelProvenance {
+  activePhaseId?: string;
+  executedPhases?: Array<{ phaseId: string; provider?: string; model?: string }>;
+}
+
 export function generateActiveModelSummaryMarkdown(
   config: LLMConfig,
   extensionVersion = "0.1.0",
   date = new Date(),
-  engine = "mcp"
+  engine = "mcp",
+  provenance?: PhaseModelProvenance
 ): string {
   const timestampStr = formatDateTime(date);
   const providerStr = (config.provider || "anthropic").toUpperCase();
@@ -37,17 +43,29 @@ export function generateActiveModelSummaryMarkdown(
   const agentStr = `TidyProteomicsAgent v${extensionVersion || "0.1.0"}`;
   const authorStr = `${providerStr} | ${modelStr}`;
 
+  const executedMapSection =
+    provenance?.executedPhases && provenance.executedPhases.length > 0
+      ? `### Executed Per-Phase Model Map (From \`docs/notes.md\`)
+
+| Phase | Executed Provider | Executed Model |
+| :--- | :--- | :--- |
+${provenance.executedPhases
+  .map((p) => `| \`${p.phaseId}\` | ${(p.provider || providerStr).toUpperCase()} | \`${p.model || modelStr}\` |`)
+  .join("\n")}
+`
+      : "";
+
   return `# Active Model Summary
 
 Created: ${timestampStr}
 Author: ${authorStr}
 Agent: ${agentStr}
 
-## Active Configuration
+## Active Phase Configuration
 
 | Configuration Property | Value |
 | :--- | :--- |
-| **Provider** | ${providerStr} |
+${provenance?.activePhaseId ? `| **Active Phase** | \`${provenance.activePhaseId}\` |\n` : ""}| **Provider** | ${providerStr} |
 | **Model** | ${modelStr} |
 | **Execution Engine** | ${engine === "mcp" ? "MCP Server (Live In-Memory)" : "Markdown Skills (Script Generation)"} |
 | **Author** | ${authorStr} |
@@ -81,10 +99,10 @@ ${Object.entries(config.phaseModels).map(([k, m]) => `| \`${k}\` | \`${m}\` |`).
 `
     : ""
 }
----
+${executedMapSection}---
 
 ## Agent Document Header Standard
-All agent-authored documents and reports (including \`docs/observations.md\`, \`docs/knowledge.md\`, \`docs/websearch.md\`, \`docs/literature.md\`, \`docs/manuscript.md\`, and any other generated markdown reports) must reference this specification and place the following metadata block immediately below the title:
+All agent-authored documents and reports (including \`docs/observations.md\`, \`docs/knowledge.md\`, \`docs/websearch.md\`, \`docs/literature.md\`, \`docs/manuscript.md\`, and any other generated markdown reports) must reference this specification and stamp the **active phase model** (or the Executed Per-Phase Model Map from \`docs/notes.md\` when synthesizing multi-phase provenance) immediately below the title:
 
 \`\`\`markdown
 Title
@@ -96,17 +114,52 @@ Agent: ${agentStr}
 `;
 }
 
+export async function parseExecutedPhaseModelsFromNotes(
+  workspaceRoot: string
+): Promise<Array<{ phaseId: string; provider: string; model: string }>> {
+  const notesPath = path.join(workspaceRoot, "docs", "notes.md");
+  try {
+    const raw = await fs.readFile(notesPath, "utf-8");
+    const entryRegex = /###\s*\[[^\]]+\]\s*([0-9]{2}_[A-Za-z0-9_]+)\s*—[\s\S]*?(?=\n###\s*\[|$)/g;
+    const latestByPhase = new Map<string, { phaseId: string; provider: string; model: string }>();
+    let match: RegExpExecArray | null;
+    while ((match = entryRegex.exec(raw)) !== null) {
+      const phaseId = match[1].toUpperCase();
+      const block = match[0];
+      const modMatch = block.match(/-\s*\*\*Model\*\*:\s*([^|\n\r]+)\|\s*`?([^`\n\r]+)`?/i);
+      if (modMatch) {
+        latestByPhase.set(phaseId, {
+          phaseId,
+          provider: modMatch[1].trim(),
+          model: modMatch[2].trim(),
+        });
+      }
+    }
+    return Array.from(latestByPhase.values());
+  } catch {
+    return [];
+  }
+}
+
 export async function writeActiveModelSummaryFile(
   workspaceRoot: string,
   config: LLMConfig,
   extensionVersion = "0.1.0",
-  engine = "mcp"
+  engine = "mcp",
+  provenance?: PhaseModelProvenance
 ): Promise<string> {
   if (!workspaceRoot) return "";
   const docsDir = path.join(workspaceRoot, "docs");
   await fs.mkdir(docsDir, { recursive: true });
   const llmPath = path.join(docsDir, "llm.md");
-  const markdown = generateActiveModelSummaryMarkdown(config, extensionVersion, new Date(), engine);
+  const executedPhases =
+    provenance?.executedPhases && provenance.executedPhases.length > 0
+      ? provenance.executedPhases
+      : await parseExecutedPhaseModelsFromNotes(workspaceRoot);
+  const markdown = generateActiveModelSummaryMarkdown(config, extensionVersion, new Date(), engine, {
+    ...provenance,
+    executedPhases,
+  });
 
   try {
     const existing = await fs.readFile(llmPath, "utf-8");

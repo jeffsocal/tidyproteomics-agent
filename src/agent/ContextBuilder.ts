@@ -413,6 +413,52 @@ ${engineSection}
 
     const engineLabel = "Live MCP Server (In-Memory Session)";
 
+    // Extract confirmed/configured imputation method from docs/experiment.md Section 3.C
+    let configuredImputationMethod = "randomforest_grouped (default)";
+    let imputationConfirmedFlag = "FALSE";
+    if (experimentContent) {
+      const impMethodMatch = experimentContent.match(/-\s*\*\*Imputation Method\*\*:\s*([^\n\r]+)/i);
+      if (impMethodMatch) {
+        configuredImputationMethod = impMethodMatch[1].replace(/<!--[\s\S]*?-->/g, "").trim();
+      }
+      const impConfMatch = experimentContent.match(/-\s*\*\*Confirm Imputation Strategy\*\*:\s*([^\n\r]+)/i);
+      if (impConfMatch) {
+        imputationConfirmedFlag = impConfMatch[1].replace(/<!--[\s\S]*?-->/g, "").trim().toUpperCase();
+      }
+    }
+
+    // Extract per-phase model provenance from docs/notes.md
+    const phaseModelMap: string[] = [];
+    if (notesContent) {
+      const entryRegex = /###\s*\[[^\]]+\]\s*([0-9]{2}_[A-Za-z0-9_]+)\s*—[\s\S]*?(?=\n###\s*\[|$)/g;
+      const latestMap = new Map<string, string>();
+      let m: RegExpExecArray | null;
+      while ((m = entryRegex.exec(notesContent)) !== null) {
+        const pid = m[1].toUpperCase();
+        const modMatch = m[0].match(/-\s*\*\*Model\*\*:\s*([^\n\r]+)/i);
+        if (modMatch) {
+          latestMap.set(pid, modMatch[1].trim().replace(/`/g, ""));
+        }
+      }
+      for (const [pid, modStr] of latestMap.entries()) {
+        phaseModelMap.push(`${pid}: ${modStr}`);
+      }
+    }
+
+    // Check if data/tidyproteomics_data.rds already exists for Phase 1 fast-path resume
+    let rdsResumeNotice = "";
+    if (this.workspaceRoot && /01_inspect/i.test(currentPhaseFileName)) {
+      const rdsFullPath = path.join(this.workspaceRoot, "data", "tidyproteomics_data.rds");
+      try {
+        const st = await fs.stat(rdsFullPath);
+        if (st.size > 0) {
+          rdsResumeNotice = `\n- **Phase 1 Resume State**: \`data/tidyproteomics_data.rds\` already exists on disk (${Math.round(st.size / 1024)} KB). Unless \`PATH_TO_DATA_FILE\` or \`PLATFORM\` changed in \`docs/experiment.md\`, resume directly via \`tpa_load(source = "data/tidyproteomics_data.rds")\` without repeating \`tpa_input_audit\` or raw file import.`;
+        }
+      } catch {
+        // RDS does not exist yet
+      }
+    }
+
     return `
 ### EXECUTIVE BLACKBOARD (Active Memory):
 - **Active Execution Engine**: ${engineLabel}
@@ -420,9 +466,10 @@ ${engineSection}
   - Quantified Proteins: ${proteinCount}
   - Active Assay / Normalization: ${activeAssay}
   - Imputation Status: ${imputationStatus}
+  - Configured Section 3.C Imputation Method: \`${configuredImputationMethod}\` (Confirmed: \`${imputationConfirmedFlag}\`)${rdsResumeNotice}
 - **Confirmed Study Design**:
   - Active Sample Groups: ${sampleGroups.join(", ")}
-  - Confirmed Contrast Pair: ${contrastPair}
+  - Confirmed Contrast Pair: ${contrastPair}${phaseModelMap.length > 0 ? `\n- **Executed Per-Phase Model Map (Provenance)**: ${phaseModelMap.join("; ")}` : ""}
 - **Prior Phase Summary (${priorPhaseTitle} - ${priorPhaseStatus})**:
 ${priorPhaseSummary.split("\n").map(line => `  ${line}`).join("\n")}
 `.trim();

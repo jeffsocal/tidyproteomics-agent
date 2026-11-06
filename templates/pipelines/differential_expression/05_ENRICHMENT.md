@@ -43,15 +43,15 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/05_e
 - [ ] If functional ontology terms are available:
   - Calculate multi-category pathway enrichment across all available ontology terms for each evaluated contrast (multiple terms may be supplied comma-separated in a single call per contrast):
     `tpa_enrichment(comparison = "<treatment>/<control>", terms = "<term_1>,<term_2>,...", method = "wilcoxon")`
-- [ ] **Enforced Batch Processing (`tidyproteomics::enrichment() |> tidyproteomics::analyze_enrichments()`)**:
-  - Immediately following `tpa_enrichment`, **execute batch analysis to run `analyze_enrichments()`**:
-    `tpa_batch_analysis(type = "enrichments", top_n = 50)`
-  - This aggregates all tested ontologies across comparisons, generates the multi-ontology faceted `proteins_enrichment` summary plot (`data/plot_proteins_enrichment_<contrast>.png`), and exports the master enrichment table (`data/table_proteins_enrichment_<contrast>.csv` / `.tsv`).
-- [ ] **Enrichment Score & Sign Convention**:
+- [ ] **Batch Export & Faceted Plotting (`tidyproteomics::enrichment() |> tidyproteomics::analyze_enrichments()`)**:
+  - Immediately following `tpa_enrichment`, **execute `tpa_batch_analysis(type = "enrichments", top_n = 50)`**:
+  - This aggregates all tested ontologies across comparisons, annotates member-set hashes (`set_md5`), statistic IDs (`statistic_id`), and tie groups (`score_tie_group`), generates the multi-ontology faceted `proteins_enrichment` summary plot (`data/plot_proteins_enrichment_<contrast>.png`), and exports the master enrichment table (`data/table_proteins_enrichment_<contrast>.csv` / `.tsv`). *(Note: When `n_contrasts == 1`, explicitly note that `analyze_enrichments()` is a faceted plot and table export of the modeled enrichment, not a second statistical test).*
+- [ ] **Enrichment Score Sign Convention & Tied-Score Family Rule**:
   - In `tidyproteomics`, the Wilcoxon rank-sum enrichment score represents the median/rank shift of member $\log_2\text{FC}$ values relative to background proteins. For a contrast structured as `<treatment>/<control>` (where $\log_2\text{FC} > 0$ means higher abundance in treatment):
     - **Positive (`+`) score**: The pathway/term is shifted toward upregulated proteins (accumulated/induced in treatment).
     - **Negative (`-`) score**: The pathway/term is shifted toward downregulated proteins (depleted/repressed in treatment).
-  - Explicitly apply this definitive sign convention in your phase summary and downstream reports.
+  - **Tied Enrichment Scores (`score_tie_group`)**: If $\ge 3$ terms share an identical enrichment score and $q$-value at unequal or overlapping set sizes (flagged by `[ENRICHMENT TIE / OVERLAP WARNING]` or `score_tie_group = TIE_GROUP_*`), **describe them as one tied ubiquitin/proteasome (or shared-driver) pathway family, NOT as independent pathway hits.**
+  - Explicitly apply this definitive sign convention and tied-family rule in your phase summary and downstream reports.
 - [ ] **Checkpoint 5.2**: Confirm from the `tpa_batch_analysis` output that enrichment plots and tables were generated.
 
 #### Phase 5.3: Optional Member-Gene Annotated Exports

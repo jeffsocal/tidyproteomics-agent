@@ -40,13 +40,17 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/03_i
        ```
 
 #### Phase 3.2: Imputation Execution & Complete-Case / Pre-Imputed Safeguard
+- [ ] **Mandatory Method-Identity Pre-Check**:
+  - Re-read `docs/experiment.md` Section 3.C (`- **Imputation Method**: <method>`) immediately before calling `tpa_impute`.
+  - Pass ONLY the exact method corresponding to Section 3.C. Never default to `randomforest_grouped` after HITL if Section 3.C specifies `min_column`.
 - [ ] Execute the confirmed strategy:
   - If pre-existing imputation is recorded in operations history: preserve upstream imputed values to prevent variance distortion.
   - If total missing is `0%` or `- **Imputation Method**: none`: bypass imputation to preserve empirical ground truth.
-  - If `- **Imputation Method**: randomforest_grouped` (default): invoke `tpa_impute(method = "impute.randomforest, method = 'matrix', group_by_sample = TRUE")`.
-  - If `- **Imputation Method**: min_column`: invoke `tpa_impute(method = "base::min, method = 'column'")`.
+  - If `- **Imputation Method**: randomforest_grouped`: invoke `tpa_impute(method = "impute.randomforest, method = 'matrix', group_by_sample = TRUE")` (or `tpa_impute()` with no arguments, which automatically resolves Section 3.C from `docs/experiment.md`).
+  - If `- **Imputation Method**: min_column`: invoke `tpa_impute(method = "base::min, method = 'column'")` (or `tpa_impute()` with no arguments).
   - If `- **Imputation Method**: min_row_grouped`: invoke `tpa_impute(method = "base::min, method = 'row', group_by_sample = TRUE")`.
-- [ ] **Checkpoint 3.2**: Verify from the `tpa_impute` return summary that imputation executed successfully. *(Note: `tpa_impute` automatically returns the updated dataset summary; do NOT make a redundant `tpa_inspect(what = "overview")` call if `tpa_impute` just printed the updated state. Under `randomforest_grouped` or `min_row_grouped`, residual missing values correspond to 100%-absent condition-exclusive dropouts and do NOT require 0% residual missingness; under `min_column`, all missing values are imputed at each replicate's column LOD).*
+- [ ] **Checkpoint 3.2 (Hard Method-Identity Gate)**:
+  - Verify from the `tpa_impute` return summary (`[IMPUTE_SCHEMA: {...}]`) that `canonical_method` equals `spec_method` from `docs/experiment.md` Section 3.C. If there is any mismatch, call `fail_phase` with the conflicting strings quoted — never call `complete_phase` on a mismatch.
 
 #### Phase 3.3: Post-Imputation Distribution & Accounting Plot Update
 - [ ] Update `tpa_plot(type = "counts", file_name = "data/plot_proteins_counts.png")` so the identification accounting plot reflects both observed replicate identifications and post-imputation (`mbr`/imputed) totals per biological cohort.

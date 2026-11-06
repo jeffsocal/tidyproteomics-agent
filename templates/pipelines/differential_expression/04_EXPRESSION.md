@@ -37,10 +37,9 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/04_e
   - Calculate empirical Bayes moderated $t$-statistics for each confirmed target contrast in Section 3.E, passing `comparison` as a `<treatment_group>/<control_group>` string (where positive $\log_2\text{FC} > 0$ indicates higher abundance in `<treatment_group>`):
     `tpa_expression(comparison = "<treatment_group>/<control_group>", method = "limma")`
   - *(Note: If Section 2/3 explicitly specifies non-parametric or repeated-measures mixed-effects testing, pass `method = "wilcoxon"` or `method = "mixed-effects"`. If multiple target contrasts are listed in Section 3.E, invoke `tpa_expression` sequentially for each confirmed contrast).*
-- [ ] **Enforced Batch Processing (`tidyproteomics::expression() |> tidyproteomics::analyze_expressions()`)**:
-  - Immediately following `tpa_expression`, **execute batch analysis to run `analyze_expressions()`**:
-    `tpa_batch_analysis(type = "expressions", labels_column = "gene_name")`
-  - This automatically processes all modeled comparisons, generates publication-grade volcano plots with `ggrepel`-labeled significant genes (`data/plot_proteins_volcano_<contrast>.png`), and exports full quantitative expression tables (`data/table_proteins_expression_<contrast>.csv` / `.tsv`).
+- [ ] **Batch Export & Plotting (`tidyproteomics::expression() |> tidyproteomics::analyze_expressions()`)**:
+  - Immediately following `tpa_expression`, **execute `tpa_batch_analysis(type = "expressions", labels_column = "gene_name")`**:
+  - This formats and exports the already-computed `limma` contrast(s), generates publication-grade volcano plots with `ggrepel`-labeled significant genes (`data/plot_proteins_volcano_<contrast>.png`), and writes full quantitative expression tables (`data/table_proteins_expression_<contrast>.csv` / `.tsv`). *(Note: When `n_contrasts == 1`, explicitly state in your summary that `analyze_expressions()` is a table/volcano export rewrite of the modeled contrast, not a second statistical test).*
 - [ ] **Checkpoint 4.2**: Confirm from the `tpa_batch_analysis` output that expression tables and volcano plots were generated across all evaluated contrasts.
 
 #### Phase 4.3: Optional Targeted Exploratory Profiling

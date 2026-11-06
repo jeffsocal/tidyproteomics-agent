@@ -90,7 +90,7 @@ const DEFAULT_CONFIG: AppConfig = {
   searchProvider: "auto",
   searchApiKey: process.env.TAVILY_API_KEY || process.env.BRAVE_API_KEY || "",
   searxngUrl: process.env.SEARXNG_URL || "",
-  workspaceRoot: process.env.WORKSPACE_ROOT || process.env.WORKSPACE || "",
+  workspaceRoot: process.env.TIDY_WORKSPACE || process.env.WORKSPACE_ROOT || process.env.WORKSPACE || "",
   recentWorkspaces: [],
   multiModelEnabled: true,
   tierUtility: { model: "claude-3-5-haiku-20241022" },
@@ -167,11 +167,27 @@ export class ConfigStore {
     }
 
     // 3. Auto-detect a sensible default workspaceRoot if none is set
+    const envWorkspace =
+      process.env.TIDY_WORKSPACE || process.env.WORKSPACE_ROOT || process.env.WORKSPACE || "";
+    if (envWorkspace) {
+      try {
+        if (!fs.existsSync(envWorkspace)) {
+          fs.mkdirSync(envWorkspace, { recursive: true });
+        }
+      } catch (_) {}
+    }
+
     let defaultWs = loaded.workspaceRoot || DEFAULT_CONFIG.workspaceRoot;
+    // If a container previously defaulted to /app (the application bundle root) and TIDY_WORKSPACE is configured, switch to TIDY_WORKSPACE
+    if (defaultWs === "/app" && envWorkspace) {
+      defaultWs = envWorkspace;
+    }
+
     if (!defaultWs || !fs.existsSync(defaultWs)) {
       const candidates = [
-        process.env.WORKSPACE_ROOT,
-        process.env.WORKSPACE,
+        envWorkspace,
+        "/tidyproteomics_agent/project_01",
+        "/tidyproteomics_agent",
         path.resolve(__dirname, "../../../TidyProteomicsAgent/testrun"),
         path.resolve(__dirname, "../../TidyProteomicsAgent/testrun"),
         path.join(os.homedir(), "Local/projects/LLM_TidyAgent/x_tpa_055"),
@@ -180,6 +196,9 @@ export class ConfigStore {
       ].filter(Boolean) as string[];
       for (const c of candidates) {
         try {
+          if (c.startsWith("/tidyproteomics_agent") && !fs.existsSync(c)) {
+            fs.mkdirSync(c, { recursive: true });
+          }
           if (fs.existsSync(c) && fs.statSync(c).isDirectory()) {
             defaultWs = fs.realpathSync(c);
             break;

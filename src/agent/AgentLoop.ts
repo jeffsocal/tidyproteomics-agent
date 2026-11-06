@@ -6,6 +6,7 @@ import { ContextBundle } from "./ContextBuilder";
 import { ToolRegistry } from "../tools/ToolRegistry";
 import { ProviderClient } from "../llm/ProviderClient";
 import { ChatLogger } from "./ChatLogger";
+import { canonicalizeImputationMethod, verifyWorkspaceMethodIdentity } from "../evaluation/check_integrity";
 
 export interface LoopResult {
   success: boolean;
@@ -1118,9 +1119,15 @@ DO NOT repeat the identical failing command without structural fixes:
         try {
           const statRep = fsSync.statSync(repPath);
           const statRev = fsSync.statSync(revPath);
-          if (statRep.size > 500 && statRep.mtimeMs >= startTimeMs && statRev.mtimeMs >= startTimeMs) {
+          const { methodMismatches } = verifyWorkspaceMethodIdentity(wsRoot);
+          if (
+            statRep.size > 500 &&
+            statRep.mtimeMs >= startTimeMs &&
+            statRev.mtimeMs >= startTimeMs &&
+            methodMismatches.length === 0
+          ) {
             recoveredSuccess = true;
-            recoveredSummary = `Phase completed: Integrity report (docs/report_integrity.md) and corrected manuscript (docs/manuscript_rev_01.md) were successfully finalized on disk before turn budget expired.`;
+            recoveredSummary = `Phase completed: Integrity report (docs/report_integrity.md) and corrected manuscript (docs/manuscript_rev_01.md) were successfully finalized on disk before turn budget expired (MATRIX_MATCHES_SPEC).`;
           }
         } catch {}
       }
@@ -1269,9 +1276,94 @@ DO NOT repeat the identical failing command without structural fixes:
     } else if (normPhase.includes("normalize")) {
       const hasRds = await checkFile("data/tidyproteomics_data.rds");
       if (!hasRds) missing.push("data/tidyproteomics_data.rds");
+
+      // Deterministic check: if docs/experiment.md specifies an explicit normalization method list (not 'default'/'all'),
+      // ensure the selected active normalization assay in docs/data.md is in that list.
+      try {
+        const expPath = path.resolve(root, "docs/experiment.md");
+        const dataMdPath = path.resolve(root, "docs/data.md");
+        if (fsSync.existsSync(expPath) && fsSync.existsSync(dataMdPath)) {
+          const expTxt = await fs.readFile(expPath, "utf-8");
+          const dataMdTxt = await fs.readFile(dataMdPath, "utf-8");
+          const normMatch = expTxt.match(/-\s*\*\*Normalization Methods\*\*:\s*([^\n\r]+)/i);
+          const actMatch = dataMdTxt.match(/-\s*\*\*Active Quantitative Assay\*\*:\s*`?([a-z0-9_]+)`?/i);
+          if (normMatch && actMatch) {
+            const specNorm = normMatch[1].replace(/<!--[\s\S]*?-->/g, "").trim().toLowerCase();
+            const actAssay = actMatch[1].trim().toLowerCase();
+            if (specNorm && !["default", "all"].includes(specNorm) && actAssay !== "raw") {
+              const allowed = specNorm.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
+              if (allowed.length > 0 && !allowed.includes(actAssay)) {
+                missing.push(
+                  `METHOD_IDENTITY_GATE (Normalization): docs/experiment.md Section 3.B specifies '${specNorm}', but active assay in docs/data.md is '${actAssay}'. Call tpa_select_normalization(normalization = '${allowed[0]}') and tpa_export_state().`
+                );
+              }
+            }
+          }
+        }
+      } catch {}
     } else if (normPhase.includes("impute")) {
       const hasRds = await checkFile("data/tidyproteomics_data.rds");
       if (!hasRds) missing.push("data/tidyproteomics_data.rds");
+
+      // Deterministic Method-Identity Gate (Incidents 1, 3, 4):
+      // Compare (1) docs/experiment.md Section 3.C imputation method, (2) last successful tpa_impute argument,
+      // (3) operations history in docs/data.md / code/03_impute.R, and (4) complete_phase summary text.
+      try {
+        const { specImputeRaw, specImputeCanon, executedImputeRaw, executedImputeCanon } =
+          verifyWorkspaceMethodIdentity(root);
+
+        // Find last tpa_impute tool call argument in this phase trajectory
+        let lastToolArgRaw = "";
+        let lastToolArgCanon = "unknown";
+        for (let i = this.messages.length - 1; i >= 0; i--) {
+          const msg = this.messages[i];
+          if (msg.role === "assistant" && Array.isArray(msg.tool_calls)) {
+            const impCall = [...msg.tool_calls].reverse().find((tc) => tc.name === "tpa_impute");
+            if (impCall) {
+              lastToolArgRaw = String(impCall.args?.method || impCall.args?.algorithm || "(default)");
+              lastToolArgCanon = canonicalizeImputationMethod(lastToolArgRaw);
+              break;
+            }
+          }
+        }
+
+        if (specImputeCanon !== "unknown") {
+          const toolMismatch =
+            lastToolArgCanon !== "unknown" && lastToolArgCanon !== specImputeCanon;
+          const historyMismatch =
+            executedImputeCanon !== "unknown" && executedImputeCanon !== specImputeCanon;
+
+          if (toolMismatch || historyMismatch) {
+            missing.push(
+              `METHOD_IDENTITY_GATE FAILED: Study spec vs executed imputation mismatch! ` +
+                `[1] docs/experiment.md Section 3.C: '${specImputeRaw}' (canonical: '${specImputeCanon}') | ` +
+                `[2] Last tpa_impute call argument: '${lastToolArgRaw || "none"}' (canonical: '${lastToolArgCanon}') | ` +
+                `[3] Operations history / code/03_impute.R: '${executedImputeRaw || "none"}' (canonical: '${executedImputeCanon}'). ` +
+                `Re-read Section 3.C of docs/experiment.md immediately, invoke tpa_impute(method = '${specImputeRaw}'), and re-run tpa_export_state(rds_path = 'data/tidyproteomics_data.rds', script_path = 'code/03_impute.R').`
+            );
+          }
+
+          if (summary && summary.trim().length > 0) {
+            const summaryLower = summary.toLowerCase();
+            // Check if summary claims a conflicting imputation method
+            const claimsRf = /randomforest|random\s*forest/i.test(summary);
+            const claimsMinCol = /min_column|base::min.*column|column.*min/i.test(summary);
+            if (specImputeCanon === "min_column" && claimsRf && !claimsMinCol) {
+              missing.push(
+                `SUMMARY_SPEC_MISMATCH: Phase 3 summary claims 'randomforest' imputation, but docs/experiment.md Section 3.C specifies 'Imputation Method: ${specImputeRaw}'. Quote the exact docs/experiment.md Imputation Method ('${specImputeRaw}') in complete_phase(summary = ...).`
+              );
+            } else if (specImputeCanon === "randomforest_grouped" && claimsMinCol && !claimsRf) {
+              missing.push(
+                `SUMMARY_SPEC_MISMATCH: Phase 3 summary claims 'min_column' imputation, but docs/experiment.md Section 3.C specifies 'Imputation Method: ${specImputeRaw}'. Quote the exact docs/experiment.md Imputation Method ('${specImputeRaw}') in complete_phase(summary = ...).`
+              );
+            } else if (!summaryLower.includes(specImputeRaw.toLowerCase()) && !summaryLower.includes(specImputeCanon.toLowerCase())) {
+              missing.push(
+                `SUMMARY_MISSING_VERBATIM_SPEC: Phase 3 summary must verbatim quote the confirmed docs/experiment.md imputation method ('${specImputeRaw}').`
+              );
+            }
+          }
+        }
+      } catch {}
     } else if (normPhase.includes("expression")) {
       const hasRds = await checkFile("data/tidyproteomics_data.rds");
       const hasExpr = (await checkFile("data/table_*expression_*.tsv")) || (await checkFile("data/table_*expression_*.csv"));
@@ -1382,6 +1474,28 @@ DO NOT repeat the identical failing command without structural fixes:
       if (!hasRep) missing.push("docs/report_integrity.md (>500 characters)");
       if (!hasRev1) missing.push("docs/manuscript_rev_01.md");
       if (!hasRev0) missing.push("docs/manuscript_rev_00.md");
+
+      // Deterministic Matrix-Matches-Spec Check (Incident 19):
+      // A prose confession of an imputation/normalization contradiction is NOT allowed to close Phase 12.
+      try {
+        const { methodMismatches } = verifyWorkspaceMethodIdentity(root);
+        if (methodMismatches.length > 0) {
+          for (const mm of methodMismatches) {
+            missing.push(mm);
+          }
+        }
+        const repFullPath = fsSync.existsSync(path.resolve(root, "docs/report_integrity.md"))
+          ? path.resolve(root, "docs/report_integrity.md")
+          : path.resolve(root, "report_integrity.md");
+        if (fsSync.existsSync(repFullPath)) {
+          const repTxt = await fs.readFile(repFullPath, "utf-8");
+          if (/\bREQUIRES_RERUN\b/.test(repTxt) && !/\bMATRIX_MATCHES_SPEC\b/.test(repTxt)) {
+            missing.push(
+              "docs/report_integrity.md contains REQUIRES_RERUN. You must re-execute tpa_impute + tpa_expression + tpa_batch_analysis + tpa_export_state so the matrix matches docs/experiment.md and record MATRIX_MATCHES_SPEC in docs/report_integrity.md."
+            );
+          }
+        }
+      } catch {}
     } else if (normPhase.includes("critique")) {
       const hasRep = (await checkFile("docs/report_critique.md")) || (await checkFile("report_critique.md"));
       const hasRev2 = (await checkFile("docs/manuscript_rev_02.md")) || (await checkFile("manuscript_rev_02.md"));

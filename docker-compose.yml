@@ -1,5 +1,6 @@
 services:
   tidyproteomics-agent:
+    image: ghcr.io/jeffsocal/tidyproteomics-agent:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -7,14 +8,14 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      # Mount your local host projects directory so all prompts, code, data, plots, and logs
-      # are written directly to your host disk just like the VSCode extension:
-      - ./workspaces:/workspaces
+      # Mount ~/tidyproteomics_agent on the host (Docker creates it automatically if missing)
+      # so all prompts, code, data, plots, and logs are written directly to your host disk:
+      - ${HOME}/tidyproteomics_agent:/tidyproteomics_agent
       # Persist studio settings across container restarts:
       - tidyproteomics-config:/root/.tidyproteomics-agent
     environment:
       - PORT=3000
-      - TIDY_WORKSPACE=/workspaces/project_01
+      - TIDY_WORKSPACE=/tidyproteomics_agent/project_01
       - TIDY_MCP_MODE=local
       - TIDY_MCP_SERVER_PATH=/app/mcp/server.py
       # Optional: Pass LLM & Search API keys via environment or configure in the Left Project Settings UI

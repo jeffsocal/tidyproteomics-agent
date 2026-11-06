@@ -46,9 +46,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Install required R packages & tidyproteomics (including Literature DuckDB, knitr, and readxl)
-RUN R -e "install.packages(c('httpuv', 'jsonlite', 'dplyr', 'tidyr', 'readr', 'ggplot2', 'stringr', 'purrr', 'tibble', 'glue', 'remotes', 'BiocManager', 'DBI', 'duckdb', 'readxl', 'knitr'), repos='https://cloud.r-project.org')" && \
-    R -e "BiocManager::install(c('limma', 'fgsea'), ask = FALSE, update = FALSE)" && \
+# Configure Posit Package Manager for pre-compiled Linux binaries (Debian Bookworm) to accelerate installation
+RUN echo 'options(repos = c(CRAN = "https://packagemanager.posit.co/cran/__linux__/bookworm/latest"))' >> /usr/local/lib/R/etc/Rprofile.site && \
+    echo 'options(HTTPUserAgent = sprintf("R/%s R (%s)", getRversion(), paste(getRversion(), R.version$platform, R.version$arch, R.version$os)))' >> /usr/local/lib/R/etc/Rprofile.site
+
+# Install required R packages & tidyproteomics (including imputation, normalization, plotting, and literature packages)
+RUN R -e "install.packages(c('httpuv', 'jsonlite', 'dplyr', 'tidyr', 'readr', 'ggplot2', 'stringr', 'purrr', 'tibble', 'glue', 'rlang', 'httr', 'remotes', 'BiocManager', 'DBI', 'duckdb', 'readxl', 'writexl', 'knitr', 'rmarkdown', 'missForest', 'randomForest', 'doParallel', 'foreach', 'e1071', 'pheatmap', 'RColorBrewer', 'ggrepel', 'gridExtra', 'scales', 'patchwork', 'viridis', 'babelgene'))" && \
+    R -e "BiocManager::install(c('limma', 'fgsea', 'BiocParallel'), ask = FALSE, update = FALSE)" && \
     R -e "remotes::install_github('jeffsocal/tidyproteomics', upgrade = 'never')"
 
 WORKDIR /app
@@ -64,12 +68,12 @@ COPY --from=builder /build/mcp ./mcp
 RUN chmod +x /app/mcp/server.py /app/mcp/r_daemon.R /app/mcp/entrypoint.sh
 
 # Create default mounted workspaces directory
-RUN mkdir -p /workspaces
-VOLUME ["/workspaces"]
+RUN mkdir -p /tidyproteomics_agent
+VOLUME ["/tidyproteomics_agent"]
 
 ENV PORT=3000
 ENV NODE_ENV=production
-ENV TIDY_WORKSPACE=/workspaces/default_project
+ENV TIDY_WORKSPACE=/tidyproteomics_agent/project_01
 ENV TIDY_MCP_MODE=local
 ENV TIDY_MCP_SERVER_PATH=/app/mcp/server.py
 ENV TIDY_DAEMON_PORT=8765

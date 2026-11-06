@@ -155,12 +155,13 @@ export const ExperimentFormTab: React.FC<ExperimentFormTabProps> = ({
     setRawText(rawMarkdown || "");
   }, [rawMarkdown]);
 
-  // Discover candidate data files in data/ or data/raw/ for quick dropdown selection
+  // Discover candidate data files in data/, data/raw/, or root of linked local folder for quick dropdown selection
   const dataFileCandidates: string[] = [];
+  const excludedPrefixes = ["docs/", "logs/", "tools/", "agent/", "reference/", "analysis/", "code/", "literature/"];
   const collectDataFiles = (nodes: FileTreeNode[]) => {
     for (const n of nodes) {
       if (n.type === "file" && /\.(xlsx|tsv|txt|csv|parquet|rds)$/i.test(n.name)) {
-        if (n.relPath.startsWith("data/")) {
+        if (!excludedPrefixes.some((p) => n.relPath.startsWith(p))) {
           dataFileCandidates.push(n.relPath);
         }
       } else if (n.children) {

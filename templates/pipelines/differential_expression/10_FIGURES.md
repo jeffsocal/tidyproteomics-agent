@@ -10,7 +10,7 @@ Target execution budget: **2–3 turns max**.
 
 > 💡 **HYBRID MCP & DETERMINISTIC SCRIPT EXECUTION WORKFLOW**:
 > While `code/10_figures.R` serves as the authoritative, reproducible execution script for generating the four discussion figures and `data/manuscript_digest.json`, MCP tools (`tpa_inspect`, `tpa_summary`, `tpa_query_expression`, `tpa_load`) are enabled for pre-flight schema confirmation and diagnostic fallback. Proceed with a tight turn budget:
-> - **Turn 1 (Authoring & Optional Schema Check)**: If needed, confirm active analyses or overview state via `tpa_inspect(what = "analyses")` or `tpa_inspect(what = "overview")`. Author `code/10_figures.R` in a single pass using `write_file` following the canonical script template below.
+> - **Turn 1 (Direct Script Authoring — Zero No-Op Commands)**: Author `code/10_figures.R` directly in Turn 1 using `write_file` following the canonical script template below. **Do NOT invoke `execute_command("true")` or any no-op command before `write_file`.**
 > - **Turn 2 (Lint & Execute)**: Execute via `execute_command("if [ -f tools/lint_tidyproteomics.R ]; then Rscript tools/lint_tidyproteomics.R code/10_figures.R && Rscript code/10_figures.R; else Rscript code/10_figures.R; fi")`. Upon successful execution, verify outputs and invoke `complete_phase`.
 > - **Turn 3 (Diagnostic Fallback — Only if Script Errors)**: If script execution fails, do NOT blindly guess or loop with shell greps. Call `tpa_inspect` or `tpa_query_expression` to diagnose the exact column schema or contrast mismatch, patch `code/10_figures.R`, and re-run.
 

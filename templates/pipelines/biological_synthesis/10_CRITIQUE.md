@@ -40,7 +40,7 @@ To ensure seamless version provenance across the pipeline:
 #### Execution Schedule (Strictly 2–3 Turns)
 
 #### **Turn 1: Comprehensive Multi-Dimensional Peer Review**
-1. Read `docs/manuscript.md` and review it against the 5 publication rubric dimensions:
+1. Read `docs/manuscript.md` using `read_file` (use `heading`, `startChar`, and `maxChars` parameters if inspecting specific sections; NEVER run `awk` or `split` via `execute_command` to split `docs/manuscript*.md` into `data/_msplit/*`) and review it against the 5 publication rubric dimensions:
    - **Dimension 1: Scientific Evaluation**: Is multiple-testing correction framed consistently? Are effect sizes reported alongside uncertainty? Are limitations tailored to THIS study rather than boilerplate? Are protein counts and statistics internally consistent with the post-filter total in `data/manuscript_digest.json` (no confusion between raw ingest and quantified features)? Does the Results section display the primary study contrast volcano plot?
    - **Dimension 2: Bioinformatics Intelligence**: Are normalization/imputation choices grounded in CV/PCA benchmarking outputs? Are functional complex members interpreted accurately?
    - **Dimension 3: Insights & Novelty**: Is known biology (with literature citations) clearly decoupled from novel discoveries? Are alternative interpretations considered?

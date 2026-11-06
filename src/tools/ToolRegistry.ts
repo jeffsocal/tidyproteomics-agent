@@ -319,7 +319,17 @@ export class ToolRegistry {
 
           // Prevent log desynchronization & truncation:
           // Strip redundant shell redirections or pipes to console.log (the harness automatically records all output)
-          let commandToRun = args.command;
+          let commandToRun = String(args.command || "").trim();
+          if (/^(?:true|:|\/bin\/true|echo\s*)$/i.test(commandToRun)) {
+            throw new Error(
+              "NO_OP_COMMAND_REJECTED: Do not invoke execute_command with 'true' or a no-op placeholder. Write the target script directly via write_file or invoke the required tool immediately."
+            );
+          }
+          if (/(?:\bawk\b|\bsplit\b).*manuscript.*(?:_msplit|\/l\d+)/i.test(commandToRun)) {
+            throw new Error(
+              "MANUSCRIPT_SPLIT_REJECTED: Do not split manuscript.md into temporary files using awk or split. Use read_file(filePath, heading = '...', startChar, maxChars) to inspect specific sections or character ranges directly."
+            );
+          }
           commandToRun = commandToRun
             .replace(/(?:\s*2>&1)?\s*(?:>|>>|\|\s*tee(?:\s+-a)?)\s+logs\/[^\s;&|]+\/console\.log/g, "")
             .replace(/;\s*test\s+["']?(?:\$\{?PIPESTATUS\[0\]\}?|\$\?)["']?\s+-eq\s+0/g, "");
@@ -348,7 +358,8 @@ export class ToolRegistry {
     this.tools.set("read_file", {
       definition: {
         name: "read_file",
-        description: "Reads file content from the workspace with optional startLine and maxLines for context economy.",
+        description:
+          "Reads file content from the workspace with optional line range (startLine, maxLines), markdown section lookup (heading), or character windowing (startChar, maxChars) for long lines/paragraphs.",
         parameters: {
           type: "object",
           properties: {
@@ -364,12 +375,75 @@ export class ToolRegistry {
               type: "number",
               description: "Optional maximum lines to read (prevents dumping large logs or tables)",
             },
+            heading: {
+              type: "string",
+              description: "Optional markdown heading text or substring (e.g. '2.3 Bioinformatics' or '4. Discussion') to read only that section without scanning the entire file",
+            },
+            startChar: {
+              type: "number",
+              description: "Optional 0-based character offset (or within the selected line/section range) for reading long paragraphs",
+            },
+            maxChars: {
+              type: "number",
+              description: "Optional maximum number of characters to return (useful for long single-line markdown sections)",
+            },
           },
           required: ["filePath"],
         },
       },
       execute: async (args) => {
         const fullPath = this.resolvePath(args.filePath);
+
+        // If heading or character windowing is requested, read via full text and slice by heading/chars
+        if (args.heading || args.startChar !== undefined || args.maxChars !== undefined) {
+          const rawText = await fs.readFile(fullPath, "utf-8");
+          const allLines = rawText.split(/\r?\n/);
+          let startIdx = Math.max(0, (args.startLine || 1) - 1);
+          let endIdx = args.maxLines ? Math.min(allLines.length, startIdx + Math.max(1, args.maxLines)) : allLines.length;
+
+          if (args.heading && String(args.heading).trim()) {
+            const q = String(args.heading).trim().replace(/^#+\s*/, "").toLowerCase();
+            let foundStart = -1;
+            let foundLevel = 0;
+            for (let i = 0; i < allLines.length; i++) {
+              const hm = allLines[i].match(/^(#{1,6})\s+(.*)$/);
+              if (hm && hm[2].toLowerCase().includes(q)) {
+                foundStart = i;
+                foundLevel = hm[1].length;
+                break;
+              }
+            }
+            if (foundStart >= 0) {
+              startIdx = foundStart;
+              endIdx = allLines.length;
+              for (let j = foundStart + 1; j < allLines.length; j++) {
+                const nhm = allLines[j].match(/^(#{1,6})\s+/);
+                if (nhm && nhm[1].length <= foundLevel) {
+                  endIdx = j;
+                  break;
+                }
+              }
+              if (args.maxLines) {
+                endIdx = Math.min(endIdx, startIdx + Math.max(1, args.maxLines));
+              }
+            }
+          }
+
+          const numberedSlice = allLines
+            .slice(startIdx, endIdx)
+            .map((line, idx) => `${startIdx + idx + 1}: ${line}`)
+            .join("\n");
+
+          const cStart = Math.max(0, Number(args.startChar || 0));
+          const cMax = args.maxChars !== undefined ? Math.max(1, Number(args.maxChars)) : numberedSlice.length;
+          const charSlice = numberedSlice.slice(cStart, cStart + cMax);
+          const charNotice =
+            args.startChar !== undefined || args.maxChars !== undefined
+              ? `, Chars ${cStart}-${Math.min(numberedSlice.length, cStart + cMax)} of ${numberedSlice.length}`
+              : "";
+          return `File: ${args.filePath} (Lines ${startIdx + 1}-${endIdx} of ${allLines.length}${charNotice}):\n${charSlice}`;
+        }
+
         const start = Math.max(1, args.startLine || 1);
         const max = Math.max(1, args.maxLines || 2000);
 

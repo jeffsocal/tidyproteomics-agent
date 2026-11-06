@@ -1260,7 +1260,13 @@ def handle_tool_call(name, args):
     elif name == "tpa_reassign":
         res = call_daemon("/reassign", args)
         if res.get("success"):
-            return f"Successfully updated {res.get('target')}!\n\n```\n{res.get('experiments')}\n```"
+            n_chg = res.get("n_changed", 0)
+            n_reas = res.get("n_reassigned", n_chg)
+            n_tot = res.get("n_total", 0)
+            return (
+                f"Successfully updated {res.get('target')} (n_reassigned={n_reas}, n_changed={n_chg}, n_total={n_tot})!\n\n"
+                f"```\n{res.get('experiments')}\n```"
+            )
         return f"Error in reassign: {res.get('error')}"
 
     elif name == "tpa_rm_mbr":
@@ -1351,7 +1357,21 @@ def handle_tool_call(name, args):
     elif name == "tpa_impute":
         res = call_daemon("/impute", args)
         if res.get("success"):
-            return f"Imputation applied!\n\n```\n{res.get('summary')}\n```"
+            meta_json = json.dumps({
+                "method": res.get("method"),
+                "canonical_method": res.get("canonical_method"),
+                "spec_method": res.get("spec_method"),
+                "n_imputed": res.get("n_imputed"),
+                "n_observed": res.get("n_observed"),
+                "n_missing": res.get("n_missing"),
+                "pct_missing_pre": res.get("pct_missing_pre"),
+                "pct_missing_post": res.get("pct_missing_post"),
+                "scope": res.get("scope", "post_impute")
+            })
+            return (
+                f"Imputation applied! [IMPUTE_SCHEMA: {meta_json}]\n\n"
+                f"```\n{res.get('summary')}\n```"
+            )
         return f"Error in imputation: {res.get('error')}"
 
     elif name == "tpa_collapse":

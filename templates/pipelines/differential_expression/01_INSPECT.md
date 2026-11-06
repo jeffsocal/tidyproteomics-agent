@@ -15,6 +15,8 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/01_i
 
 #### Phase 1.1: Pre-Ingestion Raw Header Audit & Data Ingestion
 > [!NOTE]
+> **Fast-Path Post-HITL Resume (`data/tidyproteomics_data.rds`)**: If `data/tidyproteomics_data.rds` already exists on disk from a prior Phase 1 run and `PATH_TO_DATA_FILE` / `PLATFORM` in `docs/experiment.md` have NOT changed, **do NOT repeat `tpa_input_audit` or raw file `tpa_load`**. Instead, resume directly via `tpa_load(source = "data/tidyproteomics_data.rds")` (or use the active in-memory dataset) and proceed straight to verifying/scaffolding Section 3 in Phase 1.4.
+>
 > **Advisory Nature of `tpa_input_audit`**: `tpa_input_audit` is an advisory diagnostic tool to help spot MaxLFQ vs raw intensity columns and unmapped annotations. If `tpa_input_audit` encounters format anomalies or reports zero matched columns, proceed directly to `tpa_load()`. A successful `tpa_load()` that imports quantified entities is the definitive proof of dataset ingestion integrity. Phase 1 must NEVER invoke `fail_phase` for header audit warnings or unmapped columns if `tpa_load()` succeeds.
 
 - [ ] **Pre-Ingestion Header & Annotation Audit**:
@@ -113,5 +115,5 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/01_i
   - **Unmapped Cohort Code Gate**: If any sample group lacks a biological condition label, you must set `- **Confirm Discovered Sample Groups**: FALSE` and halt for HITL review. Do not call `complete_phase`. If the user confirms execution with unmapped cohorts, an explicit `analysis_mode: cohort_coded_descriptive` deviation must be recorded before Phase 2.
 - [ ] **Complete Phase (Automated Blackboard Recording)**:
   - Do NOT manually edit `docs/notes.md` via file tools; the orchestrator automatically records your `complete_phase` summary into `docs/notes.md`.
-  - Invoke `complete_phase` with a comprehensive summary including quantified entity count, sample inventory, proposed/confirmed contrast groups, baseline quality stats, and detected upstream operations:
-    `complete_phase(phaseName = "01_INSPECT", summary = "Data ingestion complete (<N> proteins across <M> samples). Audited operations history (normalization/imputation status) and full experiments table, scaffolded study design in docs/experiment.md Section 3 (3.A-3.G), generated count diagnostic plot, and persisted data/tidyproteomics_data.rds.")`
+  - Invoke `complete_phase` with a comprehensive summary including quantified entity count, sample inventory, proposed/confirmed contrast groups, baseline quality stats (explicitly labeling raw import missingness as `scope = raw`), and detected upstream operations:
+    `complete_phase(phaseName = "01_INSPECT", summary = "Data ingestion complete (<N> proteins across <M> samples; raw import missingness <X>% [scope=raw]). Audited operations history (normalization/imputation status) and full experiments table, scaffolded study design in docs/experiment.md Section 3 (3.A-3.G), generated count diagnostic plot, and persisted data/tidyproteomics_data.rds.")`

@@ -314,10 +314,13 @@ export class ExperimentManager {
       modeMatch && /cohort_coded_descriptive/i.test(modeMatch[1]) ? "cohort_coded_descriptive" : "hypothesis_test";
 
     const pairingMatch = content.match(/-\s*\*\*Subject Pairing\*\*:\s*([^\n\r]+)/i);
+    const rawPairing = pairingMatch ? pairingMatch[1].replace(/<!--[\s\S]*?-->/g, "").trim() : "";
     const subjectPairing: "paired" | "unpaired" | "unknown" =
-      pairingMatch && /paired/i.test(pairingMatch[1])
+      /\bunpaired\b/i.test(rawPairing)
+        ? "unpaired"
+        : /\bpaired\b/i.test(rawPairing)
         ? "paired"
-        : pairingMatch && /unknown/i.test(pairingMatch[1])
+        : /\bunknown\b/i.test(rawPairing)
         ? "unknown"
         : "unpaired";
 

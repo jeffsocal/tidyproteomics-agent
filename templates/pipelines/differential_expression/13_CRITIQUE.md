@@ -33,7 +33,7 @@ To ensure seamless version provenance across the pipeline:
 - **Negative Rule (Strictly Prohibited)**:
   - Do NOT alter empirical numeric values, $p$-values, or fold-change signs.
   - Do NOT fabricate ungrounded biological claims, unmeasured phenotype rescues, or fake citations. All claims must trace to `data/*.tsv`, `docs/observations.md`, `docs/knowledge.md`, or `docs/literature.md`.
-  - Use targeted `replace_file_content` edits. Do NOT rewrite entire files from scratch.
+  - **Use Section-Scoped `read_file` & `replace_file_content`**: Read specific sections via `read_file(filePath = "docs/manuscript.md", heading = "4. Discussion", maxChars = 6000)` and apply targeted `replace_file_content` edits. **NEVER split `manuscript.md` into `data/_msplit/l*.txt` via `awk` or `split`**, and do NOT rewrite entire files from scratch.
 
 ---
 

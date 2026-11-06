@@ -783,6 +783,21 @@ export class AgentService {
     ];
   }
 
+  private getActivePhaseCount(): number {
+    try {
+      if (this.workspaceRoot) {
+        const analysisDir = path.join(this.workspaceRoot, "analysis");
+        if (fsSync.existsSync(analysisDir)) {
+          const mdFiles = fsSync.readdirSync(analysisDir).filter((f: string) => /^\d+_.*\.md$/i.test(f));
+          if (mdFiles.length > 0) return mdFiles.length;
+        }
+      }
+    } catch {
+      // fallback
+    }
+    return 13;
+  }
+
   /**
    * Checks docs/experiment.md and generates proactive onboarding guidance if initial setup is incomplete.
    */
@@ -792,7 +807,8 @@ export class AgentService {
 
     if (spec.missingInitialFields.length > 0) {
       if (this.messages.length === 0) {
-        const promptText = "👋 **Welcome to TidyProteomicsAgent!**\n\nI am your live computational proteomics partner. I configure your study design and execute the 12-phase pipeline autonomously.\n\nTell me about your experiment in your own words (data file location, search platform, analyte, and comparison groups), or select a sample option below to get started!";
+        const phaseCount = this.getActivePhaseCount();
+        const promptText = `👋 **Welcome to TidyProteomicsAgent!**\n\nI am your live computational proteomics partner. I configure your study design and execute the ${phaseCount}-phase pipeline autonomously.\n\nTell me about your experiment in your own words (data file location, search platform, analyte, and comparison groups), or select a sample option below to get started!`;
         const chips = [
           "data/raw/tidyproteomics_data.rds",
           "ProteomeDiscoverer",
@@ -1039,15 +1055,31 @@ export class AgentService {
       spec.annotationTaxonId.includes("(") ||
       spec.annotationTaxonId.includes("<");
     const hasTargetOrganism = Boolean((spec.rawSampleGroups?.length || spec.discoveredGroups?.length) && !isOrganismPending);
-    const annotationLine = hasTargetOrganism
-      ? `7. **3.G Functional Annotation Strategy**: Verify annotation source (\`uniprot\` default, custom file, or bypass) for identified organism \`${spec.annotationTaxonId}\` and check \`Confirm Functional Annotation Strategy: TRUE\`.\n`
-      : "";
+    const configuredImpute = spec.imputationMethod || "randomforest_grouped";
 
     if (isStudyDesignGate) {
-      questionPrompt = `🛑 **HUMAN-IN-THE-LOOP (HITL) CHECKPOINT: Unified Study Design Gate**\n**Phase**: ${phase.title || phase.fileName} (Phase ${phase.id})\n\n**Reason Execution Paused**:\nMandatory Section 3 subtask confirmation checks are pending in \`docs/experiment.md\`. All unconfirmed subtasks must be verified before normalization benchmarking and replicate variation analysis proceed.\n\n**Specific Required Actions (Mandatory)**:\n1. **3.A Discovered Sample Groups**: Verify detected sample groups and check \`Confirm Discovered Sample Groups: TRUE\`.\n2. **3.B Quantitative Normalization**: Confirm normalization methods (default \`scaled, median, linear, limma, loess\`) and check \`Confirm Normalization Strategy: TRUE\`.\n3. **3.C Missing Value Imputation**: Verify imputation method (\`randomforest_grouped\` for general MAR vs \`min_column\` for knockouts/MNAR) and check \`Confirm Imputation Strategy: TRUE\`.\n4. **3.D Sample Group Renaming & Pooling Map**: Verify raw replicate mapping into clean biological cohorts and check \`Confirm Sample Pooling Map: TRUE\`.\n5. **3.E Target Contrasts**: Verify pairwise comparison pair (e.g. \`Treated vs Control\`) and check \`Confirm Target Contrasts: TRUE\`.\n${isConfounding ? "6. **3.F Confounded Batch Gate**: Review detected batch confounding and check `Proceed With Potential Batch Confounding: TRUE`.\n" : ""}${annotationLine}\n👉 *All items needing your confirmation are highlighted with an **orange outline** in the \`docs/experiment.md\` form pane.*`;
+      const checklistItems: string[] = [
+        `**3.A Discovered Sample Groups**: Verify detected sample groups and check \`Confirm Discovered Sample Groups: TRUE\`.`,
+        `**3.B Quantitative Normalization**: Confirm normalization methods (default \`scaled, median, linear, limma, loess\`) and check \`Confirm Normalization Strategy: TRUE\`.`,
+        `**3.C Missing Value Imputation**: Verify configured imputation method (\`${configuredImpute}\` — \`randomforest_grouped\` for general MAR vs \`min_column\` for knockouts/MNAR) and check \`Confirm Imputation Strategy: TRUE\`.`,
+        `**3.D Sample Group Renaming & Pooling Map**: Verify raw replicate mapping into clean biological cohorts and check \`Confirm Sample Pooling Map: TRUE\`.`,
+        `**3.E Target Contrasts**: Verify pairwise comparison pair (e.g. \`Treated vs Control\`) and check \`Confirm Target Contrasts: TRUE\`.`,
+      ];
+      if (isConfounding) {
+        checklistItems.push(
+          `**3.F Confounded Batch Gate**: Review detected batch confounding and check \`Proceed With Potential Batch Confounding: TRUE\`.`
+        );
+      }
+      if (hasTargetOrganism) {
+        checklistItems.push(
+          `**3.G Functional Annotation Strategy**: Verify annotation source (\`uniprot\` default, custom file, or bypass) for identified organism \`${spec.annotationTaxonId}\` and check \`Confirm Functional Annotation Strategy: TRUE\`.`
+        );
+      }
+      const numberedChecklist = checklistItems.map((item, idx) => `${idx + 1}. ${item}`).join("\n");
+      questionPrompt = `🛑 **HUMAN-IN-THE-LOOP (HITL) CHECKPOINT: Unified Study Design Gate**\n**Phase**: ${phase.title || phase.fileName} (Phase ${phase.id})\n\n**Reason Execution Paused**:\nMandatory Section 3 subtask confirmation checks are pending in \`docs/experiment.md\`. All unconfirmed subtasks must be verified before normalization benchmarking and replicate variation analysis proceed.\n\n**Specific Required Actions (Mandatory)**:\n${numberedChecklist}\n\n👉 *All items needing your confirmation are highlighted with an **orange outline** in the \`docs/experiment.md\` form pane.*`;
       chips = ["🎯 Confirm All Study Design & Proceed", "🌐 Fetch UniProt Annotations", "Review docs/experiment.md ↗"];
     } else if (phase.id === "03" || isImputationNeeded) {
-      questionPrompt = `🛑 **HUMAN-IN-THE-LOOP (HITL) CHECKPOINT: Imputation Strategy Gate**\n**Phase**: ${phase.title || phase.fileName} (Phase ${phase.id})\n\n**Reason Execution Paused**:\nMissing Value Imputation Strategy confirmation is required in Section 3.C of \`docs/experiment.md\`.\n\n**Specific Required Actions (Mandatory)**:\n1. Review the recommended method in Section 3.C (highlighted in orange outline):\n   • \`randomforest_grouped\` (MAR Default — Karpievitch et al., 2012)\n   • \`min_column\` (LOD minimum for intentional gene knockouts / suppressions)\n2. Check \`Confirm Imputation Strategy: TRUE\` or click a confirmation button below to resume.`;
+      questionPrompt = `🛑 **HUMAN-IN-THE-LOOP (HITL) CHECKPOINT: Imputation Strategy Gate**\n**Phase**: ${phase.title || phase.fileName} (Phase ${phase.id})\n\n**Reason Execution Paused**:\nMissing Value Imputation Strategy confirmation is required in Section 3.C of \`docs/experiment.md\` (currently configured as \`${configuredImpute}\`).\n\n**Specific Required Actions (Mandatory)**:\n1. Review the configured method in Section 3.C (\`Imputation Method: ${configuredImpute}\`, highlighted in orange outline):\n   • \`min_column\` (LOD column minimum for intentional gene knockouts / suppressions / MNAR)\n   • \`randomforest_grouped\` (MAR within-group default — Karpievitch et al., 2012)\n2. Check \`Confirm Imputation Strategy: TRUE\` or click a confirmation button below to resume.`;
       chips = ["🎯 Confirm All Study Design & Proceed", "🎯 Confirm Imputation & Proceed", "Use Random Forest (MAR Default)", "Use Column Min (MNAR / Knockout)", "Review docs/experiment.md ↗"];
     } else if (phase.id === "04" && (isConfounding || isContrastNeeded)) {
       questionPrompt = `🛑 **HUMAN-IN-THE-LOOP (HITL) CHECKPOINT: Statistical Contrast & Batch Gate**\n**Phase**: ${phase.title || phase.fileName} (Phase ${phase.id})\n\n**Reason Execution Paused**:\nPhase 4 requires confirmed pairwise target contrasts in Section 3.E and authorization of potential batch confounding in Section 3.F before fitting linear models.\n\n**Specific Required Actions (Mandatory)**:\n1. Verify the primary comparison pair in Section 3.E (e.g. \`Treatment vs Control\`) and check \`Confirm Target Contrasts: TRUE\`.\n${isConfounding ? "2. The LLM detected that biological condition cohorts are confounded with processing batches. Check `Proceed With Potential Batch Confounding: TRUE` in Section 3.F.\n" : ""}3. Click '🎯 Confirm Contrast & Proceed' below or save the form to resume Phase 4.`;
@@ -1147,7 +1179,7 @@ ${llm || "Not specified."}
 ### BUILT-IN APPLICATION DOCUMENTATION & SCIENTIFIC MANUAL:
 The workspace includes two exhaustive markdown manuals in \`reference/\` (also viewable in the high-level **Guides** tab):
 1. **Operations Guide (\`reference/operations.md\`)**:
-   - Layout: Left pane (Project Explorer & Workspace Switcher), Center pane (High-level tabs: Experiment Setup, Pipeline Progress, Settings, Literature Library, AI Evaluation, Guides, plus dynamic file tabs for Markdown with search, TSV/CSV tables with filtering, PNG mass spec plots, and R code), Right pane (Agent Chat, live R console, 12-phase segmented progress bar).
+   - Layout: Left pane (Project Explorer & Workspace Switcher), Center pane (High-level tabs: Experiment Setup, Pipeline Progress, Settings, Literature Library, AI Evaluation, Guides, plus dynamic file tabs for Markdown with search, TSV/CSV tables with filtering, PNG mass spec plots, and R code), Right pane (Agent Chat, live R console, ${this.getActivePhaseCount()}-phase segmented progress bar).
    - Directory hierarchy: \`docs/\` (working documents: manuscript.md, notes.md, experiment.md, observations.md, knowledge.md, reports), \`reference/\` (platform reference manuals: operations.md, scientific.md), \`data/\` (tidyproteomics_data.rds, volcano plots, PCA plots, count plots, result TSVs), \`code/\` (reproducible exported R scripts 01-11), \`logs/\` (per-phase console logs), \`analysis/\` (phase directives), \`literature/\` (SQLite/DuckDB index and corpus).
    - Visual Semantics & Status Colors: Grey (#52525b) pending, Animated Blue (#2563eb->#60a5fa) running, Green (#10b981) completed, Amber (#f59e0b) warning/HITL checkpoint, Red (#ef4444) error.
    - Orange outline: Marks required Human-in-the-Loop confirmation fields in Section 3 of \`docs/experiment.md\`.
@@ -1568,7 +1600,7 @@ The workspace includes two exhaustive markdown manuals in \`reference/\` (also v
         /^(?:operations(?: guide)?|how to use(?: the app)?|help|where (?:to find things|is everything)|what do (?:the )?colors mean)\??$/i.test(trimmed);
       if (isOpsGuideIntent) {
         const reply = `📖 **TidyProteomics Agent Operations Summary**:\n\n` +
-          `• **Layout**: Left pane (Project Explorer & Workspace Switcher), Center pane (Interactive Experiment Setup, Pipeline Progress, Settings, Literature Library, AI Evaluation, Guides, and dynamic file tabs), Right pane (Agent Chat, live R console, 12-phase segmented progress bar).\n` +
+          `• **Layout**: Left pane (Project Explorer & Workspace Switcher), Center pane (Interactive Experiment Setup, Pipeline Progress, Settings, Literature Library, AI Evaluation, Guides, and dynamic file tabs), Right pane (Agent Chat, live R console, ${this.getActivePhaseCount()}-phase segmented progress bar).\n` +
           `• **Where to Find Things**:\n` +
           `  - \`docs/\`: Working project documents — \`experiment.md\` (study design), \`manuscript.md\` (Phase 11 synthesis), \`notes.md\` (milestones), \`observations.md\`.\n` +
           `  - \`reference/\`: Platform reference manuals — \`operations.md\` (operations guide), \`scientific.md\` (scientific guide to normalization, imputation, expression & enrichment).\n` +

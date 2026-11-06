@@ -1,5 +1,5 @@
 ---
-tools: [check_integrity, read_file, write_file, replace_file_content, execute_command, check_checkpoint_gate, complete_phase, fail_phase]
+tools: [check_integrity, tpa_load, tpa_impute, tpa_expression, tpa_enrichment, tpa_export_table, tpa_compile_summary, tpa_export_state, read_file, write_file, replace_file_content, execute_command, check_checkpoint_gate, complete_phase, fail_phase]
 ---
 
 ### Phase 12: Data-Grounded Integrity Review & Defect Correction

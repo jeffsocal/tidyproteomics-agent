@@ -39,14 +39,20 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/03_i
        )
        ```
 
-#### Phase 3.2: Imputation Execution & Complete-Case / Pre-Imputed Safeguard
-- [ ] Execute the confirmed strategy:
+#### Phase 3.2: Imputation Execution & Mandatory Method-Identity Gate
+> [!CAUTION]
+> **Hard Method-Identity Binding (`docs/experiment.md` Section 3.C)**:
+> 1. **Re-Read Section 3.C Immediately Before Calling `tpa_impute`**: Look at the exact `- **Imputation Method**: <spec_method>` line in Section 3.C of `docs/experiment.md` (and `Configured Section 3.C Imputation Method` in the Executive Blackboard).
+> 2. **Pass That Exact Method Only**: Do **NOT** default to `impute.randomforest` / `randomforest_grouped` if Section 3.C specifies `min_column`. The `tpa_impute` daemon and the `complete_phase` gate deterministically compare (1) `docs/experiment.md` Section 3.C, (2) the `tpa_impute` argument, and (3) `operations` history, and will reject any mismatch.
+> 3. **Single Execution Only**: Call `tpa_impute` **once** with the confirmed method. Never call `tpa_impute` before verifying `Confirm Imputation Strategy: TRUE`, and never repeat `tpa_impute` multiple times in the same phase.
+
+- [ ] Execute the confirmed strategy from Section 3.C of `docs/experiment.md`:
   - If pre-existing imputation is recorded in operations history: preserve upstream imputed values to prevent variance distortion.
   - If total missing is `0%` or `- **Imputation Method**: none`: bypass imputation to preserve empirical ground truth.
-  - If `- **Imputation Method**: randomforest_grouped` (default): invoke `tpa_impute(method = "impute.randomforest, method = 'matrix', group_by_sample = TRUE")`.
-  - If `- **Imputation Method**: min_column`: invoke `tpa_impute(method = "base::min, method = 'column'")`.
-  - If `- **Imputation Method**: min_row_grouped`: invoke `tpa_impute(method = "base::min, method = 'row', group_by_sample = TRUE")`.
-- [ ] **Checkpoint 3.2**: Verify from the `tpa_impute` return summary that imputation executed successfully. *(Note: `tpa_impute` automatically returns the updated dataset summary; do NOT make a redundant `tpa_inspect(what = "overview")` call if `tpa_impute` just printed the updated state. Under `randomforest_grouped` or `min_row_grouped`, residual missing values correspond to 100%-absent condition-exclusive dropouts and do NOT require 0% residual missingness; under `min_column`, all missing values are imputed at each replicate's column LOD).*
+  - If `- **Imputation Method**: min_column`: invoke `tpa_impute(method = "min_column")` (which executes `base::min, method = 'column'`).
+  - If `- **Imputation Method**: randomforest_grouped`: invoke `tpa_impute(method = "randomforest_grouped")` (which executes `impute.randomforest, method = 'matrix', group_by_sample = TRUE`).
+  - If `- **Imputation Method**: min_row_grouped`: invoke `tpa_impute(method = "min_row_grouped")` (which executes `base::min, method = 'row', group_by_sample = TRUE`).
+- [ ] **Checkpoint 3.2**: Verify from the `tpa_impute` return summary (`[IMPUTE_SCHEMA: {...}]`) that `canonical_method` matches `spec_method` in `docs/experiment.md` Section 3.C, and record `n_imputed`, `n_observed`, `n_missing`, `pct_missing_pre`, `pct_missing_post`, and `scope = post_impute`. *(Note: `tpa_impute` automatically returns the updated dataset summary; do NOT make a redundant `tpa_inspect(what = "overview")` call if `tpa_impute` just printed the updated state).*
 
 #### Phase 3.3: Post-Imputation Distribution & Accounting Plot Update
 - [ ] Update `tpa_plot(type = "counts", file_name = "data/plot_proteins_counts.png")` so the identification accounting plot reflects both observed replicate identifications and post-imputation (`mbr`/imputed) totals per biological cohort.
@@ -57,10 +63,10 @@ Execute this phase using live `tpa_*` MCP tools in memory (or execute `code/03_i
 #### Phase 3.4: Object Persistence & Checkpoint Verification
 - [ ] Persist the imputed dataset and generate reproducible R script:
   - Invoke `tpa_export_state(rds_path = "data/tidyproteomics_data.rds", script_path = "code/03_impute.R")`.
-- [ ] **Checkpoint 3.4**:
+- [ ] **Checkpoint 3.4 (Deterministic Method-Identity Gate)**:
   1. `logs/03_impute/console.log` exists on disk with non-zero file size.
-  2. `data/tidyproteomics_data.rds` and `code/03_impute.R` exist on disk with non-zero file size, and operations history confirms `impute` (or verified complete-case bypass / pre-imputed pass-through).
+  2. `data/tidyproteomics_data.rds` and `code/03_impute.R` exist on disk with non-zero file size, and operations history confirms `impute` matching `docs/experiment.md` Section 3.C (`operations_history.impute_method == experiment.md method`).
 - [ ] **Complete Phase (Automated Blackboard Recording)**:
   - Do NOT manually edit `docs/notes.md` via file tools; the orchestrator automatically records your `complete_phase` summary into `docs/notes.md`.
-  - Invoke `complete_phase` with a comprehensive summary including pre-imputation missingness percentage, confirmed imputation method and rationale (`impute.randomforest` MAR default vs. `base::min` column LOD for knockouts/MNAR vs. complete-case bypass per Karpievitch et al. 2012), and post-imputation completeness / residual condition-exclusive dropout counts:
-    `complete_phase(phaseName = "03_IMPUTE", summary = "Missingness audit (<pre_missing>% pre-imputation missing) and confirmed imputation (<selected_imputation_method>) completed. Confirmed post-imputation dynamic range (<post_missing>% residual condition-exclusive missing), updated counts plot, and persisted data/tidyproteomics_data.rds.")`
+  - **Verbatim Spec Quote Requirement**: Your `complete_phase` summary **MUST quote the exact `Imputation Method` string from `docs/experiment.md` Section 3.C verbatim** (do not recall or paraphrase it) alongside `pct_missing_pre`, `pct_missing_post` (`scope = post_impute`), `n_imputed`, `n_observed`, and `n_missing`:
+    `complete_phase(phaseName = "03_IMPUTE", summary = "Missingness audit (<pct_missing_pre>% pre-imputation missing [scope=filtered]) and confirmed imputation (Imputation Method: <verbatim_experiment_md_method>) completed (<n_imputed> cells imputed, <n_observed> observed, <n_missing> residual missing; <pct_missing_post>% post-imputation missing [scope=post_impute]). Updated counts plot and persisted data/tidyproteomics_data.rds.")`

@@ -251,7 +251,7 @@ export class PipelineOrchestrator {
         return `Selecting ${args?.method || "optimal"} normalization layer ...`;
       }
       case "tpa_impute": {
-        const alg = args?.algorithm || args?.method || "LOD";
+        const alg = args?.algorithm || args?.method || "configured strategy";
         return `Imputing missing quantitative values (${alg}) ...`;
       }
       case "tpa_expression": {
@@ -382,11 +382,46 @@ export class PipelineOrchestrator {
       };
     }
 
+    if (name === "tpa_reassign") {
+      const reasMatch = res.match(/n_reassigned=(\d+),\s*n_changed=(\d+),\s*n_total=(\d+)/i);
+      if (reasMatch) {
+        return {
+          text: `Reassigned sample groups (${reasMatch[1]} of ${reasMatch[3]} samples mapped; ${reasMatch[2]} changed).`,
+          badge: "Pooling",
+        };
+      }
+      return null;
+    }
+
     if (name === "tpa_impute") {
-      const imputedMatch = res.match(/(\d+[\d,]*|\d+\.?\d*%)\s*(?:imputed|missing)/i);
-      const method = args?.algorithm || args?.method || "LOD";
+      const schemaMatch = res.match(/\[IMPUTE_SCHEMA:\s*(\{[^\n\r\]]+\})\]/i);
+      if (schemaMatch) {
+        try {
+          const parsed = JSON.parse(schemaMatch[1]);
+          const method = parsed.canonical_method || parsed.method || args?.method || args?.algorithm || "configured";
+          const nImputed = parsed.n_imputed ?? 0;
+          const nObserved = parsed.n_observed ?? 0;
+          const nMissing = parsed.n_missing ?? 0;
+          const pctPost = parsed.pct_missing_post ?? parsed.pct_missing ?? 0;
+          const scope = parsed.scope || "post_impute";
+          return {
+            text: `Completed missing value imputation using **${method}** strategy (imputed: ${nImputed}, observed: ${nObserved}, missing: ${nMissing}, missingness: ${pctPost}% [scope=${scope}]).`,
+            badge: "Imputation",
+          };
+        } catch {
+          // fallback below
+        }
+      }
+      const auditMatch = res.match(/n_imputed\s*=\s*(\d+)\s*\|\s*n_observed\s*=\s*(\d+)\s*\|\s*n_missing\s*=\s*(\d+)\s*\|\s*pct_missing_pre\s*=\s*([\d.]+)%?\s*->\s*pct_missing_post\s*=\s*([\d.]+)%?/i);
+      const method = args?.method || args?.algorithm || "configured";
+      if (auditMatch) {
+        return {
+          text: `Completed missing value imputation using **${method}** strategy (imputed: ${auditMatch[1]}, observed: ${auditMatch[2]}, missing: ${auditMatch[3]}, missingness: ${auditMatch[5]}% [scope=post_impute]).`,
+          badge: "Imputation",
+        };
+      }
       return {
-        text: `Completed missing value imputation using **${method}** strategy${imputedMatch ? ` (${imputedMatch[0]})` : ""}.`,
+        text: `Completed missing value imputation using **${method}** strategy.`,
         badge: "Imputation",
       };
     }
@@ -1703,17 +1738,6 @@ Construct and execute code for this phase, capturing output to logs.
 
     let loop: AgentLoop | undefined;
     try {
-      try {
-        await writeActiveModelSummaryFile(this.workspaceRoot, this.client.getConfig(), this.extensionVersion);
-      } catch (err) {
-        console.warn("[PipelineOrchestrator] Could not write docs/llm.md before phase execution:", err);
-      }
-
-      const contextBuilder = new ContextBuilder(this.workspaceRoot);
-      const context = await contextBuilder.buildPhaseContext(phase.fileName);
-
-      let lastToolPendingText = "";
-
       const phaseRole: LLMRole = this.resolvePhaseRole(phase.id, phase.fileName);
       const { client: phaseClient, source: modelSource } = this.client.forPhase(phase.id, phase.fileName, phaseRole);
 
@@ -1722,6 +1746,33 @@ Construct and execute code for this phase, capturing output to logs.
       phase.model = phaseModelCfg.model;
       phase.provider = phaseModelCfg.provider;
       phase.modelSource = modelSource;
+
+      try {
+        const executedPhases = this.phases
+          .filter((p) => p.model && (p.status === "completed" || p.id === phase.id))
+          .map((p) => ({
+            phaseId: p.fileName.replace(/\.md$/i, "").toUpperCase(),
+            provider: p.provider || phaseModelCfg.provider,
+            model: p.model || phaseModelCfg.model,
+          }));
+        await writeActiveModelSummaryFile(
+          this.workspaceRoot,
+          phaseModelCfg,
+          this.extensionVersion,
+          "mcp",
+          {
+            activePhaseId: phaseTagUpper,
+            executedPhases,
+          }
+        );
+      } catch (err) {
+        console.warn("[PipelineOrchestrator] Could not write docs/llm.md before phase execution:", err);
+      }
+
+      const contextBuilder = new ContextBuilder(this.workspaceRoot);
+      const context = await contextBuilder.buildPhaseContext(phase.fileName);
+
+      let lastToolPendingText = "";
       const roleLabel =
         modelSource === "phase"
           ? `Phase Assignment: ${phaseModelCfg.model}`
