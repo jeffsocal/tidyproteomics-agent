@@ -90,7 +90,7 @@ The orchestrator ships with specialized, production-ready pipelines:
   - **`docs/experiment.md` Form Editor**: Interactive visual form with live validation badges, split-pane Markdown editor, and raw Markdown editor.
   - **Pipeline Progress Telemetry Table**: Real-time phase tracking with elapsed durations, agent turns, token usage (prompt, cached, completion), and expandable execution logs.
   - **Rich File Previews**: High-resolution PNG/SVG plot viewers, interactive Plotly charts, paginated tabular CSV/TSV inspectors, and syntax-highlighted R scripts.
-  - **In-App Guides & Manuals**: Integrated searchable readers for the [Operations Guide](reference/operations.md) and [Scientific Guide to Normalization & Imputation](reference/scientific.md) with PDF export.
+  - **In-App Guides & Manuals**: Integrated searchable readers for the [Quick "How-To" Guide & Studio Tour](reference/howto.md), [Operations Guide](reference/operations.md), and [Scientific Guide to Normalization & Imputation](reference/scientific.md) with PDF export.
 - **Right Pane — Agentic Chat & Telemetry**:
   - Live agent streaming with turn counters, scientific reasoning, tool calls, and structured findings.
   - Quick-action suggestion chips (`Confirm All & Proceed`, `Fetch UniProt`, `Explain Observations`).

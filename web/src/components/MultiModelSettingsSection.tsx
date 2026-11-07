@@ -11,6 +11,9 @@ import {
   Sliders,
   Check,
   RotateCcw,
+  RefreshCw,
+  AlertTriangle,
+  CheckCircle2,
 } from "lucide-react";
 import { LLMProviderType, LLMTierConfig } from "../types";
 import { TierSuggestionModal } from "./TierSuggestionModal";
@@ -48,6 +51,8 @@ interface MultiModelSettingsSectionProps {
   tierReasoner: LLMTierConfig;
   onUpdateTierReasoner: (patch: Partial<LLMTierConfig>) => void;
   primaryProvider: LLMProviderType;
+  primaryApiKey?: string;
+  primaryBaseUrl?: string;
   onApplyPreset: (presetKey: string) => void;
   phaseModels?: Record<string, string>;
   onUpdatePhaseModel?: (phaseId: string, model: string | null) => void;
@@ -105,6 +110,8 @@ export const MultiModelSettingsSection: React.FC<MultiModelSettingsSectionProps>
   tierReasoner,
   onUpdateTierReasoner,
   primaryProvider,
+  primaryApiKey,
+  primaryBaseUrl,
   onApplyPreset,
   phaseModels,
   onUpdatePhaseModel,
@@ -112,9 +119,64 @@ export const MultiModelSettingsSection: React.FC<MultiModelSettingsSectionProps>
   const [expandedTier, setExpandedTier] = useState<"utility" | "toolRunner" | "reasoner" | null>(null);
   const [showPhaseOverrides, setShowPhaseOverrides] = useState<boolean>(false);
   const [showSuggestModal, setShowSuggestModal] = useState<boolean>(false);
+  const [testingTier, setTestingTier] = useState<"utility" | "toolRunner" | "reasoner" | null>(null);
+  const [tierTestResults, setTierTestResults] = useState<
+    Record<string, { ok: boolean; latencyMs?: number; error?: string }>
+  >({});
 
   const toggleExpand = (tier: "utility" | "toolRunner" | "reasoner") => {
     setExpandedTier((prev) => (prev === tier ? null : tier));
+  };
+
+  const handleTestTier = async (tierKey: "utility" | "toolRunner" | "reasoner") => {
+    const tierCfg =
+      tierKey === "utility"
+        ? tierUtility
+        : tierKey === "toolRunner"
+          ? tierToolRunner
+          : tierReasoner;
+    const effProvider = tierCfg.apiKey ? (tierCfg.provider || primaryProvider) : primaryProvider;
+    const effKey = (tierCfg.apiKey && tierCfg.apiKey.trim()) || primaryApiKey || "";
+    const effBaseUrl = tierCfg.baseUrl || primaryBaseUrl || "";
+
+    setTestingTier(tierKey);
+    setTierTestResults((prev) => {
+      const next = { ...prev };
+      delete next[tierKey];
+      return next;
+    });
+
+    try {
+      const res = await fetch("/api/llm/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: effProvider,
+          model: tierCfg.model || "",
+          apiKey: effKey,
+          baseUrl: effBaseUrl,
+        }),
+      });
+      const data = await res.json();
+      setTierTestResults((prev) => ({
+        ...prev,
+        [tierKey]: {
+          ok: Boolean(data.ok),
+          latencyMs: data.latencyMs,
+          error: data.error,
+        },
+      }));
+    } catch (err: any) {
+      setTierTestResults((prev) => ({
+        ...prev,
+        [tierKey]: {
+          ok: false,
+          error: err.message || "Network error",
+        },
+      }));
+    } finally {
+      setTestingTier(null);
+    }
   };
 
   const effectiveUtilityProvider = tierUtility.apiKey ? (tierUtility.provider || primaryProvider) : primaryProvider;
@@ -344,14 +406,45 @@ export const MultiModelSettingsSection: React.FC<MultiModelSettingsSectionProps>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "6px" }}>
-              <input
-                type="text"
-                className="input"
-                style={{ width: "100%", padding: "6px 10px", fontSize: "12px" }}
-                value={tierUtility.model || ""}
-                onChange={(e) => onUpdateTierUtility({ model: e.target.value })}
-                placeholder="e.g. claude-3-5-haiku-20241022 or gpt-4o-mini"
-              />
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <input
+                  type="text"
+                  className="input"
+                  style={{ flex: 1, padding: "6px 10px", fontSize: "12px" }}
+                  value={tierUtility.model || ""}
+                  onChange={(e) => onUpdateTierUtility({ model: e.target.value })}
+                  placeholder="e.g. claude-3-5-haiku-20241022 or gpt-4o-mini"
+                />
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => handleTestTier("utility")}
+                  disabled={testingTier === "utility" || !(tierUtility.model || "").trim()}
+                  style={{ padding: "5px 10px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "5px", whiteSpace: "nowrap" }}
+                  title="Test Tier 1 model and API key"
+                >
+                  <RefreshCw size={12} className={testingTier === "utility" ? "spin" : ""} />
+                  {testingTier === "utility" ? "Testing..." : "Test"}
+                </button>
+              </div>
+              {tierTestResults.utility && (
+                <div
+                  style={{
+                    fontSize: "11px",
+                    color: tierTestResults.utility.ok ? "#34d399" : "#f87171",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "5px",
+                  }}
+                >
+                  {tierTestResults.utility.ok ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
+                  <span>
+                    {tierTestResults.utility.ok
+                      ? `Verified${tierTestResults.utility.latencyMs !== undefined ? ` (${tierTestResults.utility.latencyMs}ms)` : ""}`
+                      : tierTestResults.utility.error}
+                  </span>
+                </div>
+              )}
 
               <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", alignItems: "center" }}>
                 <span style={{ fontSize: "9.5px", color: "var(--muted)", marginRight: "4px" }}>Suggestions:</span>
@@ -438,14 +531,45 @@ export const MultiModelSettingsSection: React.FC<MultiModelSettingsSectionProps>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "6px" }}>
-              <input
-                type="text"
-                className="input"
-                style={{ width: "100%", padding: "6px 10px", fontSize: "12px" }}
-                value={tierToolRunner.model || ""}
-                onChange={(e) => onUpdateTierToolRunner({ model: e.target.value })}
-                placeholder="e.g. claude-3-5-sonnet-20241022 or gpt-4o"
-              />
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <input
+                  type="text"
+                  className="input"
+                  style={{ flex: 1, padding: "6px 10px", fontSize: "12px" }}
+                  value={tierToolRunner.model || ""}
+                  onChange={(e) => onUpdateTierToolRunner({ model: e.target.value })}
+                  placeholder="e.g. claude-3-5-sonnet-20241022 or gpt-4o"
+                />
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => handleTestTier("toolRunner")}
+                  disabled={testingTier === "toolRunner" || !(tierToolRunner.model || "").trim()}
+                  style={{ padding: "5px 10px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "5px", whiteSpace: "nowrap" }}
+                  title="Test Tier 2 model and API key"
+                >
+                  <RefreshCw size={12} className={testingTier === "toolRunner" ? "spin" : ""} />
+                  {testingTier === "toolRunner" ? "Testing..." : "Test"}
+                </button>
+              </div>
+              {tierTestResults.toolRunner && (
+                <div
+                  style={{
+                    fontSize: "11px",
+                    color: tierTestResults.toolRunner.ok ? "#34d399" : "#f87171",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "5px",
+                  }}
+                >
+                  {tierTestResults.toolRunner.ok ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
+                  <span>
+                    {tierTestResults.toolRunner.ok
+                      ? `Verified${tierTestResults.toolRunner.latencyMs !== undefined ? ` (${tierTestResults.toolRunner.latencyMs}ms)` : ""}`
+                      : tierTestResults.toolRunner.error}
+                  </span>
+                </div>
+              )}
 
               <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", alignItems: "center" }}>
                 <span style={{ fontSize: "9.5px", color: "var(--muted)", marginRight: "4px" }}>Suggestions:</span>
@@ -532,14 +656,45 @@ export const MultiModelSettingsSection: React.FC<MultiModelSettingsSectionProps>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "6px" }}>
-              <input
-                type="text"
-                className="input"
-                style={{ width: "100%", padding: "6px 10px", fontSize: "12px" }}
-                value={tierReasoner.model || ""}
-                onChange={(e) => onUpdateTierReasoner({ model: e.target.value })}
-                placeholder="e.g. claude-3-7-sonnet-20250219 or o3-mini"
-              />
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <input
+                  type="text"
+                  className="input"
+                  style={{ flex: 1, padding: "6px 10px", fontSize: "12px" }}
+                  value={tierReasoner.model || ""}
+                  onChange={(e) => onUpdateTierReasoner({ model: e.target.value })}
+                  placeholder="e.g. claude-3-7-sonnet-20250219 or o3-mini"
+                />
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => handleTestTier("reasoner")}
+                  disabled={testingTier === "reasoner" || !(tierReasoner.model || "").trim()}
+                  style={{ padding: "5px 10px", fontSize: "11px", display: "inline-flex", alignItems: "center", gap: "5px", whiteSpace: "nowrap" }}
+                  title="Test Tier 3 model and API key"
+                >
+                  <RefreshCw size={12} className={testingTier === "reasoner" ? "spin" : ""} />
+                  {testingTier === "reasoner" ? "Testing..." : "Test"}
+                </button>
+              </div>
+              {tierTestResults.reasoner && (
+                <div
+                  style={{
+                    fontSize: "11px",
+                    color: tierTestResults.reasoner.ok ? "#34d399" : "#f87171",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "5px",
+                  }}
+                >
+                  {tierTestResults.reasoner.ok ? <CheckCircle2 size={12} /> : <AlertTriangle size={12} />}
+                  <span>
+                    {tierTestResults.reasoner.ok
+                      ? `Verified${tierTestResults.reasoner.latencyMs !== undefined ? ` (${tierTestResults.reasoner.latencyMs}ms)` : ""}`
+                      : tierTestResults.reasoner.error}
+                  </span>
+                </div>
+              )}
 
               <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", alignItems: "center" }}>
                 <span style={{ fontSize: "9.5px", color: "var(--muted)", marginRight: "4px" }}>Suggestions:</span>

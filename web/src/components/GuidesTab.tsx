@@ -12,7 +12,7 @@ import {
 import { renderBlockquoteWithAlerts } from "../utils/markdownAlerts";
 
 export interface GuidesTabProps {
-  initialGuide?: "operations" | "scientific";
+  initialGuide?: "howto" | "operations" | "scientific";
 }
 
 function slugifyHeading(text: string): string {
@@ -42,8 +42,8 @@ customMarked.use({
   },
 });
 
-export const GuidesTab: React.FC<GuidesTabProps> = ({ initialGuide = "operations" }) => {
-  const [selectedGuide, setSelectedGuide] = useState<"operations" | "scientific">(initialGuide);
+export const GuidesTab: React.FC<GuidesTabProps> = ({ initialGuide = "howto" }) => {
+  const [selectedGuide, setSelectedGuide] = useState<"howto" | "operations" | "scientific">(initialGuide);
   const [guideLoading, setGuideLoading] = useState(false);
   const [guideError, setGuideError] = useState<string | null>(null);
   const [guideContent, setGuideContent] = useState<string>("");
@@ -57,7 +57,7 @@ export const GuidesTab: React.FC<GuidesTabProps> = ({ initialGuide = "operations
     }
   }, [initialGuide]);
 
-  const fetchGuide = async (guideId: "operations" | "scientific") => {
+  const fetchGuide = async (guideId: "howto" | "operations" | "scientific") => {
     setGuideLoading(true);
     setGuideError(null);
     try {
@@ -230,11 +230,20 @@ export const GuidesTab: React.FC<GuidesTabProps> = ({ initialGuide = "operations
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <button
             type="button"
+            className={`btn btn-sm ${selectedGuide === "howto" ? "btn-primary" : "btn-secondary"}`}
+            onClick={() => setSelectedGuide("howto")}
+            style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}
+            title="Quick How-To Guide: Getting Started, Studio Components & Architecture"
+          >
+            <Compass size={13} /> 🚀 Quick "How-To" Guide
+          </button>
+          <button
+            type="button"
             className={`btn btn-sm ${selectedGuide === "operations" ? "btn-primary" : "btn-secondary"}`}
             onClick={() => setSelectedGuide("operations")}
             style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}
           >
-            <Compass size={13} /> 📖 Operations Guide &amp; App Manual
+            <BookOpen size={13} /> 📖 Operations Manual
           </button>
           <button
             type="button"
@@ -243,7 +252,7 @@ export const GuidesTab: React.FC<GuidesTabProps> = ({ initialGuide = "operations
             style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}
             title="Scientific Guide: Normalization, Imputation, Expression & Enrichment"
           >
-            <FlaskConical size={13} /> 🔬 Scientific Guide: Methods &amp; Statistics
+            <FlaskConical size={13} /> 🔬 Scientific Guide
           </button>
         </div>
 
@@ -336,7 +345,15 @@ export const GuidesTab: React.FC<GuidesTabProps> = ({ initialGuide = "operations
         {guideLoading ? (
           <div style={{ padding: "40px", textAlign: "center", color: "var(--muted)" }}>
             <RefreshCw size={18} className="spin" style={{ marginBottom: "8px" }} />
-            <div>Loading {selectedGuide === "operations" ? "Operations Guide" : "Scientific Guide"}...</div>
+            <div>
+              Loading{" "}
+              {selectedGuide === "howto"
+                ? "Quick How-To Guide"
+                : selectedGuide === "operations"
+                  ? "Operations Guide"
+                  : "Scientific Guide"}
+              ...
+            </div>
           </div>
         ) : guideError ? (
           <div style={{ padding: "30px", textAlign: "center", color: "var(--error)" }}>

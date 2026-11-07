@@ -36,9 +36,9 @@ interface LeftProjectPaneProps {
   onOpenSettings?: () => void;
   onOpenLibrary?: () => void;
   onOpenEvaluation?: () => void;
-  onOpenGuides?: (guide?: "operations" | "scientific") => void;
-  onOpenHowto?: (guide?: "operations" | "scientific") => void;
-  onOpenDocumentation?: (guide: "operations" | "scientific") => void;
+  onOpenGuides?: (guide?: "howto" | "operations" | "scientific") => void;
+  onOpenHowto?: (guide?: "howto" | "operations" | "scientific") => void;
+  onOpenDocumentation?: (guide: "howto" | "operations" | "scientific") => void;
   onRefreshTree: () => void;
 }
 
@@ -268,11 +268,11 @@ export const LeftProjectPane: React.FC<LeftProjectPaneProps> = ({
           className="btn btn-secondary btn-xs"
           onClick={() => {
             if (onOpenGuides) {
-              onOpenGuides("operations");
+              onOpenGuides("howto");
             } else if (onOpenHowto) {
-              onOpenHowto("operations");
+              onOpenHowto("howto");
             } else if (onOpenDocumentation) {
-              onOpenDocumentation("operations");
+              onOpenDocumentation("howto");
             }
           }}
           style={{ justifyContent: "center", gap: "5px", padding: "5px 6px" }}

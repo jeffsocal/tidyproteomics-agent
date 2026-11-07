@@ -83,11 +83,11 @@ export const App: React.FC = () => {
 
   // Center viewer tabs
   const [tabs, setTabs] = useState<ViewerTab[]>(DEFAULT_TABS);
-  const [activeTabId, setActiveTabId] = useState<string>("experiment");
+  const [activeTabId, setActiveTabId] = useState<string>("guides");
   const [focusedPhaseId, setFocusedPhaseId] = useState<string | null>(null);
   const [showPerformanceReviewModal, setShowPerformanceReviewModal] = useState<boolean>(false);
   const [settingsInitialSection, setSettingsInitialSection] = useState<"workspace" | "provider" | "mcp">("workspace");
-  const [howtoInitialGuide, setHowtoInitialGuide] = useState<"operations" | "scientific">("operations");
+  const [howtoInitialGuide, setHowtoInitialGuide] = useState<"howto" | "operations" | "scientific">("howto");
 
   const handleOpenSettings = useCallback((section?: "workspace" | "provider" | "mcp") => {
     if (section) setSettingsInitialSection(section);
@@ -138,7 +138,7 @@ export const App: React.FC = () => {
     setActiveTabId("evaluation");
   }, []);
 
-  const handleOpenGuides = useCallback((guide: "operations" | "scientific" = "operations") => {
+  const handleOpenGuides = useCallback((guide: "howto" | "operations" | "scientific" = "howto") => {
     setHowtoInitialGuide(guide);
     setTabs((prev) => {
       if (prev.some((t) => t.id === "guides" || t.id === "howto")) return prev;
@@ -159,7 +159,7 @@ export const App: React.FC = () => {
 
   const handleOpenHowto = handleOpenGuides;
 
-  const handleOpenDocumentation = useCallback((guide: "operations" | "scientific" = "operations") => {
+  const handleOpenDocumentation = useCallback((guide: "howto" | "operations" | "scientific" = "howto") => {
     handleOpenGuides(guide);
   }, [handleOpenGuides]);
 
@@ -168,6 +168,14 @@ export const App: React.FC = () => {
     const cleanRel = relPath.replace(/^\/+/, "");
     if (cleanRel === "docs/experiment.md") {
       setActiveTabId("experiment");
+      return;
+    }
+    if (
+      cleanRel === "reference/howto.md" ||
+      cleanRel === "guides/howto.md" ||
+      cleanRel === "docs/HOWTO.md"
+    ) {
+      handleOpenGuides("howto");
       return;
     }
     if (

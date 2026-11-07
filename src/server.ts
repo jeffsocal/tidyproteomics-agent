@@ -37,6 +37,7 @@ async function startServer() {
   const app = express();
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  app.use("/media", express.static(path.join(APP_ROOT, "media")));
 
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: "/ws" });
@@ -567,6 +568,68 @@ async function startServer() {
     }
   });
 
+  // 2b. Test LLM provider connection, model selection & API key
+  app.post("/api/llm/test", async (req, res) => {
+    const startMs = Date.now();
+    try {
+      const current = configStore.getAll();
+      const rawProvider = String(req.body?.provider ?? current.provider ?? "anthropic")
+        .trim()
+        .toLowerCase() as AppConfig["provider"];
+      const model = String(req.body?.model ?? current.model ?? "").trim();
+      const apiKey = String(req.body?.apiKey ?? current.apiKey ?? "").trim();
+      const baseUrl = String(req.body?.baseUrl ?? current.baseUrl ?? "").trim();
+
+      if (!model) {
+        return res.json({ ok: false, error: "Model identifier is required." });
+      }
+      if (rawProvider !== "ollama" && !apiKey) {
+        return res.json({ ok: false, error: `API key is required for ${rawProvider.toUpperCase()}.` });
+      }
+
+      const effectiveProvider: AppConfig["provider"] =
+        apiKey.startsWith("sk-or-v1") ? "openrouter" : rawProvider;
+
+      const testClient = new ProviderClient(
+        {
+          provider: effectiveProvider,
+          model,
+          apiKey,
+          baseUrl: baseUrl || undefined,
+          maxTokens: 512,
+          temperature: 0,
+          timeoutSeconds: 25,
+        },
+        true
+      );
+
+      const response = await testClient.chat({
+        system: "You are a connectivity check assistant. Respond only with the single word OK.",
+        messages: [{ role: "user", content: "Reply with the single word OK." }],
+        tools: [],
+      });
+
+      const latencyMs = Date.now() - startMs;
+      const replyText = (response.content || "OK").trim().slice(0, 120);
+
+      return res.json({
+        ok: true,
+        provider: effectiveProvider,
+        model,
+        latencyMs,
+        reply: replyText,
+        usage: response.usage,
+      });
+    } catch (err: any) {
+      const latencyMs = Date.now() - startMs;
+      return res.json({
+        ok: false,
+        latencyMs,
+        error: err?.message || "LLM connection test failed.",
+      });
+    }
+  });
+
   // 3. Browse directories on host/container filesystem for workspace picker
   app.get("/api/workspace/browse", async (req, res) => {
     try {
@@ -715,7 +778,15 @@ async function startServer() {
       let targetFile = "";
       let title = "";
 
-      if (cleanId === "operations" || cleanId === "operations_guide" || cleanId === "readme_operations" || cleanId === "howto" || cleanId === "guides") {
+      if (cleanId === "howto" || cleanId === "quickstart" || cleanId === "how_to") {
+        const candidates = [
+          workspaceRoot ? path.join(workspaceRoot, "reference", "howto.md") : "",
+          path.join(APP_ROOT, "reference", "howto.md"),
+          path.join(APP_ROOT, "templates", "shared", "reference", "howto.md"),
+        ].filter(Boolean);
+        targetFile = candidates.find((f) => fs.existsSync(f)) || candidates[0];
+        title = "Quick 'How-To' Guide & Workbench Overview";
+      } else if (cleanId === "operations" || cleanId === "operations_guide" || cleanId === "readme_operations" || cleanId === "guides") {
         const candidates = [
           workspaceRoot ? path.join(workspaceRoot, "reference", "operations.md") : "",
           path.join(APP_ROOT, "reference", "operations.md"),

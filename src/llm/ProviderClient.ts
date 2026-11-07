@@ -265,14 +265,16 @@ export class ProviderClient {
     ];
 
     const maxTokens = this.config.maxTokens || 16384;
-    const body = {
+    const body: Record<string, any> = {
       model: this.config.model || "claude-3-7-sonnet-20250219",
       max_tokens: maxTokens,
       temperature: this.config.temperature ?? 0.2,
       system: systemPayload,
       messages: anthropicMessages,
-      tools: anthropicTools,
     };
+    if (anthropicTools.length > 0) {
+      body.tools = anthropicTools;
+    }
 
     const timeoutSeconds = this.getTimeoutSeconds();
     let res: Response;
@@ -424,17 +426,19 @@ export class ProviderClient {
     }
 
     const maxTokens = this.config.maxTokens || 16384;
-    const body = {
+    const body: Record<string, any> = {
       systemInstruction: {
         parts: [{ text: params.system }],
       },
       contents,
-      tools: geminiTools,
       generationConfig: {
         temperature: this.config.temperature ?? 0.2,
         maxOutputTokens: maxTokens,
       },
     };
+    if (params.tools && params.tools.length > 0) {
+      body.tools = geminiTools;
+    }
 
     const timeoutSeconds = this.getTimeoutSeconds();
     let res: Response;
@@ -545,12 +549,15 @@ export class ProviderClient {
     }
 
     const maxTokens = this.config.maxTokens || 16384;
+    const modelName = this.config.model || "gpt-4o";
+    const isReasoningModel = /^o[134](-|$)/i.test(modelName);
     const body: Record<string, any> = {
-      model: this.config.model || "gpt-4o",
+      model: modelName,
       messages: formattedMessages,
       tools: openAiTools.length > 0 ? openAiTools : undefined,
-      temperature: this.config.temperature ?? 0.2,
-      max_tokens: maxTokens,
+      ...(isReasoningModel
+        ? { max_completion_tokens: maxTokens }
+        : { temperature: this.config.temperature ?? 0.2, max_tokens: maxTokens }),
     };
 
     const timeoutSeconds = this.getTimeoutSeconds();

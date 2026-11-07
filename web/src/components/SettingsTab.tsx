@@ -185,6 +185,15 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
   const [savedNotice, setSavedNotice] = useState(false);
   const [isInitializing, setIsInitializing] = useState(false);
   const [isReconnecting, setIsReconnecting] = useState(false);
+  const [isTestingLlm, setIsTestingLlm] = useState(false);
+  const [llmTestResult, setLlmTestResult] = useState<{
+    ok: boolean;
+    provider?: string;
+    model?: string;
+    latencyMs?: number;
+    reply?: string;
+    error?: string;
+  } | null>(null);
 
   // Sync state from config prop
   useEffect(() => {
@@ -330,6 +339,60 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
     });
     setSavedNotice(true);
     setTimeout(() => setSavedNotice(false), 2500);
+  };
+
+  const handleTestLlm = async () => {
+    setIsTestingLlm(true);
+    setLlmTestResult(null);
+    try {
+      const res = await fetch("/api/llm/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider,
+          model,
+          apiKey,
+          baseUrl,
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setLlmTestResult({
+          ok: true,
+          provider: data.provider || provider,
+          model: data.model || model,
+          latencyMs: data.latencyMs,
+          reply: data.reply,
+        });
+        await onUpdateConfig({
+          provider,
+          model,
+          apiKey,
+          baseUrl,
+          maxTokens,
+          timeoutSeconds,
+          maxTurns,
+          multiModelEnabled,
+          tierUtility,
+          tierToolRunner,
+          tierReasoner,
+          phaseModels,
+        });
+      } else {
+        setLlmTestResult({
+          ok: false,
+          latencyMs: data.latencyMs,
+          error: data.error || "Connection test failed.",
+        });
+      }
+    } catch (err: any) {
+      setLlmTestResult({
+        ok: false,
+        error: err.message || "Network error testing LLM connection.",
+      });
+    } finally {
+      setIsTestingLlm(false);
+    }
   };
 
   const handleInitPipeline = async () => {
@@ -640,13 +703,33 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
           </div>
 
           <div className="card" style={{ padding: "18px", display: "flex", flexDirection: "column", gap: "16px" }}>
-            <div>
-              <h3 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "var(--fg-bright)" }}>
-                Provider &amp; Model Architecture
-              </h3>
-              <div style={{ fontSize: "12px", color: "var(--muted)" }}>
-                Configure the primary inference client and role-specialized models (Utility, Tool Runner, Reasoner).
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "var(--fg-bright)" }}>
+                  Provider &amp; Model Architecture
+                </h3>
+                <div style={{ fontSize: "12px", color: "var(--muted)" }}>
+                  Configure the primary inference client and role-specialized models (Utility, Tool Runner, Reasoner).
+                </div>
               </div>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={handleTestLlm}
+                disabled={isTestingLlm}
+                style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}
+                title="Verify connection, model selection, and API key"
+              >
+                {isTestingLlm ? (
+                  <>
+                    <RefreshCw size={13} className="spin" /> Testing Connection...
+                  </>
+                ) : (
+                  <>
+                    <Check size={13} /> Test LLM Connection
+                  </>
+                )}
+              </button>
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
@@ -660,6 +743,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                     const p = e.target.value as LLMProviderType;
                     setProvider(p);
                     setModel(defaultModels[p][0] || "");
+                    setLlmTestResult(null);
                     setTierUtility((prev) => ({ ...prev, provider: prev.apiKey ? prev.provider : p }));
                     setTierToolRunner((prev) => ({ ...prev, provider: prev.apiKey ? prev.provider : p }));
                     setTierReasoner((prev) => ({ ...prev, provider: prev.apiKey ? prev.provider : p }));
@@ -680,7 +764,10 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   className="input"
                   style={{ width: "100%", padding: "7px 10px" }}
                   value={model}
-                  onChange={(e) => setModel(e.target.value)}
+                  onChange={(e) => {
+                    setModel(e.target.value);
+                    setLlmTestResult(null);
+                  }}
                   placeholder="e.g. claude-3-7-sonnet-20250219"
                 />
                 <div style={{ display: "flex", gap: "4px", marginTop: "6px", flexWrap: "wrap" }}>
@@ -690,7 +777,10 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                       type="button"
                       className="file-pill"
                       style={{ fontSize: "10px", padding: "1px 6px" }}
-                      onClick={() => setModel(m)}
+                      onClick={() => {
+                        setModel(m);
+                        setLlmTestResult(null);
+                      }}
                     >
                       {m}
                     </button>
@@ -710,7 +800,10 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   style={{ flex: 1, padding: "7px 10px" }}
                   placeholder={`Enter your ${provider.toUpperCase()} API Key...`}
                   value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
+                  onChange={(e) => {
+                    setApiKey(e.target.value);
+                    setLlmTestResult(null);
+                  }}
                 />
                 <button
                   type="button"
@@ -720,8 +813,58 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 >
                   {showApiKey ? <EyeOff size={13} /> : <Eye size={13} />}
                 </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={handleTestLlm}
+                  disabled={isTestingLlm}
+                  style={{ display: "inline-flex", alignItems: "center", gap: "5px", whiteSpace: "nowrap" }}
+                  title="Send a test prompt to verify provider, model, and API key"
+                >
+                  {isTestingLlm ? <RefreshCw size={12} className="spin" /> : <Check size={12} />}
+                  <span>{isTestingLlm ? "Testing..." : "Test Key & Model"}</span>
+                </button>
               </div>
             </div>
+
+            {llmTestResult && (
+              <div
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: "6px",
+                  border: llmTestResult.ok
+                    ? "1px solid rgba(16, 185, 129, 0.45)"
+                    : "1px solid rgba(239, 68, 68, 0.45)",
+                  background: llmTestResult.ok
+                    ? "rgba(16, 185, 129, 0.1)"
+                    : "rgba(239, 68, 68, 0.1)",
+                  color: llmTestResult.ok ? "#34d399" : "#f87171",
+                  fontSize: "12px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "10px",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  {llmTestResult.ok ? <Check size={15} /> : <AlertTriangle size={15} />}
+                  <span>
+                    {llmTestResult.ok ? (
+                      <>
+                        <strong>Connection Verified:</strong>{" "}
+                        <code>{llmTestResult.provider?.toUpperCase()}</code> model{" "}
+                        <code>{llmTestResult.model}</code> responded in{" "}
+                        <strong>{llmTestResult.latencyMs}ms</strong> — API key &amp; model saved.
+                      </>
+                    ) : (
+                      <>
+                        <strong>Connection Failed:</strong> {llmTestResult.error}
+                      </>
+                    )}
+                  </span>
+                </div>
+              </div>
+            )}
 
             <div>
               <label className="field-label" style={{ marginBottom: "6px" }}>
@@ -733,7 +876,10 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 style={{ width: "100%", padding: "7px 10px" }}
                 placeholder={provider === "ollama" ? "http://localhost:11434" : "https://api.openai.com/v1"}
                 value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
+                onChange={(e) => {
+                  setBaseUrl(e.target.value);
+                  setLlmTestResult(null);
+                }}
               />
             </div>
 
@@ -748,6 +894,8 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               tierReasoner={tierReasoner}
               onUpdateTierReasoner={(patch) => setTierReasoner((prev) => ({ ...prev, ...patch }))}
               primaryProvider={provider}
+              primaryApiKey={apiKey}
+              primaryBaseUrl={baseUrl}
               onApplyPreset={handleApplyPreset}
               phaseModels={phaseModels}
               onUpdatePhaseModel={(phaseId, model) => {

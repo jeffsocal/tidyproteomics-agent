@@ -43,7 +43,7 @@ interface CenterViewerPaneProps {
   onResetPipeline: () => void;
   onOpenPerformanceReview?: () => void;
   settingsInitialSection?: "workspace" | "provider" | "mcp";
-  howtoInitialGuide?: "operations" | "scientific";
+  howtoInitialGuide?: "howto" | "operations" | "scientific";
 }
 
 export const CenterViewerPane: React.FC<CenterViewerPaneProps> = ({
