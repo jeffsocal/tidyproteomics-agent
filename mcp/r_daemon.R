@@ -57,6 +57,7 @@ get_active_data <- function(id = NULL) {
 # Helper: Set current active dataset
 set_active_data <- function(data, id = NULL) {
   if (is.null(id) || !nzchar(trimws(id))) id <- STATE$active_id
+  if (!is.null(data) && !is.null(data$platform)) data$platform <- NULL
   STATE$datasets[[id]] <- data
   STATE$active_id <- id
 }
@@ -123,7 +124,6 @@ resolve_comparison <- function(data, comp = NULL) {
 # Helper: Resolve canonical platform name from data object, daemon state, or docs/experiment.md
 resolve_platform_name <- function(data = NULL) {
   candidates <- c(
-    if (!is.null(data) && !is.null(data$platform)) as.character(data$platform) else character(0),
     if (!is.null(data) && !is.null(data$origin)) as.character(data$origin) else character(0),
     if (!is.null(STATE$last_platform)) as.character(STATE$last_platform) else character(0),
     if (!is.null(STATE$last_ingest_config_platform)) as.character(STATE$last_ingest_config_platform) else character(0)
@@ -481,8 +481,8 @@ update_data_overview_doc <- function(data, file_path = "docs/data.md", phase_tag
   id_col <- if (!is.null(data$identifier)) data$identifier[1] else "protein"
   analyte_name <- if (!is.null(data$analyte) && nzchar(data$analyte)) data$analyte else "proteins"
   platform_name <- resolve_platform_name(data)
-  if ((is.null(data$platform) || !nzchar(data$platform) || tolower(data$platform) == "unknown platform") && platform_name != "Unknown Platform") {
-    data$platform <- platform_name
+  if ((is.null(data$origin) || !nzchar(data$origin) || tolower(data$origin) %in% c("unknown", "unknown platform", "rds", "tidyproteomics")) && platform_name != "Unknown Platform") {
+    data$origin <- platform_name
   }
   active_assay <- if (!is.null(data$quantitative_source)) data$quantitative_source else "raw"
 
@@ -1016,7 +1016,8 @@ handle_request <- function(req) {
         data_id <- if (!is.null(params$id) && nzchar(params$id)) params$id else "rdata"
         source <- if (!is.null(params$source) && nzchar(params$source)) params$source else "hela_proteins"
         load_local_arg <- params$load_local
-        platform <- if (!is.null(params$platform) && nzchar(params$platform)) params$platform else "ProteomeDiscoverer"
+        raw_platform <- if (!is.null(params$platform) && nzchar(params$platform)) params$platform else NULL
+        platform <- if (!is.null(raw_platform)) raw_platform else "ProteomeDiscoverer"
         analyte <- if (!is.null(params$analyte) && nzchar(params$analyte)) params$analyte else "proteins"
         config_arg <- params$config
         if (is.null(config_arg) || !nzchar(config_arg)) {
@@ -1103,15 +1104,21 @@ handle_request <- function(req) {
           }
         }
 
-        # Persist platform metadata on data object and daemon state so docs/data.md never shows Unknown Platform
-        if (!is.null(platform) && nzchar(platform) && !tolower(platform) %in% c("rds", "tidyproteomics")) {
-          data$platform <- platform
-          STATE$last_platform <- platform
+        if (!is.null(data$platform)) data$platform <- NULL
+
+        # Persist platform metadata on data$origin and daemon state so docs/data.md never shows Unknown Platform
+        if (!is.null(raw_platform) && !tolower(raw_platform) %in% c("rds", "tidyproteomics")) {
+          if (is.null(data$origin) || !nzchar(data$origin) || tolower(data$origin) %in% c("unknown", "unknown platform", "rds", "tidyproteomics")) {
+            data$origin <- raw_platform
+          }
+          STATE$last_platform <- data$origin
         } else {
           resolved_plat <- resolve_platform_name(data)
           if (resolved_plat != "Unknown Platform") {
-            data$platform <- resolved_plat
-            STATE$last_platform <- resolved_plat
+            if (is.null(data$origin) || !nzchar(data$origin) || tolower(data$origin) %in% c("unknown", "unknown platform", "rds", "tidyproteomics")) {
+              data$origin <- resolved_plat
+            }
+            STATE$last_platform <- data$origin
           }
         }
 
@@ -3213,10 +3220,18 @@ handle_request <- function(req) {
           if (any(is_area)) {
             audit_tbl$suggestion[is_area] <- "Candidate: quantitative (abundance_raw) via '^Area:'"
           }
-          # Check for MaxQuant/generic Intensity
-          is_int <- !audit_tbl$matched & grepl("^(Intensity|LFQ\\s+intensity)", audit_tbl$raw_header, ignore.case = TRUE)
+          # Check for MaxQuant TMT Reporter intensity
+          is_tmt_corr <- !audit_tbl$matched & grepl("^Reporter\\s+intensity\\s+corrected\\s+", audit_tbl$raw_header, ignore.case = TRUE)
+          is_tmt_raw <- !audit_tbl$matched & !is_tmt_corr & grepl("^Reporter\\s+intensity\\s+(?!count)", audit_tbl$raw_header, ignore.case = TRUE, perl = TRUE)
+          if (any(is_tmt_corr)) {
+            audit_tbl$suggestion[is_tmt_corr] <- "Candidate: quantitative (abundance_raw) via '^Reporter intensity corrected '"
+          } else if (any(is_tmt_raw)) {
+            audit_tbl$suggestion[is_tmt_raw] <- "Candidate: quantitative (abundance_raw) via '^Reporter intensity '"
+          }
+          # Check for MaxQuant/generic per-sample Intensity
+          is_int <- !audit_tbl$matched & grepl("^(Intensity|LFQ\\s+intensity)\\s+", audit_tbl$raw_header, ignore.case = TRUE)
           if (any(is_int)) {
-            audit_tbl$suggestion[is_int] <- "Candidate: quantitative (abundance_raw) via '^Intensity' or '^LFQ intensity'"
+            audit_tbl$suggestion[is_int] <- "Candidate: quantitative (abundance_raw) via '^Intensity ' or '^LFQ intensity '"
           }
           # Check for DIA-NN/Spectronaut Quantity
           is_quant <- !audit_tbl$matched & grepl("^(PG\\.Quantity|Quantity)", audit_tbl$raw_header, ignore.case = TRUE)
@@ -3240,6 +3255,12 @@ handle_request <- function(req) {
             suggestions <- c(
               suggestions,
               "Column(s) matching '^Area:' detected without matched quantitative channels. In ProteomeDiscoverer, peak area exports use 'Area: ...'. Configure with: tpa_ingest_config(platform='ProteomeDiscoverer', action='set', category='quantitative', column_defined='abundance_raw', column_import='^Area:', pivot=TRUE)"
+            )
+          }
+          if (any(grepl("^Reporter\\s+intensity\\s+corrected\\s+", audit_tbl$raw_header, ignore.case = TRUE))) {
+            suggestions <- c(
+              suggestions,
+              "Column(s) matching '^Reporter intensity corrected ' detected without matched quantitative channels (MaxQuant TMT). Configure with: tpa_ingest_config(platform='MaxQuant', action='auto_fix', file_name='...')"
             )
           }
         }
@@ -3358,14 +3379,15 @@ handle_request <- function(req) {
             }
           }, error = function(e) character(0))
 
+          effective_cfg <- if (!is.null(out_file) && nzchar(out_file)) out_file else cfg_file
+          if (is.null(effective_cfg) || !nzchar(effective_cfg)) {
+            effective_cfg <- file.path(STATE$output_dir, paste0(platform, "_", analyte, ".tsv"))
+          }
+
           has_abundance <- any(grepl("^Abundance\\:", raw_headers, ignore.case = TRUE))
           has_area <- any(grepl("^Area\\:", raw_headers, ignore.case = TRUE))
 
           if (!has_abundance && has_area) {
-            effective_cfg <- if (!is.null(out_file) && nzchar(out_file)) out_file else cfg_file
-            if (is.null(effective_cfg) || !nzchar(effective_cfg)) {
-              effective_cfg <- file.path(STATE$output_dir, paste0(platform, "_", analyte, ".tsv"))
-            }
             updated_tbl <- tryCatch(
               tidyproteomics::ingest_config(
                 platform = platform,
@@ -3383,12 +3405,62 @@ handle_request <- function(req) {
             )
           }
 
+          # Auto-configure MaxQuant TMT Reporter intensity channels when standard Intensity/LFQ channels are absent
+          q_idx <- which(updated_tbl$column_defined == "abundance_raw")
+          q_pat <- if (length(q_idx) > 0) as.character(updated_tbl$column_import[q_idx[1]]) else NA_character_
+          q_matched <- if (!is.na(q_pat) && nzchar(q_pat)) any(grepl(q_pat, raw_headers, perl = TRUE)) else FALSE
+          has_tmt_corr <- any(grepl("^Reporter intensity corrected ", raw_headers))
+
+          if ((!q_matched && has_tmt_corr) || (!is.na(q_pat) && grepl("^\\^?Reporter intensity corrected", q_pat))) {
+            updated_tbl <- tryCatch({
+              tidyproteomics::ingest_config(
+                platform = platform,
+                analyte = analyte,
+                config_file = effective_cfg,
+                action = "set",
+                category = "quantitative",
+                column_defined = "abundance_raw",
+                column_import = "^Reporter intensity corrected ",
+                pivot = TRUE,
+                save = TRUE,
+                output_file = effective_cfg
+              )
+              tidyproteomics::ingest_config(
+                platform = platform,
+                analyte = analyte,
+                config_file = effective_cfg,
+                action = "set",
+                category = "sample",
+                column_defined = "sample",
+                column_import = "",
+                pattern_extract = "(?<=Reporter intensity corrected ).+",
+                save = TRUE,
+                output_file = effective_cfg
+              )
+              tidyproteomics::ingest_config(
+                platform = platform,
+                analyte = analyte,
+                config_file = effective_cfg,
+                action = "set",
+                category = "sample",
+                column_defined = "sample_file",
+                column_import = "",
+                pattern_extract = "(?<=(Reporter intensity corrected )).+",
+                save = TRUE,
+                output_file = effective_cfg
+              )
+            }, error = function(e) updated_tbl)
+          }
+
+          # Only fall back to single-column num_unique_peptides when existing pattern matches 0 headers (or is already single-column with pivot=TRUE)
+          u_idx <- which(updated_tbl$column_defined == "num_unique_peptides")
+          u_pat <- if (length(u_idx) > 0) as.character(updated_tbl$column_import[u_idx[1]]) else NA_character_
+          u_piv <- if (length(u_idx) > 0) isTRUE(as.logical(updated_tbl$pivot[u_idx[1]])) else FALSE
+          u_matched <- if (!is.na(u_pat) && nzchar(u_pat)) any(grepl(u_pat, raw_headers, perl = TRUE)) else FALSE
+          u_is_exact_single <- !is.na(u_pat) && grepl("\\$$", u_pat)
+
           uniq_cols <- grep("(?i)^(Combined\\s+Total\\s+Peptides|Combined\\s+Unique\\s+Peptides|Unique\\s+Peptides|Combined\\s+Unique\\s+Spectral\\s+Count)$", raw_headers, value = TRUE)
-          if (length(uniq_cols) > 0) {
-            effective_cfg <- if (!is.null(out_file) && nzchar(out_file)) out_file else cfg_file
-            if (is.null(effective_cfg) || !nzchar(effective_cfg)) {
-              effective_cfg <- file.path(STATE$output_dir, paste0(platform, "_", analyte, ".tsv"))
-            }
+          if (length(uniq_cols) > 0 && (!u_matched || (u_is_exact_single && u_piv))) {
             chosen_uniq <- uniq_cols[1]
             updated_tbl <- tryCatch(
               tidyproteomics::ingest_config(
@@ -3399,11 +3471,35 @@ handle_request <- function(req) {
                 category = "accounting",
                 column_defined = "num_unique_peptides",
                 column_import = paste0("^", chosen_uniq, "$"),
+                pivot = FALSE,
                 save = TRUE,
                 output_file = effective_cfg
               ),
               error = function(e) updated_tbl
             )
+          }
+
+          # Remove pivoted num_peptides row if its pattern matches 0 headers (e.g. MaxQuant TMT exports without per-sample 'Peptides <sample>')
+          pep_idx <- which(updated_tbl$column_defined == "num_peptides")
+          if (length(pep_idx) > 0) {
+            pep_pat <- as.character(updated_tbl$column_import[pep_idx[1]])
+            pep_piv <- isTRUE(as.logical(updated_tbl$pivot[pep_idx[1]]))
+            pep_matched <- if (!is.na(pep_pat) && nzchar(pep_pat)) any(grepl(pep_pat, raw_headers, perl = TRUE)) else FALSE
+            if (pep_piv && !pep_matched) {
+              updated_tbl <- tryCatch(
+                tidyproteomics::ingest_config(
+                  platform = platform,
+                  analyte = analyte,
+                  config_file = effective_cfg,
+                  action = "remove",
+                  category = "accounting",
+                  column_defined = "num_peptides",
+                  save = TRUE,
+                  output_file = effective_cfg
+                ),
+                error = function(e) updated_tbl
+              )
+            }
           }
         }
 

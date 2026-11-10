@@ -27,6 +27,7 @@ out/
 # Workspaces & scratch test runs
 workspaces/
 scratch_test_workspace/
+manuscript/
 
 # Logs
 *.log

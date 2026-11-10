@@ -292,3 +292,7 @@ If you use TidyProteomics Agent in your research, please cite:
 ## License
 
 This project is open-source under the [MIT License](LICENSE).
+
+## Development Note
+
+TidyProteomics-Agent was architected and validated by Jeffrey Jones, with heavy coding and software engineering assistance from Google Gemini.
