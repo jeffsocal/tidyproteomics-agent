@@ -18,6 +18,34 @@
 
 ---
 
+## Quick Start
+
+Run the entire studio (Web UI, Node.js Orchestrator, Python MCP Server, R Daemon, and TidyProteomics) in a self-contained Docker container with a single command. **No manual directory creation or environment file editing is required**—all configuration is handled directly in the browser:
+
+1. **Clone and start the studio**:
+   ```bash
+   git clone https://github.com/jeffsocal/tidyproteomics-agent.git
+   cd tidyproteomics-agent
+   docker compose up --build
+   ```
+   *(Add `-d` if you want to run it in the background).*
+
+2. **Open the Studio**:
+   Navigate to **`http://localhost:3000`** in your browser.
+
+3. **Configure directly in the Web UI**:
+   - **API Key**: In the **Settings** tab, select your preferred provider (Anthropic, OpenRouter, OpenAI, Gemini, or local Ollama) and paste your API key. Settings are saved automatically to a persistent Docker volume (`tidyproteomics-config`) across container restarts and updates.
+   - **Workspace**: Select or initialize your project workspace directly in the UI. Any data files, R code, plots, and manuscripts are automatically persisted to `./workspaces/` on your host machine.
+
+4. **Test with the Benchmark p97/VCP Dataset**:
+   In the **Experiment Setup** tab (`docs/experiment.md`), paste the following URL directly into `PATH_TO_DATA_FILE` (the agent fetches remote URLs automatically):
+   - **Dataset URL**: `https://data.caltech.edu/records/aevwq-2ps50/files/ProteomeDiscoverer_2.5_p97KD_HCT116_proteins.xlsx`
+   - **Platform**: `ProteomeDiscoverer`
+   - **Analyte**: `proteins`
+   - *(Caltech Data Repository record: [`https://data.caltech.edu/records/aevwq-2ps50`](https://data.caltech.edu/records/aevwq-2ps50))*
+
+---
+
 ## Overview
 
 **TidyProteomics Agent** is a full-stack, standalone scientific workbench and autonomous AI orchestrator for high-throughput quantitative mass spectrometry proteomics. It unites the statistical power of R’s [`tidyproteomics`](https://github.com/jeffsocal/tidyproteomics) package with autonomous LLM agents, deterministic data integrity verifiers, an embedded biomedical literature knowledge graph, and a Human-in-the-Loop (HITL) study design studio.
@@ -135,7 +163,9 @@ workspace/
 
 ---
 
-## Quick Start
+## Local Deployment
+
+If you prefer to run or develop TidyProteomics Agent directly on your host machine without Docker:
 
 ### Prerequisites
 
@@ -144,11 +174,8 @@ workspace/
 | **Node.js** | `>= 18.0.0` | Primary orchestrator & web server |
 | **Python** | `>= 3.10` | MCP Server execution (`mcp/server.py`) |
 | **R** | `>= 4.3.0` | Requires `tidyproteomics`, `readr`, `glue`, `jsonlite` |
-| **Docker** | *(Optional)* | For instant, zero-dependency all-in-one container deployment |
 
----
-
-### Option A: Local Host Development
+### Installation & Startup
 
 1. **Clone the repository**:
    ```bash
@@ -185,26 +212,7 @@ workspace/
 > npm run dev:server  # TSX server watcher
 > ```
 
----
-
-### Option B: Self-Contained Docker Container (Fastest & Zero-Dependency)
-
-Run the entire studio (Web UI, Node.js Orchestrator, Python MCP Server, R Daemon, and TidyProteomics) with a single command. **No manual directory creation or environment file editing is required**—all configuration is handled directly in the browser:
-
-1. **Start the studio**:
-   ```bash
-   docker compose up --build
-   ```
-   *(Add `-d` if you want to run it in the background).*
-
-2. **Open the Studio**:
-   Navigate to **`http://localhost:3000`** in your browser.
-
-3. **Configure directly in the Web UI**:
-   - **API Key**: In the **Settings** tab, select your preferred provider (Anthropic, OpenRouter, OpenAI, Gemini, or local Ollama) and paste your API key. Settings are saved automatically to a persistent Docker volume (`tidyproteomics-config`) across container restarts and updates.
-   - **Workspace**: Select or initialize your project workspace directly in the UI. Any data files, R code, plots, and manuscripts are automatically persisted to `./workspaces/` on your host machine.
-
-> **Optional Headless / Server Deployment**: If deploying to a headless cloud server or CI/CD environment, you can optionally pass API keys via host environment variables or a `.env` file (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`), but this is completely optional for normal interactive use.
+> **Optional Headless / Server Environment Variables**: If deploying to a headless server or CI/CD environment, you can optionally pass API keys via host environment variables or a `.env` file (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`), though this is completely optional for normal interactive use via the Web UI.
 
 ---
 
