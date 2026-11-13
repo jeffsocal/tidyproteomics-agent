@@ -199,7 +199,7 @@ A dimension total of 5/10 corresponds to "competent; major revision". 8/10 = "st
 - Any numeric value in the manuscript that disagrees with the ground-truth tables is a factual error (score the relevant criterion 0).
 - Generic text that would be equally true for any knockout experiment earns 0 for specificity-related criteria.
 - Length is not quality. Do not reward verbosity.
-- Evidence fields must contain a short verbatim quote (<= 25 words) or a section reference; use "none" when scoring 0.
+- Evidence fields must contain a short verbatim quote (<= 25 words) or a section reference; use "none" when scoring 0. Always use single quotes ('...') instead of double quotes inside any JSON string value.
 
 # PROCEDURE
 1. First list the three most serious weaknesses of the manuscript (in "weaknesses").
@@ -227,6 +227,28 @@ ${manuscript.length > 90000 ? manuscript.slice(0, 90000) + "\n…[truncated at 9
   return { system, user };
 }
 
+function isClosingQuote(str: string, quoteIdx: number): boolean {
+  let j = quoteIdx + 1;
+  while (j < str.length && (str[j] === " " || str[j] === "\t" || str[j] === "\r" || str[j] === "\n")) {
+    j++;
+  }
+  if (j >= str.length) return true;
+  const next = str[j];
+  if (next === ":" || next === "}" || next === "]") return true;
+  if (next === ",") {
+    let k = j + 1;
+    while (k < str.length && (str[k] === " " || str[k] === "\t" || str[k] === "\r" || str[k] === "\n")) {
+      k++;
+    }
+    if (k >= str.length) return true;
+    const afterComma = str[k];
+    if (afterComma === "\"" || afterComma === "{" || afterComma === "[" || afterComma === "}" || afterComma === "]") {
+      return true;
+    }
+  }
+  return false;
+}
+
 function repairJsonString(str: string): string {
   let out = "";
   let inString = false;
@@ -235,8 +257,12 @@ function repairJsonString(str: string): string {
     const ch = str[i];
     if (inString) {
       if (ch === "\"") {
-        inString = false;
-        out += ch;
+        if (isClosingQuote(str, i)) {
+          inString = false;
+          out += ch;
+        } else {
+          out += "\\\"";
+        }
         i++;
         continue;
       }
@@ -252,6 +278,7 @@ function repairJsonString(str: string): string {
           next === "r" ||
           next === "t"
         ) {
+          // If an escaped quote is actually at the very end of the string value (e.g. from a trailing backslash), keep it escaped unless it closes the string
           out += "\\" + next;
           i += 2;
           continue;
@@ -294,7 +321,11 @@ function repairJsonString(str: string): string {
       i++;
     }
   }
-  return out;
+  // Strip trailing commas before ] or } and insert missing commas between adjacent objects/arrays
+  return out
+    .replace(/,(\s*[\]}])/g, "$1")
+    .replace(/}(\s*){/g, "},$1{")
+    .replace(/](\s*)\[/g, "],$1[");
 }
 
 function robustJsonParse(str: string): any {
@@ -375,43 +406,64 @@ export async function runReviewer(
   prompt: { system: string; user: string }
 ): Promise<ReviewerResult> {
   const t0 = Date.now();
-  try {
-    const client = createReviewerClient(base, ref);
-    const resp = await client.chat({ system: prompt.system, messages: [{ role: "user", content: prompt.user }], tools: [] });
-    const parsed = parseReviewerResponse(resp.content || "");
-    return {
-      model: ref.model,
-      provider: client.getConfig().provider,
-      status: "ok",
-      dimensions: parsed.dimensions,
-      criteria: parsed.criteria,
-      weaknesses: parsed.weaknesses,
-      summary: parsed.summary,
-      missingCriteria: parsed.missingCriteria,
-      tokenUsage: resp.usage
-        ? { promptTokens: resp.usage.promptTokens, completionTokens: resp.usage.completionTokens, totalTokens: resp.usage.totalTokens }
-        : undefined,
-      durationSeconds: Math.round((Date.now() - t0) / 1000),
-    };
-  } catch (err: any) {
-    return {
-      model: ref.model,
-      provider: ref.provider || "",
-      status: "failed",
-      error: String(err?.message || err).slice(0, 500),
-      durationSeconds: Math.round((Date.now() - t0) / 1000),
-    };
+  const maxAttempts = 3;
+  let lastErr: any = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const client = createReviewerClient(base, ref);
+      const resp = await client.chat({ system: prompt.system, messages: [{ role: "user", content: prompt.user }], tools: [] });
+      const parsed = parseReviewerResponse(resp.content || "");
+      return {
+        model: ref.model,
+        provider: client.getConfig().provider,
+        status: "ok",
+        dimensions: parsed.dimensions,
+        criteria: parsed.criteria,
+        weaknesses: parsed.weaknesses,
+        summary: parsed.summary,
+        missingCriteria: parsed.missingCriteria,
+        tokenUsage: resp.usage
+          ? { promptTokens: resp.usage.promptTokens, completionTokens: resp.usage.completionTokens, totalTokens: resp.usage.totalTokens }
+          : undefined,
+        durationSeconds: Math.round((Date.now() - t0) / 1000),
+      };
+    } catch (err: any) {
+      lastErr = err;
+      if (attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 1500 * attempt));
+      }
+    }
   }
+
+  return {
+    model: ref.model,
+    provider: ref.provider || "",
+    status: "failed",
+    error: String(lastErr?.message || lastErr).slice(0, 500),
+    durationSeconds: Math.round((Date.now() - t0) / 1000),
+  };
 }
 
 export async function runReviewerPanel(
   base: ProviderClient,
   reviewers: ReviewerModelRef[],
   manuscript: string,
-  evidence: string
+  evidence: string,
+  existingResults?: ReviewerResult[]
 ): Promise<ReviewerResult[]> {
   const prompt = buildReviewerPrompt(manuscript, evidence);
-  return Promise.all(reviewers.map((r) => runReviewer(base, r, prompt)));
+  return Promise.all(
+    reviewers.map((r) => {
+      const prev = existingResults?.find(
+        (er) => er.model === r.model && er.status === "ok" && er.dimensions && Object.keys(er.dimensions).length === 5
+      );
+      if (prev) {
+        return Promise.resolve(prev);
+      }
+      return runReviewer(base, r, prompt);
+    })
+  );
 }
 
 export function median(xs: number[]): number {

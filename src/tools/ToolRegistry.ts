@@ -818,7 +818,7 @@ export class ToolRegistry {
   }
 
   public unregisterMcpTools() {
-    const builtInScoped = new Set(["web_search", "pubmed_search", "uniprot_search"]);
+    const builtInScoped = new Set(["check_integrity", "web_search", "pubmed_search", "uniprot_search"]);
     for (const name of Array.from(this.mcpToolNames)) {
       if (builtInScoped.has(name)) continue;
       this.tools.delete(name);

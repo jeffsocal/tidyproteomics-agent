@@ -30,6 +30,8 @@ import type {
  *   --dry-run            Inspect targets and verify setup without executing LLM phase calls
  */
 
+type DraftTarget = "phase11" | "phase13" | "both";
+
 interface CLIOptions {
   evalDir: string;
   modelFilter?: string;
@@ -37,7 +39,15 @@ interface CLIOptions {
   force: boolean;
   dryRun: boolean;
   rescoreOnly: boolean;
+  draft: DraftTarget;
   customReviewers?: ReviewerModelRef[];
+}
+
+function normalizeDraftTarget(val: string): DraftTarget {
+  const v = val.toLowerCase().trim();
+  if (v === "phase11" || v === "11" || v === "rev00" || v === "before") return "phase11";
+  if (v === "phase13" || v === "13" || v === "rev02" || v === "after" || v === "final") return "phase13";
+  return "both";
 }
 
 function parseArgs(): CLIOptions {
@@ -48,6 +58,7 @@ function parseArgs(): CLIOptions {
   let force = false;
   let dryRun = false;
   let rescoreOnly = false;
+  let draft: DraftTarget = "both";
   let customReviewers: ReviewerModelRef[] | undefined = undefined;
 
   for (let i = 0; i < args.length; i++) {
@@ -62,6 +73,10 @@ function parseArgs(): CLIOptions {
       dryRun = true;
     } else if (a === "--rescore-only" || a === "--rescore") {
       rescoreOnly = true;
+    } else if (a.startsWith("--draft=")) {
+      draft = normalizeDraftTarget(a.slice("--draft=".length));
+    } else if (a === "--draft" && args[i + 1]) {
+      draft = normalizeDraftTarget(args[++i]);
     } else if (a.startsWith("--model=")) {
       modelFilter = a.slice("--model=".length).trim();
     } else if (a === "--model" && args[i + 1]) {
@@ -83,7 +98,7 @@ function parseArgs(): CLIOptions {
     }
   }
 
-  return { evalDir, modelFilter, useLLM, force, dryRun, rescoreOnly, customReviewers };
+  return { evalDir, modelFilter, useLLM, force, dryRun, rescoreOnly, draft, customReviewers };
 }
 
 async function main() {
@@ -453,14 +468,87 @@ async function main() {
       telemetry.totalDurationSeconds = durT;
     }
 
-    // Step 6: Rescore revised output
-    console.log(`  ▶ Rescoring revised outputs (Rubric v${RUBRIC_VERSION})...`);
-    const newScores = await scoreRunV2({
-      runRoot: rDir,
-      client,
-      reviewers: activeReviewers,
-      useLLM: opts.useLLM,
-    });
+    // Step 6a: Score Phase 11 baseline draft (docs/manuscript_rev_00.md) if requested
+    if ((opts.draft === "phase11" || opts.draft === "both") && fsSync.existsSync(manuscriptRev00)) {
+      let existingBefore: any = null;
+      if (fsSync.existsSync(summaryBeforePath)) {
+        try {
+          existingBefore = JSON.parse(fsSync.readFileSync(summaryBeforePath, "utf-8"));
+        } catch {}
+      }
+      const hasValidRev00Scores =
+        !opts.force && existingBefore?.evaluatedManuscript === "docs/manuscript_rev_00.md";
+      const existingRev00Reviewers = hasValidRev00Scores
+        ? existingBefore?.scores?.reviewerPanel?.reviewers
+        : undefined;
+
+      console.log(`  ▶ Scoring Phase 11 draft (docs/manuscript_rev_00.md, Rubric v${RUBRIC_VERSION})...`);
+      const rev00Scores = await scoreRunV2({
+        runRoot: rDir,
+        manuscriptPath: manuscriptRev00,
+        client,
+        reviewers: activeReviewers,
+        useLLM: opts.useLLM,
+        existingReviewerResults: existingRev00Reviewers,
+      });
+
+      let rev00Words = 0;
+      try {
+        rev00Words = fsSync.readFileSync(manuscriptRev00, "utf-8").split(/\s+/).filter(Boolean).length;
+      } catch {}
+
+      const phases01To11 = telemetry.phaseMetrics.filter((p) => {
+        const idNum = parseInt(p.phaseId, 10);
+        return !isNaN(idNum) && idNum <= 11;
+      });
+      let p11Prompt = 0, p11Comp = 0, p11Total = 0, p11Turns = 0, p11Dur = 0;
+      for (const p of phases01To11) {
+        p11Prompt += p.tokenUsage?.promptTokens || 0;
+        p11Comp += p.tokenUsage?.completionTokens || 0;
+        p11Total += p.tokenUsage?.totalTokens || 0;
+        p11Turns += p.turns || 0;
+        p11Dur += p.durationSeconds || 0;
+      }
+
+      const beforeSummaryObj = {
+        ...(existingBefore || existingSummary || {}),
+        id: runId,
+        suiteId: existingSummary?.suiteId || "unified_evaluations",
+        model: modelName,
+        provider: providerName,
+        timestamp: new Date().toISOString(),
+        status: rev00Words >= 100 ? "completed" : "failed",
+        evaluatedManuscript: "docs/manuscript_rev_00.md",
+        totalDurationSeconds: p11Dur,
+        totalTurns: p11Turns,
+        tokenUsage: { promptTokens: p11Prompt, completionTokens: p11Comp, totalTokens: p11Total },
+        phaseMetrics: phases01To11,
+        scores: rev00Scores,
+        manuscriptWordCount: rev00Words,
+        outputPath: path.relative(absEvalDir, rDir),
+      };
+      fsSync.writeFileSync(summaryBeforePath, JSON.stringify(beforeSummaryObj, null, 2), "utf-8");
+      console.log(
+        `  ✓ Updated summary_before_revisions.json (Phase 11 Score: ${rev00Scores.overallBenchmarkScore}/100, Panel: ${rev00Scores.reviewerPanel?.status || "n/a"})`
+      );
+    }
+
+    // Step 6b: Rescore Phase 13 revised output (docs/manuscript.md)
+    let newScores = existingSummary?.scores;
+    if (opts.draft === "phase13" || opts.draft === "both" || !newScores) {
+      const existingRev02Reviewers = !opts.force
+        ? existingSummary?.scores?.reviewerPanel?.reviewers
+        : undefined;
+      console.log(`  ▶ Scoring Phase 13 revised output (docs/manuscript.md, Rubric v${RUBRIC_VERSION})...`);
+      newScores = await scoreRunV2({
+        runRoot: rDir,
+        manuscriptPath: manuscriptDoc,
+        client,
+        reviewers: activeReviewers,
+        useLLM: opts.useLLM,
+        existingReviewerResults: existingRev02Reviewers,
+      });
+    }
 
     // Word count calculation
     let wordCount = 0;
@@ -472,7 +560,9 @@ async function main() {
     }
 
     const hasFailedPhase = telemetry.phaseMetrics.some((p) => p.status === "failed");
-    const runStatus: "completed" | "failed" = hasFailedPhase ? "failed" : "completed";
+    const hasPendingPhase = telemetry.phaseMetrics.some((p) => p.status === "pending");
+    const runStatus: "completed" | "failed" =
+      hasFailedPhase || hasPendingPhase || wordCount < 100 ? "failed" : "completed";
 
     // Step 7: Update summary.json with 13-phase data
     const updatedSummary: EvaluationRunSummary = {

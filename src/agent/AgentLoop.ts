@@ -38,7 +38,7 @@ export class AgentLoop {
     cachedPromptTokens: 0,
   };
   private currentTurn = 0;
-  private currentMaxTurns = 30;
+  private currentMaxTurns = 50;
   private startTimeMs = 0;
   private isComplete = false;
   private completedSummary?: string;
@@ -310,7 +310,7 @@ export class AgentLoop {
     };
   }
 
-  public async run(maxTurns = 30): Promise<LoopResult> {
+  public async run(maxTurns = 50): Promise<LoopResult> {
     this.startTimeMs = Date.now();
     this.currentMaxTurns = maxTurns;
     this.currentTurn = 0;
@@ -466,6 +466,15 @@ export class AgentLoop {
         this.onProgress({
           type: "thought",
           data: `[Turn Budget Notice]: 5 turns remaining in this phase (${turn}/${maxTurns}).`,
+        });
+      } else if (turn === maxTurns - 3) {
+        this.messages.push({
+          role: "user",
+          content: "You have 3 turns left; stop further checks and finalize your output/checkpoints now",
+        });
+        this.onProgress({
+          type: "thought",
+          data: `[Turn Budget Notice]: 3 turns remaining in this phase (${turn}/${maxTurns}).`,
         });
       } else if (turn === maxTurns - 2) {
         this.messages.push({

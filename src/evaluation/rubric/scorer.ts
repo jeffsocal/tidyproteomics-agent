@@ -7,6 +7,7 @@ import type {
   ManuscriptDimension,
   ReviewerModelRef,
   ReviewerPanelSummary,
+  ReviewerResult,
   VerifierReport,
 } from "../../types/evaluation";
 import { loadRunTables } from "./tables";
@@ -155,6 +156,7 @@ export async function scoreRunV2(params: {
   client: ProviderClient;
   reviewers?: ReviewerModelRef[];
   useLLM?: boolean;
+  existingReviewerResults?: ReviewerResult[];
 }): Promise<EvaluationScoreBreakdown> {
   const docPath =
     params.manuscriptPath ||
@@ -187,7 +189,13 @@ export async function scoreRunV2(params: {
 
   if (shouldRunPanel) {
     const evidence = buildEvidencePacket(params.runRoot, tables, verifiers);
-    const results = await runReviewerPanel(params.client, requestedReviewers, manuscript, evidence);
+    const results = await runReviewerPanel(
+      params.client,
+      requestedReviewers,
+      manuscript,
+      evidence,
+      params.existingReviewerResults
+    );
     const ok = results.filter((r) => r.status === "ok" && r.dimensions);
     const spread = {} as Record<ManuscriptDimension, number>;
     if (ok.length > 0) {
